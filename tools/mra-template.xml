@@ -1,0 +1,38 @@
+<!--
+  Per-family .mra template — see docs/mra-workflow.md.
+
+  Copy this file to the family's parent game, hand-transcribe every field
+  directly from that game's ROM_START()/PORT_DIPSWITCH()/PORT_BUTTON()
+  block in mame/src/mame/nmk/nmk16.cpp, then use it as the seed for
+  tools/gen_mra.py to emit the rest of that family's clones/bootlegs.
+
+  Fields marked TODO must be filled in per game; everything else is
+  boilerplate shared within a family.
+-->
+<misterromdescription>
+  <name>TODO: full game name as in GAME() description field</name>
+  <mratimestamp>TODO: yyyymmdd0000</mratimestamp>
+  <mameversion>TODO: MAME version this was transcribed against, no dots</mameversion>
+  <setname>TODO: MAME short name</setname>
+  <year>TODO</year>
+  <manufacturer>TODO</manufacturer>
+  <category>Shooter</category>
+  <!-- rbf = this family's core name, see docs/PLAN.md families A-I -->
+  <rbf>TODO_FAMILY_RBF_NAME</rbf>
+
+  <!-- Rotation/orientation: set per docs/game-inventory.md "Orientation" column -->
+  <rotation>0</rotation>
+
+  <switches default="TODO">
+    <!-- one <dip> per PORT_DIPSWITCH() block in the driver -->
+    <dip bits="0,1" name="TODO" ids="TODO,TODO,TODO,TODO"/>
+  </switches>
+
+  <buttons names="TODO" default="TODO"/>
+
+  <!-- One <rom> block per ROM_REGION in ROM_START(); index/order must match
+       the memory map the family's core expects -->
+  <rom index="0" zip="TODO.zip" md5="none">
+    <part crc="TODO" name="TODO"/>
+  </rom>
+</misterromdescription>

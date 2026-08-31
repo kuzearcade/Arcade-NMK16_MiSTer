@@ -1,0 +1,20 @@
+# NMK16 MiSTerFPGA core — vendored dependency lock file.
+#
+# Fetched by tools/bootstrap.sh into gitignored destinations (see .gitignore:
+# /sys/, /rtl/third_party/). Never commit the fetched trees themselves —
+# only this lock file, which pins exact commits so builds are reproducible.
+#
+# Verified via `git ls-remote` on 2026-08-31 (two independent passes,
+# consistent). Re-verify before bumping any pin.
+#
+# format: name|kind|git_url|ref|dest_path|license|notes
+#   kind = repo   -> shallow-clone `ref` (a commit SHA) into dest_path, strip .git
+#   kind = file   -> clone `source_repo` (see notes) and copy one file into dest_path
+
+template_mister|repo|https://github.com/MiSTer-devel/Template_MiSTer.git|3ea1134cf05d62c2b1db30362277a823d739ced2|sys|GPL-2.0|Top-level MiSTer framework (hps_io, video_mixer, scandoubler, OSD, PLL/tcl scripts). Also the source for the Template.sv/.sdc/.qpf/.qsf skeleton copied once into the repo root (see tools/bootstrap.sh) — GPL-2.0-only, NOT compatible-by-default with the GPL-3.0-only components below in a combined work; flagged in docs/PLAN.md, resolve before any public release.
+fx68k|repo|https://github.com/ijor/fx68k.git|0602ee4627b10f301298f2673d826cdd6baa9327|rtl/third_party/fx68k|GPL-3.0|Motorola 68000 cycle-accurate core (Jorge Cwik / ijor). Flat repo: fx68k.sv, fx68kAlu.sv, uaddrPla.sv, .mem ROMs.
+t80|repo|https://github.com/MiSTer-devel/T80.git|830fd0315f0af5cdbcb0e703f1cea3ce4e91f538|rtl/third_party/t80|Permissive/BSD-style (embedded per-file headers; no repo-level LICENSE file)|Z80-compatible core, opencores.org/Daniel Wallner lineage via fpgaarcade.com/MikeJ, maintained by Sorgelig. VHDL: T80.vhd, T80_ALU.vhd, T80_MCode.vhd, T80_Pack.vhd, T80_Reg.vhd, T80s.vhd, T80pa.vhd, T80sed.vhd.
+jt12|repo|https://github.com/jotego/jt12.git|3a4c423fe03f00f51ef639550c9afe393087ac4c|rtl/third_party/jt12|GPL-3.0|YM2203/OPN-family FM core (Jose Tejada). Has a nested jt49 (AY-3-8910) submodule — bootstrap must init it too.
+jtopl|repo|https://github.com/jotego/jtopl.git|7ac0c819ad274e208206f2acccbbde80aa06ed1a|rtl/third_party/jtopl|GPL-3.0|YM3812/OPL2 core (Jose Tejada), used for the Family E (Raiden-sound bootlegs) + tomagic FM chip.
+jt6295|repo|https://github.com/jotego/jt6295.git|7d76b0be8cd8f85f3ae741178c9830b20e2071a1|rtl/third_party/jt6295|GPL-3.0|OKIM6295 ADPCM core (Jose Tejada), used everywhere in this driver.
+sdram|file|https://github.com/rmonic79/Arcade-Darius_MiSTer.git|HEAD:rtl/sdram.sv|rtl/sdram.sv|GPL-3.0 (per file header, Copyright (c) 2018 Sorgelig)|No standalone upstream repo exists for this file — it's copy-pasted core-to-core. Vendored from this specific known-good copy; expected blob SHA e4228fb9bb0787f78e6a0f3bfcdc4399d89945c4 (verified byte-identical against Arcade-HeatedBarrel_MiSTer's copy too). bootstrap.sh checks the blob hash and warns (does not fail) on mismatch, since this source repo's HEAD can move.

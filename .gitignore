@@ -1,0 +1,46 @@
+# MAME reference source tree — 2.8GB, kept locally as the behavioral
+# reference for this port, never part of this project's own history.
+/mame/
+
+# Copyrighted arcade ROM dumps. Never committed under any circumstances.
+/mame_roms/
+
+# Vendored third-party cores and the MiSTer sys/ framework are fetched by
+# tools/bootstrap.sh at pinned commits (see deps.lock), not committed here.
+/sys/
+/rtl/third_party/
+/.bootstrap-staging/
+
+# Quartus build output and scratch state
+output_files/
+db/
+incremental_db/
+greybox_tmp/
+*.qws
+*.qdb
+*.rpt
+*.summary
+*.smsg
+*.sld
+*.pin
+*.done
+*.jdi
+*.htm
+!docs/**/*.htm
+*.qarlog
+*.sopcinfo
+*.qsys.orig
+*_bak
+c5_pin_model_dump.txt
+PLLJ_PLLSPE_INFO.txt
+
+# Simulation artifacts
+sim/**/obj_dir/
+sim/**/*.vcd
+sim/**/*.fst
+sim/**/*.log
+sim/**/oracle_traces/
+
+# OS / editor cruft
+.DS_Store
+*.swp
