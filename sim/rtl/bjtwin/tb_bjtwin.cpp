@@ -38,7 +38,7 @@
 #include "../common/nmktrace.h"
 
 static constexpr uint64_t RESET_CYCLES = 200;
-static constexpr uint64_t RUN_CYCLES   = 6000000; // clk_sys cycles; see header comment for budget rationale
+static constexpr uint64_t RUN_CYCLES   = 12000000; // clk_sys cycles; see header comment for budget rationale
 static constexpr int SCREEN_W = 384;
 static constexpr int SCREEN_H = 224;
 
@@ -55,9 +55,22 @@ int main(int argc, char **argv) {
 	uint64_t clk_sys_ticks = 0;
 	bool prev_as_n = true;
 	bool prev_write = false;
+	bool prev_is_fetch = false;
 	uint32_t last_addr = 0, last_data = 0, last_mask = 0;
+	uint32_t last_fetch_pc = 0;
 	uint32_t frame_count = 0;
 	bool prev_frame_done = false;
+
+	// Periodic PC sampling, decoupled from frame_done (which is tied to
+	// the video render FSM's own completion time, not real raster
+	// timing — see video_bjtwin.sv's header). Sampling on a fixed
+	// CPU-cycle period matching one real frame (177920 cycles, from the
+	// already-verified 10MHz CPU / 56.22Hz frame rate) gives a
+	// raster-independent PC trace directly comparable to MAME oracle
+	// PC snapshots taken once per real frame via register_frame_done.
+	static constexpr uint64_t FRAME_PERIOD_CPU_CYCLES = 177920;
+	uint64_t next_pc_sample_cycle = FRAME_PERIOD_CPU_CYCLES;
+	uint32_t pc_sample_index = 0;
 
 	auto tick = [&]() {
 		top.clk_sys = 0;
@@ -83,6 +96,10 @@ int main(int argc, char **argv) {
 			if (!top.dbg_lds_n) mask |= 0x00ff;
 			last_mask = mask;
 			prev_write = top.dbg_write;
+			// 68000 function code: program access (instruction fetch) is
+			// FC2:0 = 010 or 110, i.e. FC1=1, FC0=0 regardless of FC2 —
+			// during such a cycle the address bus IS the fetch address.
+			prev_is_fetch = top.dbg_fc1 && !top.dbg_fc0;
 		}
 
 		bool as_n_now = top.dbg_as_n;
@@ -92,8 +109,18 @@ int main(int argc, char **argv) {
 				uint64_t cpu_cycle = clk_sys_ticks / 4;
 				trace.bus(cpu_cycle, 'w', last_addr, last_data, last_mask);
 			}
+			if (!prev_write && prev_is_fetch) {
+				last_fetch_pc = last_addr;
+			}
 		}
 		prev_as_n = as_n_now;
+
+		uint64_t cpu_cycle_now = clk_sys_ticks / 4;
+		if (cpu_cycle_now >= next_pc_sample_cycle) {
+			trace.reg(cpu_cycle_now, "PCSAMPLE", last_fetch_pc);
+			pc_sample_index++;
+			next_pc_sample_cycle = FRAME_PERIOD_CPU_CYCLES * (pc_sample_index + 1);
+		}
 
 		bool frame_done_now = top.frame_done;
 		if (!prev_frame_done && frame_done_now) {
@@ -118,6 +145,7 @@ int main(int argc, char **argv) {
 			frame_crc = crc.compute(bytes, bi);
 			uint64_t cpu_cycle = clk_sys_ticks / 4;
 			trace.frame(cpu_cycle, frame_count, frame_crc);
+			trace.reg(cpu_cycle, "PC", last_fetch_pc);
 
 			// dump every frame as a PPM for visual debugging (cheap: these
 			// are tiny 384x224 images) — bytes[] is already B,G,R order,

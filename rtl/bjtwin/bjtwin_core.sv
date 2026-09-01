@@ -66,8 +66,14 @@ module bjtwin_core #(
 	output        dbg_uds_n,
 	output        dbg_lds_n,
 	output        dbg_as_n,
-	output [7:0]  dbg_pc_valid_pulse, // one-hot-ish marker, unused placeholder
-	output [31:0] dbg_pc,
+	// fx68k has no direct PC output pin; during an instruction-fetch bus
+	// cycle (FC=2 user-program or FC=6 supervisor-program, per the 68000
+	// function-code convention) the address bus IS the fetch address, so
+	// the testbench derives a PC estimate from these instead — see
+	// tb_bjtwin.cpp and docs/tier1-bjtwin.md's PC-tracking verification.
+	output        dbg_fc0,
+	output        dbg_fc1,
+	output        dbg_fc2,
 
 	// video pixel readback for the testbench (mirrors MAME's screen:pixel(x,y))
 	input  [8:0]  rd_x,
@@ -101,7 +107,6 @@ module bjtwin_core #(
 	wire        FC0, FC1, FC2, BGn, oRESETn, oHALTEDn;
 	wire [15:0] iEdb, oEdb;
 	wire [23:1] eab;
-	wire        DTACKn = ASn; // 0-wait-state memory, see module header
 
 	wire [2:0] ipl_level;
 	wire       IPL0n = ~ipl_level[0];
@@ -112,6 +117,19 @@ module bjtwin_core #(
 	// (FC=111, address strobe active).
 	wire iack_cycle = FC0 & FC1 & FC2 & ~ASn;
 	wire VPAn = ~iack_cycle;
+
+	// DTACKn must NOT also assert during an IACK cycle — exactly one of
+	// {DTACKn, VPAn, BERRn} should be asserted per bus cycle. Tying
+	// DTACKn straight to ASn (as an earlier version of this file did)
+	// asserted it during IACK cycles too, alongside VPAn: fx68k could
+	// then read whatever the unmapped-address read-data default
+	// (16'hFFFF) supplies on the low data byte as a *vectored* interrupt
+	// vector number instead of using autovectoring, jumping to a bogus
+	// exception handler. Found via PC-trace comparison against a MAME
+	// oracle (see docs/tier1-bjtwin.md) — main-line code matched MAME
+	// almost exactly, but the CPU still produced sprite-RAM writes MAME
+	// never does, correlating with IRQ4/vblank timing.
+	wire        DTACKn = ASn | iack_cycle; // 0-wait-state memory otherwise, see module header
 
 	fx68k fx68k_inst (
 		.clk(clk_sys),
@@ -328,9 +346,8 @@ module bjtwin_core #(
 	assign dbg_uds_n  = UDSn;
 	assign dbg_lds_n  = LDSn;
 	assign dbg_as_n   = ASn;
-	assign dbg_pc_valid_pulse = 8'h00;
-	assign dbg_pc = 32'h0; // PC is not directly observable from fx68k's external pins;
-	                        // see tb_bjtwin.cpp for how register-level cross-checking
-	                        // is done instead (via oracle R lines + bus-event correlation).
+	assign dbg_fc0    = FC0;
+	assign dbg_fc1    = FC1;
+	assign dbg_fc2    = FC2;
 
 endmodule

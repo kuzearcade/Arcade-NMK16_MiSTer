@@ -1,6 +1,6 @@
 # Tier 1 — bjtwin family (cactus / bjtwinp / nouryokup)
 
-Status: **CPU + memory-map + interrupt subsystem verified exactly against a real MAME oracle trace. Video pipeline's data path (palette + tilemap VRAM content, and every tile/palette decode formula) is now verified bit-exact against MAME via direct state comparison — see "Video pipeline" below.** The render FSM's frame-level output still isn't directly comparable to MAME's frame CRCs (a separate, understood architecture gap, not a data-correctness question). Audio (`nmk112` + 2x OKIM6295) and sprite rendering verification are not done yet.
+Status: **CPU + memory-map + interrupt subsystem verified exactly against a real MAME oracle trace. Video pipeline's data path (palette + tilemap VRAM content, and every tile/palette decode formula) is verified bit-exact against MAME via direct state comparison.** Sprite rendering verification is **in progress and found a real bug**: a genuine CPU-side control-flow divergence, not yet root-caused, that must be fixed before sprite-RAM state comparison is meaningful — see "Sprite rendering verification" below. Audio (`nmk112` + 2x OKIM6295) is not implemented yet.
 
 ## Hardware spec
 
@@ -26,7 +26,7 @@ Key facts:
 
 ## Documented simplifications (see `bjtwin_core.sv` header for the authoritative list)
 
-- `DTACKn` tied to `ASn` (0-wait-state memory) — fine for `$readmemh` ROM/BRAM in simulation; real SDRAM-backed hardware will need genuine wait-state generation later.
+- `DTACKn` is 0-wait-state for normal bus cycles (`ASn` directly) but **not** during interrupt-acknowledge cycles, where only `VPAn` may assert (see "Sprite rendering verification" below for why this distinction turned out to matter) — fine for `$readmemh` ROM/BRAM in simulation; real SDRAM-backed hardware will need genuine wait-state generation later.
 - OKI chip read/write ports are stubs (`8'hFF` on read, writes accepted but discarded) — flagged as the first thing to suspect if a future full-boot trace comparison diverges partway through (a busy-wait on an OKI status bit would show up as a hang or wrong branch).
 - IN0/IN1/DSW1/DSW2 tied to fixed idle values (`16'hFFFF`) rather than real HPS_IO input — matches MAME's default "nothing pressed" boot-time state, not yet wired to real controller input.
 
@@ -88,16 +88,57 @@ Before landing on the state-comparison approach above, a more direct question wa
 
 The actual explanation turned out to be a wrong premise, not a bug: `nmk16_hacky_scanline()`'s sprite-DMA trigger (`nmk16.cpp:4496-4497`) calls `sprite_dma()` directly as a **C++ function call from a scanline timer**, copying `mainram` into an internal `m_spriteram_old` buffer — real hardware DMA behavior modeled as a host-memory copy, not a 68000 bus transaction. It would never appear in a `:maincpu` bus trace regardless of whether or when it runs. So "zero spriteram writes in the oracle" doesn't indicate anything wrong — it's the expected non-signature of an operation that was never going to be bus-visible. Important for future sprite-engine verification: sprite buffering can't be checked via CPU-bus state comparison the way palette/VRAM can; it needs either a dedicated Lua hook exposing that internal buffer, or waiting until the render FSM is real-time-synchronized and comparing pixels/frame CRCs directly.
 
+## Sprite rendering verification
+
+Per the plan above, the `sprite_dma()` finding meant sprite verification needed a different tool: PC-tracing, to check the CPU's own control flow (not just its RAM writes) against MAME over a much longer window than the 1618-event bus trace could cover.
+
+### New tooling: PC tracing without bus-tap overhead
+
+`bjtwin_core.sv` now exposes `dbg_fc0/fc1/fc2` (the 68000 function-code lines) instead of the placeholder `dbg_pc`/`dbg_pc_valid_pulse` outputs it had before. fx68k has no direct PC pin, but during an instruction-fetch bus cycle (`FC2:0 = 010` or `110`, i.e. `FC1=1, FC0=0` regardless of `FC2`) the address bus **is** the fetch address — `tb_bjtwin.cpp` tracks this and samples it once per fixed 177,920-cycle period (one real frame, independent of the video FSM's own timing) into `'R ... PCSAMPLE ...'` trace lines.
+
+On the MAME oracle side, PC snapshots piggyback on the existing frame-checksum path (`NMKTRACE_REGS=PC`), which is cheap since it doesn't need bus tapping — but getting a *clean* run needed two real fixes to the capture recipe, both worth recording since they'll recur:
+- `install_read_tap(0, 0, ...)` throws — MAME requires a tap range with the low bit of the end address set (e.g. `0-1`, not `0-0`); the exception aborts the whole script run, silently leaving a stale/wrong trace file behind if not checked for.
+- Env-var overrides must be passed via `env VAR=val VAR2=val2 command`, not interpolated across a `cd X && VAR=val command` compound line — the latter silently dropped the override in one case during this investigation (a capture that was supposed to use a 1-byte tap range instead used MAME's full default range and only was caught because the resulting trace's header didn't match what was requested). Any oracle capture whose header doesn't show the exact range/flags requested should be treated as suspect and re-run explicitly with `env`.
+
+### Finding: a real, confirmed CPU-side control-flow divergence
+
+PC samples showed the CPU sitting in a tight wait loop (`0xA85A-0xA86A`) for many frames on both sides, then — decisively — **both MAME and the RTL leave that loop at exactly frame 13** (cycle 2,490,880), landing on nearly identical subsequent addresses (MAME: `b78a`, `ae3c`, `aa68`; RTL: `b788`→`b78e` after a fix below, `ae3a`→`ae3c`, `aa6a`→`aa6c`). This is strong, direct evidence that main-line CPU control flow is correct through at least frame 15 — a much longer window than the ~30,000-cycle bus trace could ever confirm.
+
+Separately, the RTL was seen writing a `0xFFFF`-then-`0x0000` test pattern into the sprite-RAM sub-region (`0xF8000+`) starting at cycle 1,213,735 — while a real MAME capture of that exact region showed **zero** writes there through 60 real frames (10.68M cycles), even after re-verifying with the corrected `env`-based invocation to rule out the capture-recipe bugs above. Tracing where those RTL writes actually originate (`addr=f7f98, f7f9a, f7f9c...`) showed they're not sprite-specific at all — they're the tail end of a **general mainram POST-test sweep** starting at `0xF0000`, incrementing by 2 bytes roughly every 72 cycles, that happens to pass through the sprite-RAM sub-range as it works upward through mainram.
+
+Bisecting where MAME's own copy of this same sweep actually stops (narrow oracle captures at several address points, each a quick, clean run since narrow ranges don't hit the Lua-tap-overhead wall):
+
+| Address | MAME writes there? |
+|---|---|
+| `0xF0C00` | Yes (cycle 144622 — matches the RTL's own 72-cycles/word rate exactly) |
+| `0xF1000` | **No**, through 15 real frames (2.67M cycles) |
+| `0xF3000`, `0xF7000`, `0xF7E00-F8200` | **No**, through 10-15 real frames each |
+
+MAME's real sweep terminates somewhere between `0xF0C00` and `0xF1000` (roughly 1,536-2,048 words from the start) — a small fraction of mainram's full 32,768 words. **The RTL's version of the same loop does not stop there and keeps going, straight through the entire sweep, off the end of mainram it was ever going to need to test, and through the live sprite-RAM buffer along the way.** The per-word timing matches MAME's exactly (ruling out a wait-state/DTACK-timing explanation — a real difference there would show up as accumulating drift from the very first word, not as a clean stop at one address and continuation at another), so this is a genuine loop-termination bug, not the already-documented 0-wait-state simplification manifesting differently than expected.
+
+### A related, real bug found and fixed along the way (kept, though it wasn't *the* explanation)
+
+While investigating, a second, independently-real issue was found and fixed: `DTACKn` was tied straight to `ASn`, meaning it also asserted during interrupt-acknowledge cycles — alongside `VPAn`, which should be the *only* signal driving autovectoring for this design (no real vectored-interrupt device exists on this bus). With both asserted, fx68k could read the unmapped-address default (`16'hFFFF`) off the data bus as if it were a supplied vector number instead of using autovectoring, occasionally landing on a slightly wrong exception-handler address. Fixed: `DTACKn = ASn | iack_cycle`, so only `VPAn` is asserted during an IACK cycle. Confirmed via the PC trace that this measurably changed fine-grained execution (one sampled address went from off-by-2 vs. MAME to an exact match), and confirmed via a full CPU-trace regression run that it didn't break the already-proven 1617-event exact match. It did **not**, however, eliminate the sprite-RAM-sweep divergence above — that remains open.
+
+### What this means for sprite verification, and next steps
+
+Sprite-RAM state comparison (the natural next step, mirroring the palette/VRAM approach) isn't meaningful yet: as long as the RTL's mainram sweep runs far past where MAME's does, any comparison of sprite-RAM content will show real, correct-per-current-behavior differences that don't indicate anything about the actual sprite decode/compositing logic. The loop-termination bug needs to be found and fixed first. Concretely:
+
+1. Disassemble the ROM around the ~1,536-2,048-word loop-bound check (just past `0xF0C00`-`0xF1000` in program terms — the actual instruction doing the bound check hasn't been located yet, only the *symptom* address range) and compare against what fx68k actually does for that specific instruction/addressing-mode/condition-code combination.
+2. Once the loop terminates at the same point MAME's does, redo the `sim/compare/state_diff.py` comparison for the *general mainram region* (not just palette/VRAM) to confirm no further hidden divergences before trusting sprite-RAM content specifically.
+3. Sprite-buffer verification proper still needs the `sprite_dma()` workaround noted below (a dedicated Lua hook, or waiting for real-time-synchronized rendering) since MAME's sprite buffer copy is never bus-visible regardless of this bug.
+
 ### Correction: the "cactus is missing ROMs" caveat below was a false alarm
 
 The earlier note in this doc (and in `docs/sim-harness.md`) worrying that `mame_roms/cactus.zip` was missing `i03.bin`/`s-01.bin`/`s-02.bin` was wrong — it didn't account for MAME's **split romset** convention. `cactus`'s parent is `sabotenb` (`mame -verifyroms` reports `romset cactus [sabotenb] is good`), and MAME transparently merges files from the parent zip by CRC when the clone's own zip doesn't contain them — confirmed directly with `-verbose`: loading `cactus` opens both `cactus.zip` and `sabotenb.zip`, and `sabotenb.zip` contains same-sized, presumably CRC-matching files (`ic35.sb3` = 0x10000 bytes matching `i03.bin`'s fgtile region; `ic27.sb7`/`ic30.sb6` = 0x100000 bytes each matching `s-01.bin`/`s-02.bin`'s OKI regions) under different filenames. **The romset is genuinely complete** — see the full completeness audit below, done properly this time against all 101 romsets.
 
 ## Next steps
 
-1. Sprite rendering verification: needs a dedicated Lua hook exposing MAME's internal `m_spriteram_old`/`m_spriteram_old2` buffer contents (state comparison as done for palette/VRAM doesn't reach it — see the `sprite_dma()` finding above), since nothing has appeared in sprite RAM in any CPU-bus-visible window captured so far (the game's own CPU-driven sprite-RAM clear happens around cycle ~1.2M, well past what's been oracle-verified).
-2. Exercise the untested decode paths once real gameplay content is reachable: tile bank-select (bit 11, addressing `bgtile` not `fgtile`), non-zero tile colors.
-3. Real-time scanline-synchronized render architecture (replacing the procedural per-frame FSM) — needed for direct frame-CRC comparison against MAME once palette/VRAM/sprite state are all independently trusted, and for eventual hardware synthesis regardless (the procedural FSM was never going to be synthesizable as-is).
-4. `nmk112` + 2x jt6295 functional audio integration (currently stubbed).
-5. Real `nmk_irq` dual-PROM state machine for `bjtwinp`/`nouryokup` (cactus-only `nmk_irq_hacky` doesn't cover them).
-6. `cactus`'s scrambled graphics ROMs (see "Hardware spec" above) need the fixed bitswap applied — either in `tools/mkgfxrom.py` or at `.mra` build time — before `bjtwinp`/`nouryokup` (which use unscrambled ROMs) and `cactus` can share one `.rbf`. Not yet needed for the current milestone since `cactus`'s ROMs were used as-is (scrambled) and the game still booted and rendered something coherent — worth understanding why before assuming it doesn't matter.
-7. Extend the CPU-correctness oracle trace further into the boot sequence (needs the Lua-tap-overhead workaround already documented) to validate beyond the first ~1618 events, and add read-cycle coverage (this window happened to be write-only).
+1. **Blocking: find and fix the mainram-sweep loop-termination bug** described above — the concrete top priority. Everything else about sprite verification is downstream of this.
+2. Once fixed: redo `state_diff.py` over the general mainram region to confirm no further hidden divergences, then pursue sprite-buffer verification proper (needs the `sprite_dma()` workaround — a dedicated Lua hook exposing MAME's internal `m_spriteram_old` buffer, or waiting for real-time-synchronized rendering, since that buffer copy is never bus-visible).
+3. Exercise the untested decode paths once real gameplay content is reachable: tile bank-select (bit 11, addressing `bgtile` not `fgtile`), non-zero tile colors.
+4. Real-time scanline-synchronized render architecture (replacing the procedural per-frame FSM) — needed for direct frame-CRC comparison against MAME once palette/VRAM/sprite state are all independently trusted, and for eventual hardware synthesis regardless (the procedural FSM was never going to be synthesizable as-is).
+5. `nmk112` + 2x jt6295 functional audio integration (currently stubbed).
+6. Real `nmk_irq` dual-PROM state machine for `bjtwinp`/`nouryokup` (cactus-only `nmk_irq_hacky` doesn't cover them).
+7. `cactus`'s scrambled graphics ROMs (see "Hardware spec" above) need the fixed bitswap applied — either in `tools/mkgfxrom.py` or at `.mra` build time — before `bjtwinp`/`nouryokup` (which use unscrambled ROMs) and `cactus` can share one `.rbf`. Not yet needed for the current milestone since `cactus`'s ROMs were used as-is (scrambled) and the game still booted and rendered something coherent — worth understanding why before assuming it doesn't matter.
+8. Extend the CPU-correctness oracle trace further into the boot sequence (needs the Lua-tap-overhead workaround already documented) to validate beyond the first ~1618 events, and add read-cycle coverage (this window happened to be write-only).
