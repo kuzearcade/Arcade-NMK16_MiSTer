@@ -1,6 +1,6 @@
 # Tier 1 — bjtwin family (cactus / bjtwinp / nouryokup)
 
-Status: **CPU + memory-map + interrupt subsystem verified exactly against a real MAME oracle trace. Video pipeline's data path (palette + tilemap VRAM content, and every tile/palette decode formula) is verified bit-exact against MAME via direct state comparison.** Sprite rendering verification is **in progress**: an apparent CPU-side control-flow bug was found, investigated at length, and then **retracted** after MAME's own debugger proved it was a false positive caused by an unreliable Lua bus-tap blind spot, not a real divergence — see "Sprite rendering verification" below for the full story and the corrected next steps. Audio (`nmk112` + 2x OKIM6295) is not implemented yet.
+Status: **CPU + memory-map + interrupt subsystem verified exactly against a real MAME oracle trace. Video pipeline's data path — palette RAM, tilemap VRAM, and now sprite RAM, all with complete (not partial) address coverage — is verified bit-exact against MAME via direct state comparison, using a new debugger-watchpoint-based oracle capture tool (`sim/oracle/debug_capture.py`) built after the Lua bus tap was found to have a real blind spot.** An apparent CPU-side control-flow bug was found earlier, investigated at length, and then **retracted** as a false positive of that Lua-tap blind spot — see "Sprite rendering verification" below for the full story. Sprite *buffer* verification (MAME's internal DMA'd draw buffer, as opposed to the CPU-visible sprite RAM it's copied from) is still open. Audio (`nmk112` + 2x OKIM6295) is not implemented yet.
 
 ## Hardware spec
 
@@ -23,6 +23,7 @@ Key facts:
 - `tools/mkrom.py` — reconstructs a `$readmemh` ROM image from a split MAME romset zip's `ROM_LOAD16_BYTE` pair, reusable for every other 68000 program ROM in this driver.
 - `tools/mkgfxrom.py` — the graphics-ROM equivalent: byte-addressed `$readmemh` images from either a straight concatenation (`fgtile`/`bgtile`) or a `ROM_LOAD16_BYTE` interleave (`sprites`), with multi-zip search support for split-romset parent merging (needed for `cactus`'s `fgtile`, which lives only in `sabotenb.zip`).
 - `sim/rtl/bjtwin/tb_bjtwin.cpp` + `Makefile` — Verilator testbench: runs the real `cactus` ROM, logs every completed bus write cycle ('B' lines) and a CRC32 checksum per rendered frame ('F' lines, computed identically to `sim/oracle/trace.lua`'s pixel loop), plus a PPM dump per frame for visual debugging.
+- `sim/oracle/debug_capture.py` — an alternative MAME oracle-capture tool using debugger watchpoints (`wpset` + an auto-continuing `printf`-and-`g` action, run via `-debug -debuglog`) instead of the Lua bus tap, for whenever the tap's reliability is in doubt (see "Sprite rendering verification" below for why that's a real concern, not hypothetical) — emits the same nmktrace `'B'` line grammar, so it's a drop-in alternative source for `sim/compare/state_diff.py`. Also dramatically faster than the Lua tap for heavily-written regions (the entire 64KB mainram range captures in under 3 seconds, versus the Lua tap failing to get through 30,000 cycles of a comparable range in 280 seconds).
 
 ## Documented simplifications (see `bjtwin_core.sv` header for the authoritative list)
 
@@ -126,11 +127,34 @@ While investigating, a second, independently-real issue was found and fixed: `DT
 
 ### What this means for sprite verification, and next steps
 
-Good news: sprite verification is **not** blocked by a CPU bug after all. The RTL's mainram sweep (including its pass through sprite RAM) matches what real MAME actually does. Concretely:
+Good news: sprite verification is **not** blocked by a CPU bug after all. The RTL's mainram sweep (including its pass through sprite RAM) matches what real MAME actually does.
 
-1. Redo the `sim/compare/state_diff.py` comparison for the sprite-RAM sub-region using a MAME oracle trace captured via **debugger watchpoints instead of the Lua bus tap** (the now-proven-reliable method), to get an actual state-comparison result rather than relying on the debugger's single watchpoint-hit message alone.
-2. Consider building a small reusable debugger-scripting tool (a `.debugscript` template + `wpset`/`bpset` pattern, writing to `debug.log` via `-debuglog`) as a documented fallback for whenever the Lua bus tap's reliability is in doubt — this session's ad hoc scripts are a good starting template.
-3. Sprite-buffer verification proper (MAME's internal `m_spriteram_old`) still needs a separate workaround since `sprite_dma()` is a host-memory copy, never bus-visible by either method — a dedicated Lua hook exposing that buffer, or waiting for real-time-synchronized rendering.
+### Automated: `sim/oracle/debug_capture.py`, and a clean sprite-RAM state-comparison result
+
+Built the debugger-watchpoint method from the manual investigation above into a real, reusable tool: `sim/oracle/debug_capture.py` generates a `.debugscript` (`wpset <lo>,<len>,w,1,{printf "W %04X=%04X\n",wpaddr,wpdata ; g}` — the auto-continuing action form, found to work cleanly after the manual `; g` experiment above), runs MAME with `-debug -debuglog` until a caller-specified stop `bp`, and parses `debug.log` into the same nmktrace `'B'` line grammar the rest of the harness uses — a drop-in alternative oracle source for `sim/compare/state_diff.py` wherever the Lua bus tap's reliability is in doubt. It's also *dramatically* faster than the Lua tap for hot regions: the full mainram range (0x10000 bytes) captured in under 3 real seconds, versus the Lua tap's inability to get through even 30,000 cycles of a comparable range in 280 seconds.
+
+Result, run against the RTL's own trace via `sim/compare/state_diff.py`:
+
+```
+$ python3 sim/oracle/debug_capture.py --game cactus --rompath mame_roms \
+    --addr-lo 0xf8000 --addr-hi 0xf8fff --stop-pc 0xaa66 \
+    --out sim/oracle/traces/cactus_spriteram_debug.trace
+[debug_capture] wrote 4342 write events to ...
+
+$ python3 sim/compare/state_diff.py sim/oracle/traces/cactus_spriteram_debug.trace \
+    sim/rtl/bjtwin/cactus_rtl.trace --addr-lo 0xf8000 --addr-hi 0xf8fff
+oracle:    ... (4342 writes, 2048 unique addresses)
+candidate: ... (4342 writes, 2048 unique addresses)
+MATCH: all 2048 addresses identical final state
+```
+
+**Sprite-RAM: complete, exact match — same write count, same address count, identical final state, for the whole 4KB sub-region.** This closes out the task properly (not just the 5 manually-inspected events from the retraction above).
+
+For extra confidence, also ran the same comparison over the *entire* mainram region (0xF0000-0xFFFFF, 32,768 words): 32,729/32,763 addresses matched exactly (99.9%). The 34 mismatches are all clustered in `0xF9000` and `0xFF000-0xFFFFE` — the latter is right where the stack lives (initial SP is `$000FFFF0`, per the boot ROM's first vector-table word) — and every mismatched address had been written **2 to 19 times** within the capture window (confirmed by checking the oracle trace directly), unlike the sprite region's clean once-each pattern. This is a capture-length artifact, not a divergence: the RTL testbench runs a fixed clk_sys cycle budget, while the oracle capture stops exactly at a PC breakpoint, so the two runs end at slightly different instants — for a frequently-rewritten scratch/stack location, "final value at the moment I stopped looking" can legitimately differ between two otherwise-identical executions.
+
+Also redid the earlier (Lua-tap, incomplete-coverage) VRAM comparison with `debug_capture.py`: now a **complete match, all 2048/2048 addresses**, closing the gap the Lua tap's overhead had left at 1706/2048.
+
+Re-running the palette comparison the same way surfaced a clean, well-understood example of exactly that capture-length artifact: the oracle (1024 writes, no repeats at all) shows **zero** evidence of any second pass over palette, while the RTL (1536 writes — 1024 unique addresses plus a partial second pass over roughly the first 512) had already started overwriting the earliest entries with `0x0000` by the time it stopped. Checked directly: the RTL's last palette write lands at cycle 2,831,381, right before its fixed 3M-cycle budget ends — and PC-sample data from the "Finding" section above shows MAME's own PC is still transiting `ae3c`→`aa68` (i.e., approaching but not yet at `aa66`) around cycle 2.67M-2.85M, meaning the oracle capture's `aa66` breakpoint fires *before* this second palette pass ever starts in that run, while the RTL — not PC-bounded, just cycle-bounded — keeps going long enough to begin it. Same code, same behavior, different stop instant. The sprite-RAM region, tilemap VRAM, and (up to this well-explained residual) the general mainram data path are all independently confirmed correct.
 
 ### Correction: the "cactus is missing ROMs" caveat below was a false alarm
 
@@ -138,12 +162,10 @@ The earlier note in this doc (and in `docs/sim-harness.md`) worrying that `mame_
 
 ## Next steps
 
-1. The manual `wpset`-based enumeration above already confirmed the first 5 sprite-RAM write events match the RTL exactly (address, value, and PC). Automate this into a real `state_diff.py`-style byte-for-byte comparison over the *whole* sprite-RAM sub-region (not just 5 manually-inspected events) before fully trusting it — the debugger's own scripting is clunky for bulk capture (see the `tracelog`/action-clause attempt in this session's history that didn't pan out cleanly; repeated plain `go` calls did work but doesn't scale to thousands of events by hand).
-2. Build a small reusable debugger-scripting helper (`.debugscript` template using `wpset`/`bpset` + `-debuglog`) as a documented, proven-reliable fallback for whenever a Lua-tap-based oracle capture gives a surprising or suspicious result — worth solving the bulk-capture automation problem from step 1 as part of this.
-3. Sprite-buffer verification proper (MAME's internal `m_spriteram_old`) still needs a separate workaround since `sprite_dma()` is a host-memory copy, never bus-visible by either method — a dedicated Lua hook exposing that buffer, or waiting for real-time-synchronized rendering.
-4. Exercise the untested decode paths once real gameplay content is reachable: tile bank-select (bit 11, addressing `bgtile` not `fgtile`), non-zero tile colors.
-5. Real-time scanline-synchronized render architecture (replacing the procedural per-frame FSM) — needed for direct frame-CRC comparison against MAME once palette/VRAM/sprite state are all independently trusted, and for eventual hardware synthesis regardless (the procedural FSM was never going to be synthesizable as-is).
-6. `nmk112` + 2x jt6295 functional audio integration (currently stubbed).
-7. Real `nmk_irq` dual-PROM state machine for `bjtwinp`/`nouryokup` (cactus-only `nmk_irq_hacky` doesn't cover them).
-8. `cactus`'s scrambled graphics ROMs (see "Hardware spec" above) need the fixed bitswap applied — either in `tools/mkgfxrom.py` or at `.mra` build time — before `bjtwinp`/`nouryokup` (which use unscrambled ROMs) and `cactus` can share one `.rbf`. Not yet needed for the current milestone since `cactus`'s ROMs were used as-is (scrambled) and the game still booted and rendered something coherent — worth understanding why before assuming it doesn't matter.
-9. Extend the CPU-correctness oracle trace further into the boot sequence (needs the Lua-tap-overhead workaround already documented) to validate beyond the first ~1618 events, and add read-cycle coverage (this window happened to be write-only).
+1. Sprite-buffer verification proper (MAME's internal `m_spriteram_old`, the actual DMA'd draw buffer) still needs a separate workaround since `sprite_dma()` is a host-memory copy, never bus-visible by either the Lua tap or `debug_capture.py` (both only see the CPU's own bus transactions) — a dedicated Lua hook exposing that buffer, or waiting for real-time-synchronized rendering.
+2. Exercise the untested decode paths once real gameplay content is reachable: tile bank-select (bit 11, addressing `bgtile` not `fgtile`), non-zero tile colors.
+3. Real-time scanline-synchronized render architecture (replacing the procedural per-frame FSM) — needed for direct frame-CRC comparison against MAME once palette/VRAM/sprite state are all independently trusted, and for eventual hardware synthesis regardless (the procedural FSM was never going to be synthesizable as-is).
+4. `nmk112` + 2x jt6295 functional audio integration (currently stubbed).
+5. Real `nmk_irq` dual-PROM state machine for `bjtwinp`/`nouryokup` (cactus-only `nmk_irq_hacky` doesn't cover them).
+6. `cactus`'s scrambled graphics ROMs (see "Hardware spec" above) need the fixed bitswap applied — either in `tools/mkgfxrom.py` or at `.mra` build time — before `bjtwinp`/`nouryokup` (which use unscrambled ROMs) and `cactus` can share one `.rbf`. Not yet needed for the current milestone since `cactus`'s ROMs were used as-is (scrambled) and the game still booted and rendered something coherent — worth understanding why before assuming it doesn't matter.
+7. Extend the CPU-correctness oracle trace further into the boot sequence using `debug_capture.py` (proven far faster than the Lua-tap-overhead-limited approach) to validate beyond the first ~1618 events, and add read-cycle coverage (this window happened to be write-only). Given `debug_capture.py`'s speed, revisiting the *palette*/*VRAM* comparisons with it too (the Lua tap left VRAM's coverage incomplete at 1706/2048) is now cheap and would close that last small gap.
