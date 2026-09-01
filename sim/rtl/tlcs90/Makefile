@@ -25,12 +25,15 @@
 #   make run-ldarcallrtest # standalone CPU core + synthetic program:
 #                      # proves LDAR/CALLR and the 16-bit JR form
 #                      # end-to-end (see docs/tier2-tlcs90.md)
+#   make run-switest  # standalone CPU core + synthetic program: proves
+#                      # SWI end-to-end, including that it's genuinely
+#                      # non-maskable (see docs/tier2-tlcs90.md)
 #   make clean
 
 CORE_DIR := ../../../rtl/tlcs90
 OBJ_DIR := obj_dir
 
-.PHONY: all run run-nmk004 run-irqtest run-banktest run-blocktest run-rldtest run-muldivtest run-ldarcallrtest clean
+.PHONY: all run run-nmk004 run-irqtest run-banktest run-blocktest run-rldtest run-muldivtest run-ldarcallrtest run-switest clean
 
 all: run
 
@@ -139,5 +142,18 @@ $(LDARCALLRTEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_ldarcallrtest.cpp
 run-ldarcallrtest: $(LDARCALLRTEST_DIR)/Vtlcs90
 	./$(LDARCALLRTEST_DIR)/Vtlcs90
 
+SWITEST_DIR := obj_dir_switest
+
+$(SWITEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_switest.cpp
+	verilator --cc --exe --build -Wall -Wno-fatal --top-module tlcs90 \
+		-y $(CORE_DIR) \
+		$(CORE_DIR)/tlcs90.sv \
+		tb_switest.cpp \
+		-o Vtlcs90 \
+		--Mdir $(SWITEST_DIR)
+
+run-switest: $(SWITEST_DIR)/Vtlcs90
+	./$(SWITEST_DIR)/Vtlcs90
+
 clean:
-	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) $(RLDTEST_DIR) $(MULDIVTEST_DIR) $(LDARCALLRTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace
+	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) $(RLDTEST_DIR) $(MULDIVTEST_DIR) $(LDARCALLRTEST_DIR) $(SWITEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace

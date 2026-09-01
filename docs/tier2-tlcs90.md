@@ -86,6 +86,28 @@ guarded by a self-trapping "poison" block that makes an off-by-one landing
 either short or long unable to pass by accident. All checks passed on the
 first run. See "Ninth verification result" below.
 
+**SWI is now implemented** too — the last remaining CPU-core opcode gap.
+Base-table opcode `0xff` (the one byte outside the `PFX_G8` group's own
+`0xf8-0xfe` range), a synchronous software interrupt that reuses the
+*exact same* push-PC-then-AF/clear-IF-after/vector-jump chain the CPU's
+existing interrupt dispatch already builds for maskable IRQs and NMI, just
+triggered directly from `EXECUTE` instead of the per-instruction dispatch
+check, with the vector fixed at `INTSWI`'s own `0x0010`. Genuinely
+non-maskable in this model (unlike NMI — see the interrupt-model section
+below): nothing about reaching this `EXECUTE` case checks `IF` at all.
+Verified with a sixth dedicated standalone test (`tb_switest.cpp`) that
+disables interrupts immediately before `SWI` (proving it fires anyway),
+guards the real vector with two self-trapping "poison" blocks at
+neighboring addresses (`0x0008` and NMI's own `0x0018`), and has the ISR
+deliberately corrupt `A` before returning so checking it's restored
+afterward proves `RETI`'s round-trip is real. All checks passed on the
+first run. See "Tenth verification result" below. With this, **the CPU
+core's own opcode table is complete** except for the memory-operand forms
+of `EX` and the two opcodes MAME's own reference model can never execute
+(`LDA`/`TSET` — see "Deferred" below); everything else now needs either a
+real oracle trace to exercise (most of what's implemented) or
+system-level integration to get past the host-handshake boundary.
+
 ## Why this exists
 
 NMK004 (used by mustang, bioship, vandyke, blkheart, acrobatm, strahl, tdragon,
@@ -295,8 +317,27 @@ existing 8-bit sign-extended-displacement form the `0xc0-0xcf` opcodes
 already use, in the same execute case. See "Ninth verification result"
 below.
 
+**Phase 8 (SWI, done):** base-table opcode `0xff` (the one byte outside the
+`PFX_G8` group's own `0xf8-0xfe` range) — a synchronous software interrupt.
+Reuses the *exact same* push-PC-then-AF/clear-IF-after/vector-jump chain
+the CPU's interrupt dispatch (see "Interrupt model" below) already builds
+for maskable IRQs and NMI (`irq_taking` gates `S_PUSH_HI` into chaining
+onward to push `AF` too, then `S_IRQ_PUSH2_HI` clears `f[IFB]`) — just
+entered directly from `EXECUTE` (this is what the opcode itself does, not
+a request arbitrated at an instruction boundary) rather than the
+per-instruction dispatch check, with the vector fixed at `INTSWI`'s own
+`0x0010` instead of a priority-scanned one. Genuinely non-maskable, unlike
+NMI in this model: nothing about reaching this `EXECUTE` case checks `IF`
+at all, matching the reference calling `take_interrupt()` directly rather
+than going through `check_interrupts()`'s `if (!(F&IF)) return;` gate. See
+"Tenth verification result" below.
+
+With SWI done, the CPU core's own opcode table is now complete except for
+the two items below (`LDA`/`TSET`, permanently unverifiable) and the
+memory-operand forms of `EX` noted in "Instruction set" above.
+
 **Deferred (not yet needed to make further verified progress — add once the oracle
-trace shows where):** `SWI`. `LDA` and
+trace shows where):** `LDA` and
 `TSET` are **dead opcode space in MAME
 itself** — decode() recognizes them but the reference model's own execute-switch
 has no handler (commented out, would `fatalerror` if ever actually reached),
@@ -482,6 +523,11 @@ against a real MAME oracle trace before trusting anything downstream):
   `Makefile` (`make run-ldarcallrtest`) — standalone CPU-core-only
   Verilator testbench with a synthetic 3-part program proving `LDAR`,
   `CALLR`, and the base table's 16-bit `JR` form end-to-end — see "Ninth
+  verification result" below.
+- `sim/rtl/tlcs90/tb_switest.cpp` + `gen_switest_rom.py` + `Makefile`
+  (`make run-switest`) — standalone CPU-core-only Verilator testbench
+  proving `SWI` end-to-end, including that it's genuinely non-maskable and
+  that its vector doesn't land on a neighboring one — see "Tenth
   verification result" below.
 
 ### First verification result (base table only)
@@ -941,8 +987,55 @@ regressions (175-checkpoint oracle match, 211-fire interrupt self-test,
 the bank-extension test, the block-transfer test, the RLD/RRD test, and
 the MUL/DIV test) unchanged afterward.
 
-Next step: `SWI` and the memory-operand forms of `EX` are the remaining
-CPU-core gaps; getting NMK004 actually driving real YM2203/OKI hardware
-needs system-level integration (a real 68000 + shared RAM + `jt12`/`jt6295`
-cores) to get past the host-handshake boundary this tier's CPU-only
-testbench can't cross on its own.
+### Tenth verification result (SWI)
+
+Implemented `SWI` (see "Phase 8" above) — the last remaining CPU-core
+opcode gap. Same situation as every synthetic-only milestone this
+session: no currently-known game's boot trace reaches this opcode, so a
+seventh dedicated standalone test, `tb_switest.cpp` (generated from
+`gen_switest_rom.py`), was needed:
+
+```
+OK:   SWI: real ISR ran (vector 0x0010) = 0x99
+OK:   SWI: A restored by RETI = 0x42
+OK:   SWI: F restored by RETI (CF=1,XCF=1) = 0x09
+OK:   SWI: never landed on 0x0008 = 0x00
+OK:   SWI: never landed on NMI's vector (0x0018) = 0x00
+tb_switest: PASS (all checks)
+```
+
+The program executes `DI` immediately before `SWI` — proving SWI is
+genuinely non-maskable in this model by the simplest possible means: it
+still works with `IF=0`. If `OP_SWI`'s dispatch were accidentally gated on
+`f[IFB]` (easy to imagine as copy-paste residue, since it reuses the
+maskable-IRQ dispatch machinery almost verbatim), none of the other checks
+would pass either — the ISR would simply never run. The real vector
+(`0x0010`) is guarded by two "poison" blocks placed at plausible
+wrong-landing addresses: `0x0008` (no real interrupt source there, but a
+plausible target for a vector-arithmetic off-by-one) and `0x0018` (NMI's
+own real vector — a plausible target if `SWI`'s dispatch accidentally used
+a priority-scanned index instead of the fixed `INTSWI` one). Each poison
+block writes its own distinct marker and then self-loops forever if ever
+reached, so a wrong-vector bug is guaranteed to leave the real ISR's
+marker unwritten rather than merely delayed. The real ISR at `0x0010`
+deliberately corrupts `A` (setting it to a value that appears nowhere else
+in the test) before returning, so checking `A` is back to its pre-`SWI`
+value afterward proves `RETI`'s restore is a genuine round-trip through
+the pushed `AF`, not a coincidence of nothing else having touched the
+register; `F` is checked the same way via the standard `PUSH AF`/`POP HL`/
+`LD (nn),HL` observation trick.
+
+All checks passed on the first run. Re-confirmed all eight existing
+regressions (175-checkpoint oracle match, 211-fire interrupt self-test,
+the bank-extension test, the block-transfer test, the RLD/RRD test, the
+MUL/DIV test, and the LDAR/CALLR/16-bit-JR test) unchanged afterward.
+
+With this, the CPU core's own opcode table is complete except for the
+memory-operand forms of `EX` and the two opcodes MAME's own reference
+model can never execute (`LDA`/`TSET`, a permanent verification blind
+spot — see "Deferred" above, not a bug to chase). Next step: getting
+NMK004 actually driving real YM2203/OKI hardware needs system-level
+integration (a real 68000 + shared RAM + `jt12`/`jt6295` cores) to get
+past the host-handshake boundary this tier's CPU-only testbench can't
+cross on its own — the natural next milestone now that the CPU-core-only
+work has run its course.

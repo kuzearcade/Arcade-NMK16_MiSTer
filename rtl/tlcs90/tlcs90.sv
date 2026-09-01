@@ -40,7 +40,7 @@
 // byte only the real 68000 host would ever write (see
 // docs/tier2-tlcs90.md's "Third verification result").
 //
-// Still deferred: SWI,
+// Still deferred:
 // `EX (gg)/(mn)/($FF00+n)/(ix+d)/(iy+d)/(HL+A),rr` (the memory-operand
 // forms of EX — register-only EX is implemented), and the TSET/LDA dead
 // opcode space MAME's own reference model can't execute either.
@@ -86,6 +86,19 @@
 // (set only by this one opcode) picks the M_D16 raw-1 arithmetic over the
 // existing 8-bit sign-extended-displacement form the 0xc0-0xcf opcodes
 // use, in the same execute case.
+//
+// SWI IS implemented too — base-table opcode 0xff, the last byte outside
+// the PFX_G8 group (which only covers 0xf8-0xfe). A synchronous software
+// interrupt: reuses the *exact same* push-PC-then-AF/clear-IF-after/
+// vector-jump chain the S_FETCH_OP interrupt dispatch already builds for
+// maskable IRQs and NMI (irq_taking gates S_PUSH_HI into chaining onward
+// to push AF too), just triggered directly from EXECUTE instead of the
+// per-instruction dispatch check, with the vector fixed at INTSWI's own
+// 0x0010. Genuinely non-maskable (unlike NMI in this model — see the
+// interrupt-model doc): nothing about reaching this EXECUTE case checks
+// IF at all, matching the reference calling take_interrupt() directly
+// rather than going through check_interrupts()'s `if (!(F&IF)) return;`
+// gate.
 //
 // IX/IY bank extension via BX/BY (`ix_bank`/`iy_bank` inputs, driven from a
 // peripheral module's BX/BY registers) IS implemented — see `bank1`/`bank2`
@@ -290,6 +303,15 @@ module tlcs90 (
 		// `wide` distinguishes it from the existing 8-bit-displacement JR
 		// opcodes (0xc0-0xcf) in the same OP_JR execute case.
 		OP_LDAR=58, OP_CALLR=59,
+		// SWI: base-table opcode 0xff, a synchronous software interrupt —
+		// pushes PC then AF and jumps to the fixed INTSWI vector (0x0010)
+		// exactly like a real maskable-interrupt/NMI dispatch, but entered
+		// directly from EXECUTE (this is what the opcode itself does, not
+		// a request that gets arbitrated). Genuinely non-maskable, unlike
+		// NMI in this model (see the interrupt-model doc/header note) —
+		// bypasses the IF gate entirely by construction, since nothing
+		// about reaching this EXECUTE case depends on IF at all.
+		OP_SWI=60,
 		OP_UNKNOWN=63;
 
 	// ------------------------------------------------------------------
@@ -426,6 +448,12 @@ module tlcs90 (
 			8'hf4,8'hf5,8'hf6: begin d_pfx = PFX_IXD_DST; d_gg = R16_IX + 4'(din - 8'hf4); end
 			8'hf7: d_pfx = PFX_HLA_DST;
 			8'hf8,8'hf9,8'hfa,8'hfb,8'hfc,8'hfd,8'hfe: begin d_pfx = PFX_G8; d_gg = 4'(din - 8'hf8); end
+
+			// SWI: the base table's own last byte, 0xff — not part of the
+			// PFX_G8 group above (that's only 0xf8-0xfe). No operands
+			// (mode1/mode2 stay M_NONE); see the OP_SWI execute block for
+			// the dispatch itself.
+			8'hff: d_op = OP_SWI;
 
 			default: d_op = OP_UNKNOWN;
 		endcase
@@ -1123,6 +1151,24 @@ module tlcs90 (
 						// LDAR HL,+cd: no bus access, no flags — a single
 						// register write.
 						OP_LDAR: hl <= pc + val2 - 16'd1;
+						// SWI: reuses the exact same push-PC-then-AF,
+						// clear-IF-after-AF-captured chain the S_FETCH_OP
+						// interrupt dispatch already builds (irq_taking
+						// gates S_PUSH_HI into pushing AF next, then
+						// S_IRQ_PUSH2_HI clears f[IFB]) — this is
+						// identical machinery, just entered synchronously
+						// from EXECUTE instead of the per-instruction
+						// dispatch check, with the vector fixed at
+						// INTSWI's own 0x0010 rather than a
+						// priority-scanned one.
+						OP_SWI: begin
+							push_val <= pc;
+							sp <= sp - 16'd2;
+							addr <= sp - 16'd2; dout <= pc[7:0]; mem_wr <= 1'b1;
+							pc <= 16'h0010;
+							irq_taking <= 1'b1;
+							state <= S_PUSH_HI;
+						end
 						OP_RET: if (test_cc(r1[3:0], f)) begin
 							pop_dest <= 2'd1;
 							addr <= sp; mem_rd <= 1'b1;
