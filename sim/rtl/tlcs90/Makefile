@@ -22,12 +22,15 @@
 #   make run-muldivtest # standalone CPU core + synthetic program: proves
 #                      # MUL/DIV end-to-end, including the divide-by-zero
 #                      # special case (see docs/tier2-tlcs90.md)
+#   make run-ldarcallrtest # standalone CPU core + synthetic program:
+#                      # proves LDAR/CALLR and the 16-bit JR form
+#                      # end-to-end (see docs/tier2-tlcs90.md)
 #   make clean
 
 CORE_DIR := ../../../rtl/tlcs90
 OBJ_DIR := obj_dir
 
-.PHONY: all run run-nmk004 run-irqtest run-banktest run-blocktest run-rldtest run-muldivtest clean
+.PHONY: all run run-nmk004 run-irqtest run-banktest run-blocktest run-rldtest run-muldivtest run-ldarcallrtest clean
 
 all: run
 
@@ -123,5 +126,18 @@ $(MULDIVTEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_muldivtest.cpp
 run-muldivtest: $(MULDIVTEST_DIR)/Vtlcs90
 	./$(MULDIVTEST_DIR)/Vtlcs90
 
+LDARCALLRTEST_DIR := obj_dir_ldarcallrtest
+
+$(LDARCALLRTEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_ldarcallrtest.cpp
+	verilator --cc --exe --build -Wall -Wno-fatal --top-module tlcs90 \
+		-y $(CORE_DIR) \
+		$(CORE_DIR)/tlcs90.sv \
+		tb_ldarcallrtest.cpp \
+		-o Vtlcs90 \
+		--Mdir $(LDARCALLRTEST_DIR)
+
+run-ldarcallrtest: $(LDARCALLRTEST_DIR)/Vtlcs90
+	./$(LDARCALLRTEST_DIR)/Vtlcs90
+
 clean:
-	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) $(RLDTEST_DIR) $(MULDIVTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace
+	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) $(RLDTEST_DIR) $(MULDIVTEST_DIR) $(LDARCALLRTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace

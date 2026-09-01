@@ -40,7 +40,7 @@
 // byte only the real 68000 host would ever write (see
 // docs/tier2-tlcs90.md's "Third verification result").
 //
-// Still deferred: LDAR, CALLR, SWI,
+// Still deferred: SWI,
 // `EX (gg)/(mn)/($FF00+n)/(ix+d)/(iy+d)/(HL+A),rr` (the memory-operand
 // forms of EX — register-only EX is implemented), and the TSET/LDA dead
 // opcode space MAME's own reference model can't execute either.
@@ -73,6 +73,19 @@
 // an oversight); DIV only ever touches PF/VF (`F |= VF`/`F &= ~VF`, never
 // a full reassignment) — see the OP_MUL/OP_DIV execute blocks for the
 // divide-by-zero special case.
+//
+// LDAR/CALLR ARE implemented too — base-table opcodes 0x17/0x1d, both using
+// a new M_D16 addressing mode (a 16-bit relative/PC-relative constant that
+// reads as raw-1 at EXECUTE time — an intentional off-by-one in the real
+// ISA, distinct from a genuine M_I16 immediate; shares M_I16's 2-byte
+// little-endian fetch machinery, so no new FSM states were needed). LDAR
+// writes `HL = PC + (raw-1)` directly, no bus access, no flags. CALLR is
+// an unconditional push+jump identical to CALL's mechanics except the
+// target is PC-relative. The base table's own 16-bit-relative JR form
+// (0x1b, unconditional) reuses OP_JR rather than adding a new op — `wide`
+// (set only by this one opcode) picks the M_D16 raw-1 arithmetic over the
+// existing 8-bit sign-extended-displacement form the 0xc0-0xcf opcodes
+// use, in the same execute case.
 //
 // IX/IY bank extension via BX/BY (`ix_bank`/`iy_bank` inputs, driven from a
 // peripheral module's BX/BY registers) IS implemented — see `bank1`/`bank2`
@@ -203,7 +216,15 @@ module tlcs90 (
 		M_NONE = 0, M_BIT8 = 1, M_CC = 2, M_I8 = 3, M_D8 = 4,
 		M_R8 = 5, M_I16 = 6, M_R16 = 7,
 		M_MI16 = 8, // memory, direct 16-bit address (covers the $FF00+n short form too)
-		M_MR16 = 9; // memory, indirect via a register pair ("(gg)" in the prefixed opcode groups)
+		M_MR16 = 9, // memory, indirect via a register pair ("(gg)" in the prefixed opcode groups)
+		// 16-bit relative/PC-relative constant, used only by LDAR/CALLR/the
+		// 16-bit JR form (opcodes 0x17/0x1d/0x1b) — same 2-byte
+		// little-endian fetch as M_I16 (mode_needs_read/mode2 byte-fetch
+		// share that machinery, no special-casing needed there), but reads
+		// as raw-1 at EXECUTE time (an intentional off-by-one in the real
+		// ISA), unlike a genuine M_I16 immediate. Distinct from M_D8
+		// (JR/DJNZ's 8-bit sign-extended form, no -1 quirk).
+		M_D16 = 10;
 
 	// Prefix-group kind, resolved from the opcode byte when it isn't part
 	// of the base table (see the two-level decode below and
@@ -263,6 +284,12 @@ module tlcs90 (
 		// R16(HL), mode2 is R8(g) where g = the base opcode's own embedded
 		// register code (gg). See the PFX_G8 decode branch below.
 		OP_MUL=56, OP_DIV=57,
+		// LDAR/CALLR: base-table opcodes 0x17/0x1d, both M_D16-operand
+		// ops (see M_D16's own comment above). OP_JR is reused (not a new
+		// op) for the base table's own 16-bit-relative form at 0x1b —
+		// `wide` distinguishes it from the existing 8-bit-displacement JR
+		// opcodes (0xc0-0xcf) in the same OP_JR execute case.
+		OP_LDAR=58, OP_CALLR=59,
 		OP_UNKNOWN=63;
 
 	// ------------------------------------------------------------------
@@ -306,11 +333,30 @@ module tlcs90 (
 			8'h10: d_op = OP_CPL;
 			8'h11: d_op = OP_NEG;
 
+			// LDAR HL,+cd: HL = PC + (raw D16 value - 1). No memory
+			// access, no flags touched (confirmed by the reference — no
+			// F=... line for this op either) — see the OP_LDAR execute
+			// block. mode1 stays M_NONE (the reference tags this R16(HL)
+			// only to name the write destination; nothing ever reads it
+			// through the operand pipeline, so there's nothing to decode
+			// there).
+			8'h17: begin d_op = OP_LDAR; d_mode2 = M_D16; d_m2bytes = 2'd2; end
+
 			8'h18: begin d_op = OP_DJNZ; d_mode1 = M_D8; d_m1bytes = 2'd1; end
 			8'h19: begin d_op = OP_DJNZ; d_wide = 1'b1; d_mode1 = M_R16; d_r1e = R16_BC; d_mode2 = M_D8; d_m2bytes = 2'd1; end
 
 			8'h1a: begin d_op = OP_JP; d_mode1 = M_CC; d_r1e = 4'h8; d_mode2 = M_I16; d_m2bytes = 2'd2; end
+			// JR T,+cd (16-bit relative, unconditional — CC=T is baked
+			// into this specific opcode, same 4'h8 encoding 0x1a/0x1c
+			// already use). Reuses OP_JR (not a new op): `d_wide` is what
+			// distinguishes this from the 8-bit-displacement JR opcodes
+			// (0xc0-0xcf) sharing the same execute case.
+			8'h1b: begin d_op = OP_JR; d_wide = 1'b1; d_mode1 = M_CC; d_r1e = 4'h8; d_mode2 = M_D16; d_m2bytes = 2'd2; end
 			8'h1c: begin d_op = OP_CALL; d_mode1 = M_CC; d_r1e = 4'h8; d_mode2 = M_I16; d_m2bytes = 2'd2; end
+			// CALLR +cd: unconditional (no CC gate at all in the
+			// reference — always pushes PC and jumps). mode1 stays
+			// M_NONE, same reasoning as LDAR above.
+			8'h1d: begin d_op = OP_CALLR; d_mode2 = M_D16; d_m2bytes = 2'd2; end
 			8'h1e: begin d_op = OP_RET; d_mode1 = M_CC; d_r1e = 4'h8; end
 			8'h1f: d_op = OP_RETI;
 
@@ -1049,7 +1095,13 @@ module tlcs90 (
 						end
 
 						OP_JP: if (test_cc(r1[3:0], f)) pc <= val2;
-						OP_JR: if (test_cc(r1[3:0], f)) pc <= pc + {{8{val2[7]}}, val2[7:0]};
+						// `wide` (set only by the base table's 0x1b) picks
+						// the 16-bit M_D16 form (raw value reads as -1, no
+						// sign-extension needed — it's already 16 bits)
+						// over the existing 8-bit sign-extended-
+						// displacement form the 0xc0-0xcf opcodes use.
+						OP_JR: if (test_cc(r1[3:0], f))
+							pc <= wide ? (pc + val2 - 16'd1) : (pc + {{8{val2[7]}}, val2[7:0]});
 						OP_CALL: if (test_cc(r1[3:0], f)) begin
 							push_val <= pc;
 							sp <= sp - 16'd2;
@@ -1057,6 +1109,20 @@ module tlcs90 (
 							pc <= val2;
 							state <= S_PUSH_HI;
 						end
+						// CALLR +cd: unconditional push+jump, identical
+						// mechanics to OP_CALL, but the target is
+						// PC-relative (M_D16, raw-1) rather than an
+						// absolute M_I16 address.
+						OP_CALLR: begin
+							push_val <= pc;
+							sp <= sp - 16'd2;
+							addr <= sp - 16'd2; dout <= pc[7:0]; mem_wr <= 1'b1;
+							pc <= pc + val2 - 16'd1;
+							state <= S_PUSH_HI;
+						end
+						// LDAR HL,+cd: no bus access, no flags — a single
+						// register write.
+						OP_LDAR: hl <= pc + val2 - 16'd1;
 						OP_RET: if (test_cc(r1[3:0], f)) begin
 							pop_dest <= 2'd1;
 							addr <= sp; mem_rd <= 1'b1;

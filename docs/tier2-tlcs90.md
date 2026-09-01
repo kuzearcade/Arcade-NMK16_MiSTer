@@ -68,6 +68,24 @@ same running `F` proves both the set-on-overflow and clear-on-no-overflow
 paths, plus the divide-by-zero path independently. All checks passed on
 the first run. See "Eighth verification result" below.
 
+**LDAR/CALLR are now implemented** too, along with the base table's own
+16-bit-relative `JR` form (opcode `0x1b`) — a natural completion bundled in
+alongside them rather than left as an inconsistent gap, since all three are
+the only real consumers of a genuinely new addressing mode (`M_D16`, a
+16-bit PC-relative constant that reads as raw-1 at execute time — an
+intentional off-by-one in the real ISA). `LDAR` writes `HL = PC +
+(raw-1)` directly with no bus access and no flags; `CALLR` is an
+unconditional push+jump identical to `CALL`'s mechanics except the target
+is PC-relative; the 16-bit `JR` reuses the existing `OP_JR` op, with `wide`
+distinguishing it from the 8-bit sign-extended-displacement form the
+`0xc0-0xcf` opcodes already use. Verified with a fifth dedicated standalone
+test (`tb_ldarcallrtest.cpp`) exercising all three through the same shared
+`M_D16` arithmetic, including a `CALLR` check that independently verifies
+both the jump target and the pushed return address, and a `JR` check
+guarded by a self-trapping "poison" block that makes an off-by-one landing
+either short or long unable to pass by accident. All checks passed on the
+first run. See "Ninth verification result" below.
+
 ## Why this exists
 
 NMK004 (used by mustang, bioship, vandyke, blkheart, acrobatm, strahl, tdragon,
@@ -260,8 +278,25 @@ divide-by-zero special case, where no division is attempted at all: `HL`
 becomes `{old L, ~old H}` and the overflow flag is forced set
 unconditionally. See "Eighth verification result" below.
 
+**Phase 7 (LDAR/CALLR + the 16-bit JR form, done):** three **base-table**
+opcodes (`0x17`, `0x1b`, `0x1d` — not a prefix group), the only real
+consumers of a new addressing mode, `M_D16` — a 16-bit PC-relative constant
+that reads as `raw-1` at execute time (see the `D8`/`D16` addressing-mode
+table entry above; distinct from a genuine `M_I16` immediate, though it
+shares `M_I16`'s 2-byte little-endian fetch machinery, so no new FSM states
+were needed). `LDAR HL,+cd` writes `HL = PC + (raw-1)` directly (no bus
+access, no flags — the reference tags this `R16(HL)` only to name the write
+destination, never actually reading it first). `CALLR +cd` is an
+unconditional push+jump identical to `CALL`'s own mechanics, just with a
+PC-relative rather than absolute target. The 16-bit `JR T,+cd` form reuses
+the existing `OP_JR` op rather than adding a new one: `wide` (set only by
+this one opcode, `0x1b`) picks the `M_D16` raw-1 arithmetic over the
+existing 8-bit sign-extended-displacement form the `0xc0-0xcf` opcodes
+already use, in the same execute case. See "Ninth verification result"
+below.
+
 **Deferred (not yet needed to make further verified progress — add once the oracle
-trace shows where):** `LDAR`, `CALLR`, `SWI`. `LDA` and
+trace shows where):** `SWI`. `LDA` and
 `TSET` are **dead opcode space in MAME
 itself** — decode() recognizes them but the reference model's own execute-switch
 has no handler (commented out, would `fatalerror` if ever actually reached),
@@ -443,6 +478,11 @@ against a real MAME oracle trace before trusting anything downstream):
   (`make run-muldivtest`) — standalone CPU-core-only Verilator testbench
   with a synthetic 4-part program proving `MUL`/`DIV` end-to-end, including
   the divide-by-zero special case — see "Eighth verification result" below.
+- `sim/rtl/tlcs90/tb_ldarcallrtest.cpp` + `gen_ldarcallrtest_rom.py` +
+  `Makefile` (`make run-ldarcallrtest`) — standalone CPU-core-only
+  Verilator testbench with a synthetic 3-part program proving `LDAR`,
+  `CALLR`, and the base table's 16-bit `JR` form end-to-end — see "Ninth
+  verification result" below.
 
 ### First verification result (base table only)
 
@@ -852,8 +892,57 @@ regressions (175-checkpoint oracle match, 211-fire interrupt self-test, the
 bank-extension test, the block-transfer test, and the RLD/RRD test)
 unchanged afterward.
 
-Next step: `LDAR`, `CALLR`, `SWI`, and the memory-operand forms of `EX` are
-the remaining CPU-core gaps; getting NMK004 actually driving real
-YM2203/OKI hardware needs system-level integration (a real 68000 + shared
-RAM + `jt12`/`jt6295` cores) to get past the host-handshake boundary this
-tier's CPU-only testbench can't cross on its own.
+### Ninth verification result (LDAR/CALLR + the 16-bit JR form)
+
+Implemented `LDAR`/`CALLR` and the base table's own 16-bit-relative `JR`
+form (see "Phase 7" above) — the latter bundled in alongside the two the
+user actually asked for, since all three share the same brand-new `M_D16`
+addressing mode and leaving one of its three real consumers unimplemented
+would have been an inconsistent half-measure, not a meaningfully smaller
+change. Same situation as every prior milestone this session — no
+currently-known game's boot trace reaches any of these opcodes — so a
+sixth dedicated standalone test, `tb_ldarcallrtest.cpp` (generated from
+`gen_ldarcallrtest_rom.py`), was needed:
+
+```
+OK:   LDAR HL,+cd: HL after = 0x5000
+OK:   CALLR: subroutine marker (jump landed exactly) = 0xCD
+OK:   CALLR: post-return marker (RET landed exactly) = 0xAB
+OK:   JR (16-bit): marker (jump landed exactly, no poison hit) = 0xEF
+tb_ldarcallrtest: PASS (all checks)
+```
+
+All three checks exercise the *same* `target = pc_after_instruction +
+raw16 - 1` arithmetic through three different consumers, computed in the
+generator script the same way the CPU itself computes it (rather than
+picking a target address and reverse-deriving the raw16 by hand, which
+would risk transcribing the same off-by-one mistake into both the test and
+a hypothetical bug). `LDAR` is checked directly (`HL` read back from
+memory once the program writes it out). `CALLR` is checked two ways at
+once: a marker written by the subroutine it jumps to (proving the jump
+itself landed exactly on the subroutine's first instruction, not
+mid-instruction one byte off) and a *second*, independent marker written
+immediately after the `CALLR` site once control returns (proving the
+pushed return address is exactly right, not off by one in either
+direction — a wrong return address would either re-execute part of the
+`CALLR` instruction's own bytes as garbage or skip the marker-write
+entirely). The 16-bit `JR` is checked against an 8-byte "poison" block
+placed directly at the jump's target minus 8 bytes: the poison writes a
+*different* marker and then self-loops forever if ever reached, so an
+off-by-one landing either short (into the poison, which traps there and
+never reaches the real marker) or long (skipping the real marker
+entirely) is guaranteed to leave the check's expected value unwritten —
+not something a simpler "did the CPU eventually reach roughly the right
+place" check could tell apart from a small addressing bug that happened
+to still terminate.
+
+All checks passed on the first run. Re-confirmed all seven existing
+regressions (175-checkpoint oracle match, 211-fire interrupt self-test,
+the bank-extension test, the block-transfer test, the RLD/RRD test, and
+the MUL/DIV test) unchanged afterward.
+
+Next step: `SWI` and the memory-operand forms of `EX` are the remaining
+CPU-core gaps; getting NMK004 actually driving real YM2203/OKI hardware
+needs system-level integration (a real 68000 + shared RAM + `jt12`/`jt6295`
+cores) to get past the host-handshake boundary this tier's CPU-only
+testbench can't cross on its own.
