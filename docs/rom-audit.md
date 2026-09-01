@@ -6,11 +6,11 @@
 
 Cross-checked all 101 romsets from `docs/game-inventory.md` against `mame_roms/` (102 zips) using the installed MAME 0.285 (`mame -verifyroms <all 101 names> -rompath mame_roms`).
 
-## Result: only one romset is genuinely missing
+## Result: 101/101 romsets present and verified
 
-**`macrossbl`** has no zip in `mame_roms/` at all. Low priority to chase down — it's already `MACHINE_NOT_WORKING` in MAME itself (per `docs/game-inventory.md`'s family E notes: "not looked at yet"), so it wasn't blocking anything regardless.
+**`macrossbl`** was initially missing (no zip in `mame_roms/`), since deposited and reverified: `mame -verifyroms macrossbl -rompath mame_roms` → `romset macrossbl [macross] is good`. All 101 romsets now verify complete.
 
-Everything else resolved as complete, once the following non-issues are understood:
+The rest resolved as complete on the first pass, once the following non-issues are understood:
 
 ## Two "not found" results are a MAME-version mismatch, not missing files
 
@@ -29,4 +29,4 @@ Everything else resolved as complete, once the following non-issues are understo
 
 ## Bottom line
 
-Of the 101 romsets: **100 have complete, MAME-verified ROM data** once split-set parent merging and the MAME-version mismatch are accounted for; **1 (`macrossbl`) is genuinely absent** and was already deprioritized as broken-in-MAME-itself. No action needed before continuing Tier 1+ RTL work — the earlier "cactus is missing files" concern in `docs/tier1-bjtwin.md` is retracted (see that file for the correction).
+**All 101 romsets have complete, MAME-verified ROM data**, once split-set parent merging and the MAME-version mismatch (`redhawkc`/`puzlwrld`) are accounted for. No action needed before continuing Tier 1+ RTL work — the earlier "cactus is missing files" concern in `docs/tier1-bjtwin.md` is retracted (see that file for the correction). `macrossbl` itself is still `MACHINE_NOT_WORKING` in MAME's own driver, so it stays deprioritized in the tier ordering regardless of ROM availability.
