@@ -14,6 +14,16 @@ write — the natural boundary for a CPU-only oracle comparison, not a bug (conf
 the RTL's own polling loop content matches the oracle's exactly, both looping
 forever for the same reason). See "Third verification result" below.
 
+The CPU core now also has **real interrupt dispatch** (priority-scanned maskable
+IRQs + NMI, PUSH PC/AF, vector jump, RETI return) and a **real peripheral/timer
+module** (`nmk004_periph.sv`: ports, timers 0-5 with true compare-match/prescale/
+chaining behavior, INTEL/INTEH) wired into a full board wrapper (`nmk004_core.sv`).
+Since the real boot ROM never reaches its own `EI` instruction in a CPU-only
+testbench (see "Fourth verification result" below), the interrupt/timer mechanism
+was verified with a small synthetic self-test program instead — confirmed working
+end-to-end (211 correctly-vectored, correctly-returned-from interrupts over a
+100000-cycle run). See "Fourth verification result" below.
+
 ## Why this exists
 
 NMK004 (used by mustang, bioship, vandyke, blkheart, acrobatm, strahl, tdragon,
@@ -244,20 +254,28 @@ they'd perform in real silicon is implicit in our design already).
 
 ## Known gaps / deferred work (documented, not hidden)
 
-1. **Timers are not yet implemented as real counters.** The boot ROM configures
-   and starts them (`TRUN=$23` at the end of the init sequence, `INTEH=$01`
-   enabling one high-byte interrupt source) — real countdown+IRQ behavior is
-   almost certainly needed once we get past boot into the main firmware loop
-   (sound-driving MCU firmware is fundamentally timer/interrupt-paced). Phase 1
-   targets boot-sequence execution only; timers are stubbed (configuration
-   accepted, no counting/IRQ yet) until oracle-trace comparison shows where real
-   timer behavior is actually needed.
-2. **IX/IY bank extension (`BX`/`BY`) not yet implemented** — boot trace writes
+1. **IX/IY bank extension (`BX`/`BY`) not yet implemented** — boot trace writes
    both to 0 (banking disabled), so not yet exercised; needed before trusting any
-   firmware that uses >64KB addressing via IX/IY.
-3. **Serial (UART) and ADC peripherals not implemented** — `tmp90840_regs` doesn't
+   firmware that uses >64KB addressing via IX/IY. `nmk004_periph.sv` stores and
+   reads back BX/BY correctly but doesn't yet apply them to any address
+   computation (still the CPU core's job, per its own header).
+2. **Serial (UART) and ADC peripherals not implemented** — `tmp90840_regs` doesn't
    even map serial registers for this specific device variant (commented out in
    the reference), and P5 (ADC-capable pins) has no plausible use for a sound MCU.
+   Watchdog (WDMOD/WDCR) and DMA (DMAEH) are likewise unimplemented, matching
+   MAME's own `reserved_r`/`reserved_w` stub for these exact registers.
+3. **IRF-clear (`0xffc3`) is accepted but a no-op** — the only real IRQ sources
+   modeled so far (the timers) already auto-clear on take via the CPU's own
+   dispatch logic, matching `clear_irq()` being called from `take_interrupt()`
+   for every source except INT0 in level mode. Manual IRF clearing only matters
+   for sources not modeled yet (INT0/INT1/INT2/serial) — a real, narrow gap, not
+   a blanket stub.
+4. **YM2203/OKI/host-handshake are external ports, not internally modeled** —
+   `nmk004_core.sv` exposes real bus ports for these (`ym_cs`/`ym_we`/...,
+   `oki0_*`/`oki1_*`, `host_to_mcu`/`mcu_to_host`) rather than stubbing them,
+   since they aren't this module's own state; connecting real `jt12`/`jt6295`
+   cores and a real 68000 is system-level integration work, not CPU/peripheral
+   work.
 
 ## Verification plan
 
@@ -290,11 +308,30 @@ against a real MAME oracle trace before trusting anything downstream):
   two-level FETCH→DECODE→(operand/prefix bytes)→READ→EXECUTE→WRITE state
   machine. See the module's own header for the authoritative scope/deferred
   list, mirrored in this doc's "Instruction set" section above.
-- `sim/rtl/tlcs90/tb_tlcs90.cpp` + `Makefile` — Verilator testbench. Loads
-  the real `nmk004.bin` (internal boot ROM, from the shared `nmk004.zip`
-  device ROM) and `mustang`'s real external program (`90058-7`), runs the
-  core, and logs every instruction boundary's PC to `tlcs90_rtl.trace` for
-  direct comparison against a MAME oracle trace.
+- `sim/rtl/tlcs90/tb_tlcs90.cpp` + `Makefile` (`make run`) — Verilator
+  testbench. Loads the real `nmk004.bin` (internal boot ROM, from the shared
+  `nmk004.zip` device ROM) and `mustang`'s real external program (`90058-7`),
+  runs the core, and logs every instruction boundary's PC to
+  `tlcs90_rtl.trace` for direct comparison against a MAME oracle trace.
+- `rtl/tlcs90/nmk004_periph.sv` — on-chip peripheral registers
+  (`0xffc0-0xffef`): ports (plain latches, see module header for why real
+  GPIO-pin modeling isn't needed), timers 0-3 (8-bit or 16-bit-paired per
+  TMOD, real compare-match/prescale/chaining counters matching
+  `t90_timer_callback` structurally), timer 4/5 (16-bit free-running with
+  independent TREG4/TREG5 compare points, matching `t90_timer4_callback`),
+  INTEL/INTEH decode into an 11-bit `irq_mask`, and BX/BY (stored/read back,
+  not yet applied — see "Known gaps").
+- `rtl/tlcs90/nmk004_core.sv` — the full board wrapper: CPU + peripherals +
+  memory map (boot ROM/external ROM/work RAM/internal RAM/peripherals),
+  with YM2203/OKI×2/host-handshake exposed as real external ports for a
+  future system-level wrapper rather than stubbed internally.
+- `sim/rtl/tlcs90/tb_nmk004.cpp` + `Makefile` (`make run-nmk004`,
+  `make run-irqtest`) — Verilator testbench for the full board wrapper, in
+  two modes selected by which boot ROM is linked in: the real ROM (regression
+  vs. the same oracle trace, since real peripherals shouldn't change anything
+  already-verified) and a synthetic self-test ROM (`sim/rtl/tlcs90/roms/
+  irqtest_boot.hex`) that proves the interrupt/timer mechanism end-to-end —
+  see "Fourth verification result" below.
 
 ### First verification result (base table only)
 
@@ -416,7 +453,92 @@ fuller system simulation (68000 + shared RAM + real cross-CPU
 synchronization) or a testbench that deliberately fakes the handshake
 response — both are system-integration-level work, not CPU-core work.
 
-Next step: a real peripheral/timer/interrupt module (ports, INTEL/INTEH,
-timers) is the natural next slice of CPU-adjacent work remaining; getting
-NMK004 actually driving YM2203/OKI hardware needs that plus the
-system-level integration described above.
+### Fourth verification result (peripheral/timer/interrupt module + synthetic interrupt self-test)
+
+Built the peripheral register module (`nmk004_periph.sv`) and the full board
+wrapper (`nmk004_core.sv`), and added real interrupt dispatch to the CPU core
+itself (`irq_req`/`irq_mask` inputs, priority-scanned lowest-set-bit encoding,
+push PC then AF with the correct pre-`IF`-clear AF value, jump to
+`0x10+(idx+3)*8`, chained through two new FSM states `S_IRQ_PUSH2_LO`/
+`S_IRQ_PUSH2_HI`). Regression-verified this didn't disturb the existing
+175-checkpoint CPU match (unchanged — `make run` still matches 175 of the same
+oracle checkpoints).
+
+Bringing up the new peripheral module found **three real, independent RTL
+bugs**, none caught by lint or the PC-trace regression (none affected PC
+sequence, only peripheral-internal state), all found by adding temporary
+debug ports and comparing traced values against hand-derived expected
+behavior (since removed once bring-up was complete — see below):
+
+1. **Same Verilator function-composition bug as the CPU core's earlier
+   `resolve_direct()` bug, a second independent instance**: a
+   `prescale_of()` helper function called from inside continuous `wire`
+   assignments silently never evaluated correctly. Fixed the same way —
+   replaced with combinational `always @(*)` blocks computing named regs
+   directly, no function call composed into another expression.
+2. **Prescaler free-running regardless of timer enable** — the real bug
+   behind "timer never fires": `presc0` (and siblings) incremented every
+   `base_tick` unconditionally from power-on, only resetting via its own
+   match. By the time firmware enabled the timer via `TRUN`, the prescaler
+   had already drifted arbitrarily far from the match point and could take
+   up to 65536 base-ticks to return to it. Fixed by gating the prescaler on
+   the enable signal (`if (!en0) presc0<=0; else if(base_tick) ...`),
+   matching the reference's `t90_start_timer()` resetting the timer's phase
+   on every (re-)start.
+3. **`irq_req` bit-position off-by-one** — a hand-written concatenation
+   assigning `fired0..fired5` into the 11-bit `irq_req` bus was off by one
+   position against the documented bit order, confirmed by hand-counting.
+   Happened to produce a plausible-looking result for the one config tested
+   purely by coincidence. Fixed with an explicit indexed `always @(*)`
+   assignment (`irq_req_r[1]=fired0; ...`) instead of positional
+   concatenation.
+
+**Verifying interrupt dispatch itself needed a synthetic test program**,
+since the real boot ROM's `EI` instruction only executes at PC=0x1DA — past
+the host-handshake wait loop this session's CPU-only testbench can never
+satisfy (no real 68000 exists to write `$FB00`). Built a tiny synthetic
+TLCS-90 program (`sim/rtl/tlcs90/roms/irqtest_boot.hex`, generated by a small
+Python script, not hand-assembled bytes-in-a-vacuum) that initializes `SP`
+(the real boot ROM's `EI` path relies on `SP` already being set — the
+synthetic program must do this explicitly, an early iteration that omitted it
+found `SP=0` at reset pushes into unmapped `0xfff0-0xffff` address space,
+silently discarding the return address and corrupting `RETI`), configures
+timer 0 for a fast compare match (`TREG0=0x3B`, `TCLK`=divide-by-1
+prescale), enables it (`TRUN=0x21`) and its interrupt (`INTEH=0x02`), then
+`EI` + self-loops. A `RETI` is planted at the computed INTT0 vector
+(`0x10+(1+3)*8=0x30`). Linked via a dedicated Makefile target
+(`make run-irqtest`) that builds `nmk004_core` against this synthetic ROM
+instead of the real one:
+
+```
+tb_nmk004: ran 100000 clk cycles, 16421 instructions, wrote irqtest.trace
+tb_nmk004: PC visited $0030 (irqtest INTT0 vector) 211 times
+```
+
+Confirmed via the full PC trace, not just the vector-hit count: every
+setup instruction (`0x0000`-`0x0013`) executes **exactly once**, the
+self-loop (`0x0014`) accounts for the overwhelming majority of PC visits,
+and `0x0030` (the RETI) is visited 211 times — consistent with the
+configured ~472-clk-cycle timer period over a 100000-cycle run, and, crucially,
+proof that `RETI` correctly returns control to the interrupted point (the
+self-loop) rather than resetting to `PC=0` or corrupting execution, and that
+the CPU correctly re-arms and re-fires on every subsequent match rather than
+firing once and going silent. This positively verifies vector computation,
+`PUSH PC`/`PUSH AF` ordering, `IF` clear-on-entry, and `IF` restore-on-`RETI`,
+all end-to-end — the one part of "175 instructions match the oracle" could
+never exercise on its own.
+
+Temporary debug ports added to `nmk004_periph.sv`/`nmk004_core.sv` during
+this bring-up have been removed now that verification is complete (per this
+project's established convention of not leaving unexplained debug scaffolding
+in committed RTL); `tb_nmk004.cpp` now does its own PC-based interrupt-vector
+counting instead, so `make run-irqtest`'s pass/fail signal doesn't depend on
+any peripheral-internal debug port.
+
+Next step: IX/IY bank extension (`BX`/`BY`'s actual address-computation
+effect), block-transfer opcodes (`LDI*`/`CPI*` family), `RLD`/`RRD`,
+`MUL`/`DIV`, and the memory-operand forms of `EX` are the remaining
+CPU-core gaps; getting NMK004 actually driving real YM2203/OKI hardware
+needs system-level integration (a real 68000 + shared RAM + `jt12`/`jt6295`
+cores) to get past the host-handshake boundary this tier's CPU-only
+testbench can't cross on its own.

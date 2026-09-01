@@ -47,6 +47,7 @@ PLLJ_PLLSPE_INFO.txt
 
 # Simulation artifacts
 sim/**/obj_dir/
+sim/**/obj_dir_*/
 sim/**/*.vcd
 sim/**/*.fst
 sim/**/*.log

@@ -68,11 +68,22 @@ module tlcs90 (
 	output reg   mem_rd,
 	output reg   mem_wr,
 
-	// Present for future use, not yet wired to any interrupt-dispatch
-	// logic — see scope note above. A peripheral module (timers/ports/
-	// INTEL/INTEH) providing INT0-INTTX and SWI is future work; this core
-	// is validated standalone first per the project's methodology.
+	// Interrupt inputs. `nmi` is edge-detected internally (pulse or level,
+	// either works — only the rising edge matters), matching the
+	// reference's execute_input_edge_triggered/raise_irq behavior for
+	// INTNMI. `irq_req`/`irq_mask` are the 11 maskable sources in
+	// reference priority order (bit0=highest): INT0, T0, T1, T2, T3, T4,
+	// INT1, T5, INT2, RX, TX — matching INTSWI+3..INTSWI+13's scan order.
+	// `irq_req` is level-sensitive-but-internally-latched (a pulse is
+	// enough; the request stays pending until taken, mirroring
+	// raise_irq()'s m_irq_state bit staying set until clear_irq()).
+	// `irq_mask` should be driven combinationally from a peripheral
+	// module's INTEL/INTEH registers (this core owns none of that state).
+	// SWI is a synchronous opcode, not modeled as an external request —
+	// see the module's opcode-scope note above (still deferred).
 	input        nmi,
+	input [10:0] irq_req,
+	input [10:0] irq_mask,
 
 	// debug: pulses dbg_valid for one cycle at the start of each new
 	// instruction with that instruction's own PC — the same point in time
@@ -531,7 +542,14 @@ module tlcs90 (
 		S_PFX_ADDR    = 17,
 		S_PFX_ADDR_LO = 18, S_PFX_ADDR_HI = 19,
 		S_PFX_I8      = 20,
-		S_PFX_DISP    = 21;
+		S_PFX_DISP    = 21,
+		// Interrupt entry: PC is pushed the same way OP_CALL already
+		// pushes it (low byte at entry, high byte at S_PUSH_HI, reused
+		// via the irq_taking flag), then these two push AF the same way,
+		// using AF's value from *before* IF gets cleared (matching the
+		// reference's Push(PC); Push(AF); F&=~IF order exactly — IF is
+		// only cleared once AF has already been captured/pushed).
+		S_IRQ_PUSH2_LO = 22, S_IRQ_PUSH2_HI = 23;
 
 	reg [4:0] state;
 	reg [5:0] op;
@@ -544,6 +562,29 @@ module tlcs90 (
 	reg [15:0] wb_val;      // computed result awaiting writeback
 	reg [15:0] push_val;
 	reg [1:0]  pop_dest;    // 0=into r1 register (POP opcode), 1=into PC (RET), 2=into AF then chain to PC (RETI)
+	reg        irq_taking;  // this S_PUSH_HI visit is interrupt entry (push PC then AF), not a plain PUSH/CALL
+
+	// ------------------------------------------------------------------
+	// Interrupt state: NMI edge-latch and the 11 maskable sources'
+	// pending-request latches (see take_interrupt()/check_interrupts() in
+	// the reference — clear_irq() on take, except INT0 in level mode,
+	// which isn't modeled yet since nothing drives INT0 in this milestone
+	// anyway). Priority is scan order low-to-high bit index, matching
+	// INTSWI+3..INTSWI+13 exactly (see the port comment above).
+	// ------------------------------------------------------------------
+	reg        nmi_prev, nmi_pending;
+	reg [10:0] irq_pending;
+
+	// Lowest-set-bit priority encode over (irq_pending & irq_mask); valid
+	// only checked when the result is nonzero.
+	function automatic [3:0] irq_prio_idx(input [10:0] req);
+		integer i;
+		begin
+			irq_prio_idx = 4'd0;
+			for (i = 10; i >= 0; i = i - 1)
+				if (req[i]) irq_prio_idx = i[3:0];
+		end
+	endfunction
 
 	// Effective bus address for a memory-mode operand: M_MI16 already
 	// holds the resolved address directly in r1/r2 (short-address, direct
@@ -594,10 +635,27 @@ module tlcs90 (
 	// instead, which measurably works, rather than chasing the simulator
 	// bug further.
 
+	wire [10:0] irq_active = irq_pending & irq_mask;
+	wire        irq_any    = nmi_pending | (|irq_active);
+	wire [3:0]  irq_idx    = irq_prio_idx(irq_active);
+	// vector = 0x10 + (irq_idx+3)*8, i.e. INT0(idx0)->0x28 .. INTTX(idx10)->0x78;
+	// NMI is the fixed INTNMI vector (0x10+1*8).
+	wire [15:0] irq_vector = nmi_pending ? 16'h0018 : (16'h0010 + (({12'h0,irq_idx} + 16'd3) << 3));
+
 	always @(posedge clk) begin
 		mem_rd <= 1'b0;
 		mem_wr <= 1'b0;
 		dbg_valid <= 1'b0;
+
+		// Interrupt request latching: level-sensitive but internally held
+		// pending until dispatched (matches raise_irq()'s m_irq_state bit
+		// staying set until clear_irq() — see the S_FETCH_OP dispatch
+		// clearing the taken source's bit below, which lands *after* this
+		// assignment in program order and so correctly wins for that one
+		// bit on the same edge if both happen to coincide).
+		nmi_prev <= nmi;
+		if (nmi && !nmi_prev) nmi_pending <= 1'b1;
+		irq_pending <= irq_pending | irq_req;
 
 		if (reset) begin
 			state <= S_FETCH_OP;
@@ -605,6 +663,9 @@ module tlcs90 (
 			f <= 8'h00;
 			halt_r <= 1'b0;
 			after_ei <= 1'b0;
+			nmi_pending <= 1'b0;
+			irq_pending <= 11'd0;
+			irq_taking <= 1'b0;
 		end else begin
 			case (state)
 				// ------------------------------------------------------
@@ -613,7 +674,26 @@ module tlcs90 (
 						f[IFB] <= 1'b1;
 						after_ei <= 1'b0;
 					end
-					if (halt_r) begin
+					// Interrupt dispatch, checked once per instruction
+					// boundary exactly like the reference's
+					// check_interrupts() — gated by IF for everything
+					// here (NMI included; SWI is the only source that
+					// bypasses this, and it's a synchronous opcode, not
+					// modeled as an external request). Push PC now (AF
+					// follows via S_PUSH_HI's irq_taking chain, using its
+					// pre-IF-clear value); IF itself isn't cleared until
+					// S_IRQ_PUSH2_HI, after AF has been captured.
+					if (f[IFB] && irq_any) begin
+						halt_r <= 1'b0; // leave_halt()
+						if (nmi_pending) nmi_pending <= 1'b0;
+						else irq_pending[irq_idx] <= 1'b0;
+						push_val <= pc;
+						sp <= sp - 16'd2;
+						addr <= sp - 16'd2; dout <= pc[7:0]; mem_wr <= 1'b1;
+						pc <= irq_vector;
+						irq_taking <= 1'b1;
+						state <= S_PUSH_HI;
+					end else if (halt_r) begin
 						op <= OP_NOP; mode1 <= M_NONE; mode2 <= M_NONE;
 						state <= S_EXECUTE;
 					end else begin
@@ -1119,6 +1199,22 @@ module tlcs90 (
 
 				S_PUSH_HI: begin
 					addr <= sp + 16'd1; dout <= push_val[15:8]; mem_wr <= 1'b1;
+					if (irq_taking) begin
+						irq_taking <= 1'b0;
+						push_val <= {a, f}; // pre-IF-clear value, matching Push(AF) before F&=~IF in the reference
+						sp <= sp - 16'd2;
+						state <= S_IRQ_PUSH2_LO;
+					end else begin
+						state <= S_FETCH_OP;
+					end
+				end
+				S_IRQ_PUSH2_LO: begin
+					addr <= sp; dout <= push_val[7:0]; mem_wr <= 1'b1;
+					state <= S_IRQ_PUSH2_HI;
+				end
+				S_IRQ_PUSH2_HI: begin
+					addr <= sp + 16'd1; dout <= push_val[15:8]; mem_wr <= 1'b1;
+					f[IFB] <= 1'b0;
 					state <= S_FETCH_OP;
 				end
 
