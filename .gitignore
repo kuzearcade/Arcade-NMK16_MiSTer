@@ -5,6 +5,17 @@
 # Copyrighted arcade ROM dumps. Never committed under any circumstances.
 /mame_roms/
 
+# ROM images reconstructed from mame_roms/ (tools/mkrom.py) are just as
+# copyrighted as the zips they came from — never committed. Same caution
+# applied to MAME-oracle traces (sim/oracle/traces/): a full bus trace from
+# reset can indirectly reveal substantial ROM content, so these are
+# regenerated locally (see docs/sim-harness.md) rather than committed,
+# even though they are not literal ROM copies.
+**/roms/*.hex
+sim/oracle/traces/
+sim/rtl/*/*.trace
+sim/rtl/*/*.mem
+
 # Vendored third-party cores and the MiSTer sys/ framework are fetched by
 # tools/bootstrap.sh at pinned commits (see deps.lock), not committed here.
 /sys/

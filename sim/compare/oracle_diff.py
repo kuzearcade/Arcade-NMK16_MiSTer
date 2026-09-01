@@ -67,10 +67,9 @@ def parse_trace(path):
                 raise ValueError(f"{path}:{line_no}: unknown event kind {kind!r}: {line!r}")
 
 
-def events_equal(a: Event, b: Event, cycle_tolerance: int) -> bool:
+def fields_equal(a: Event, b: Event) -> bool:
+    """Compare everything except cycle timestamp."""
     if a.kind != b.kind:
-        return False
-    if abs(a.cycle - b.cycle) > cycle_tolerance:
         return False
     if a.kind == "B":
         # compare op + addr + data; mask only if both sides recorded it
@@ -81,6 +80,12 @@ def events_equal(a: Event, b: Event, cycle_tolerance: int) -> bool:
         return True
     # F and R: compare full field tuple exactly
     return a.fields == b.fields
+
+
+def events_equal(a: Event, b: Event, cycle_tolerance: int) -> bool:
+    if abs(a.cycle - b.cycle) > cycle_tolerance:
+        return False
+    return fields_equal(a, b)
 
 
 def describe(ev: Event) -> str:
@@ -128,6 +133,26 @@ def compare(oracle_path: str, candidate_path: str, cycle_tolerance: int, max_rep
         print(f"\nLENGTH MISMATCH: oracle has {len(oracle_events)} events, "
               f"candidate has {len(candidate_events)} (compared first {n})")
         mismatches += abs(len(oracle_events) - len(candidate_events))
+
+    # Diagnostic: if every event's non-cycle fields match but cycle_tolerance
+    # was too tight to accept the timestamps, check for (and report) a
+    # constant offset — a fixed startup/reset latency difference is a very
+    # different, much less concerning finding than genuinely divergent
+    # timing, and is worth calling out explicitly rather than just failing.
+    if mismatches > 0 and cycle_tolerance == 0:
+        deltas = set()
+        all_fields_match = True
+        for i in range(n):
+            if not fields_equal(oracle_events[i], candidate_events[i]):
+                all_fields_match = False
+                break
+            deltas.add(candidate_events[i].cycle - oracle_events[i].cycle)
+        if all_fields_match and len(deltas) == 1:
+            offset = deltas.pop()
+            print(f"\nDIAGNOSTIC: all {n} events match exactly except for a "
+                  f"CONSTANT {offset:+d}-cycle offset on every event (likely a fixed "
+                  f"startup/reset latency difference, not a functional divergence) — "
+                  f"re-run with --cycle-tolerance {abs(offset)} to confirm.")
 
     if mismatches == 0:
         print(f"\nMATCH: all {n} events identical (cycle_tolerance={cycle_tolerance})")
