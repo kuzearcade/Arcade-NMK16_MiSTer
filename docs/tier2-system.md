@@ -1,19 +1,24 @@
 # Tier 2 — system-level integration (mustang: 68000 + NMK004)
 
-Status: **Two integration milestones done and verified.** A real 68000
+Status: **Three integration milestones done and verified.** A real 68000
 (fx68k, the same core Tier 1's `bjtwin_core.sv` already oracle-verifies) is
 wired to the completed NMK004 sound board (`rtl/tlcs90/nmk004_core.sv`)
 through the real shared-latch host handshake, in a top-level module,
 `rtl/mustang/mustang_core.sv` — Milestone 1 answered the question CPU-only
 verification (`sim/rtl/tlcs90/tb_nmk004.cpp`) structurally couldn't (does
 NMK004 get *past* its host-handshake poll loop once a real 68000 is
-attached? yes), and Milestone 2 (this update) gave the 68000 itself a real
-interrupt source, unsticking a *second* stall this document's own
-Milestone 1 had already predicted and characterized in advance. Verified
-against the same MAME oracle trace used throughout Tier 2's CPU work, the
-matched checkpoint count has gone 175 (CPU-only boundary) → 18,809
-(Milestone 1) → **21,986** (Milestone 2) — over 125x the original
-CPU-only ceiling.
+attached? yes), Milestone 2 gave the 68000 itself a real interrupt source,
+unsticking a *second* stall Milestone 1 had already predicted and
+characterized in advance, and Milestone 3 replaced the YM2203 stub with
+the real `jt03` core (jotego's YM2203 clone) — a real, verified bus/IRQ
+integration that did *not*, on investigation, turn out to be the cause of
+the current oracle divergence (Milestone 2's own guess about that was
+wrong, and Milestone 3 both proves it and pins down the actual divergent
+instruction precisely — see Milestone 3 below). Verified against the same
+MAME oracle trace used throughout Tier 2's CPU work, the matched
+checkpoint count has gone 175 (CPU-only boundary) → 18,809 (Milestone 1)
+→ **21,986** (Milestones 2 and 3 — unchanged by 3, see below) — over 125x
+the original CPU-only ceiling.
 
 ## Why this exists
 
@@ -209,44 +214,114 @@ same 25,000,000-cycle budget that previously plateaued), confirming real
 forward progress, not just a cosmetic PC change. A third divergence point
 was found and investigated the same way as the first two:
 
-3. **Third divergence (open, characterized, deferred): NMK004 matches the
-   oracle up to `0x0E5F`, then diverges instead of continuing to
-   `0x0E61`.** The RTL trace never reaches `0x0E61` at all — instead of
-   continuing past `0x0E5F` into what the oracle shows as a call chain
-   (`0x0066` → `0x02FF` → ...), the RTL returns to the `0x01DA`/`0x01DB`
-   idle loop. Confirmed via a 4x-longer run (100,000,000 cycles) that this
-   is *not* a "needs more time" situation like the first divergence was —
-   the RTL stops at the exact same checkpoint regardless. The PC range
-   just before the divergence (`0x0E4A`-`0x0E5F`, short 2-3-byte
-   instruction spacing) has the shape of NMK004's own register-table-init
-   loops seen earlier in the boot sequence (see
-   `docs/tier2-tlcs90.md`'s "Second verification result" — the YM2203
-   init loop uses the exact same idiom), strongly suggesting this is
-   further FM/OKI register setup or status-bit polling — and
-   `mustang_core.sv`'s YM2203/OKI ports are still plain register-latch
-   stubs (see "What's built" above), always reporting a fixed idle byte
-   rather than a real busy/status flag. A conditional branch testing that
-   status bit taking the *stub's* value instead of what real silicon
-   would report is a plausible, consistent explanation for a clean
-   divergence right at this boundary — not proven by a bus-level trace
-   the way the two earlier bugs were, but consistent with everything
-   observed and with the next already-documented scope boundary (real
-   `jt12`/`jt6295` audio). Flagged as the first thing to check when that
-   work begins, not chased further in this milestone.
+3. **Third divergence (open, now *precisely* characterized): a `RET Z`
+   at `0x0E5F` takes the opposite branch from the oracle.** Originally
+   described (before Milestone 3 investigated it directly) as "NMK004
+   diverges instead of continuing to `0x0E61`", which undersold what's
+   actually happening: the RTL's trace *does* reach `0x0097` shortly
+   after `0x0E5F` — the same place the oracle eventually reaches too —
+   just by a different, shorter path, skipping the oracle's own
+   `0x0E61`→`0x0E62`→`0x0E64`→`0x0E66` steps entirely. Reading the ROM
+   directly at `0x0E5F` identifies the instruction precisely: `FE D6` is
+   `RET Z` (the `0xf8-0xfe` group's second `RET cc` encoding, `cc=Z` —
+   see `docs/tier2-tlcs90.md`'s "Third verification result" for how that
+   encoding was originally found). The two instructions immediately
+   before it (`F9 65` = `XOR A,C`, `E2 64` = `AND A,(HL)`) set the `Z`
+   flag this `RET Z` tests — a classic "test whether specific bits in a
+   status byte are clear" idiom, `AND` against a bitmask already loaded
+   into `A`. Since both traces reach `0x0097` regardless of which way
+   this branch goes, the *program itself* doesn't get stuck — but the
+   subsequence-diff methodology (see `docs/tier2-tlcs90.md`'s "Second
+   verification result" for why an ordered-subsequence match is used at
+   all) correctly reports a divergence here anyway, since the oracle's
+   own checkpoints at `0x0E61`/`0x0E62`/`0x0E64`/`0x0E66` never appear
+   anywhere in the RTL's trace at all if that branch is never taken.
+   **Milestone 2's own speculation that this was a YM2203/OKI status-bit
+   poll was wrong** — `AND A,(HL)` reads plain memory through `HL`, not a
+   YM2203/OKI bus register directly, and Milestone 3 (below) proves it
+   independently by making YM2203 real without changing this checkpoint
+   at all. The real cause — why the `Z` flag differs, i.e. what's
+   actually stored at the tested `HL` address and why it's expected to
+   read as an all-clear bitmask here even though it apparently doesn't —
+   remains open, and needs the same kind of register/RAM-state trace
+   this session's CPU-only opcode work never needed (every synthetic
+   self-test built its own expected values from scratch; this is the
+   first divergence requiring reconstructing what a specific *real
+   firmware* memory location should already contain by this point in
+   execution).
+
+## Milestone 3: real jt03 (YM2203) integration
+
+Replaces the YM2203 stub with the real `jt03` (jotego's YM2203 clone,
+already vendored in `rtl/third_party/jt12/`) — genuinely real audio-chip
+integration, not a placeholder, though (as documented in the module
+header) not yet consumed by any DAC/mixer in this simulation harness,
+since this milestone is about bus/register-level correctness rather than
+audio fidelity.
+
+- **Clock enable**: 1.5MHz from 32MHz `clk_sys` (matching the reference's
+  own `YM2203(config,"ymsnd",1500000)`) via a plain phase accumulator —
+  1.5/32 = 3/64 exactly, so this is an *exact* rate, not an approximation
+  (increment-by-3-mod-64 every `clk_sys` cycle, pulse on wraparound,
+  giving 3 evenly-spaced pulses every 64 cycles).
+- **Write-stretching**: `jt03` has no bus-ready/ack output (matching real
+  YM2203 hardware, which just expects `WR` held for its own minimum pulse
+  width) and only samples its bus inputs on its own ~21-`clk_sys`-cycle
+  `cen` pulses — but `nmk004_core.sv`'s own `ym_we` is a single
+  `nmk004_clk_r`-cycle pulse (4 `clk_sys` cycles), which could land
+  entirely between two `cen` pulses and be missed outright. Latches the
+  write request (address + data) on `ym_we`'s rising edge and holds
+  `wr_n` asserted for 40 `clk_sys` cycles — comfortably more than one
+  `cen` period — guaranteeing at least one real sample. This is a real,
+  necessary integration detail for any bus-driven peripheral running on a
+  slower clock-enable than the CPU issuing the write, not `jt03`-specific
+  — worth remembering for `jt6295` (or any future chip) integration too.
+- **IRQ**: `jt03`'s `irq_n` output is OR'd into `nmk004_core.sv`'s
+  `irq_req` bit 0 (`INT0`) via a new `ym_irq_n` input port on that
+  module, matching the reference's `ym2203_irq_handler()` routing
+  YM2203's IRQ straight to the CPU's `INT0` line. `nmk004_periph.sv`'s
+  own `irq_req` output never drives bit 0 itself (no internal NMK004
+  peripheral source for `INT0`), so this is purely additive, not a real
+  arbitration — confirmed safe by re-running every existing synthetic
+  CPU-opcode/peripheral test unchanged (see "Verification" below).
+
+### Verification
+
+Debug taps (`dbg_ym_we`/`dbg_ym_cs`/`dbg_ym_chip_dout`/`dbg_ym_chip_irq_n`
+on `mustang_core.sv`, `TB_LOG_YM=1` on `tb_mustang.cpp` — kept as
+permanent diagnostics, same tier as `TB_LOG_M68K`, not throwaway
+bring-up scaffolding) confirm the integration is real and functioning:
+NMK004 writes to YM2203 **3,639 times** over the same 25,000,000-cycle
+run, `jt03`'s `irq_n` starts inactive (`1`, correct idle state) and later
+asserts — real YM2203 timer-IRQ behavior, not a malfunction, since this
+chip genuinely generates periodic timer interrupts as part of normal
+operation (the same way NMK004's own internal timers already do, per
+`docs/tier2-tlcs90.md`'s interrupt-model work). The oracle checkpoint
+count is **unchanged at 21,986** — direct, concrete proof that Milestone
+2's YM2203-status-poll hypothesis for the existing divergence was wrong,
+since making the chip fully real neither fixed nor changed that specific
+divergence at all (see "the third divergence" above for what the real
+cause looks like instead).
 
 Re-confirmed all existing Tier 2 regressions (175-checkpoint CPU oracle
 match, 211-fire interrupt self-test, and every synthetic CPU-opcode test
-this session built) unchanged, and Tier 1's own `bjtwin_core.sv` build
-still succeeds using the same `video_timing.sv`/`nmk_irq_hacky.sv` files
-now shared between the two families.
+this session built, including the ones instantiating `nmk004_core.sv`
+directly and needing the new `ym_irq_n` port tied off) unchanged, and
+Tier 1's own `bjtwin_core.sv` build still succeeds using the same
+`video_timing.sv`/`nmk_irq_hacky.sv` files shared across three families
+now.
 
 ## Next step
 
-Real `jt12`/`jt6295` audio integration is the most promising next
-increment given the third divergence's own likely cause — even a
-register-level-accurate (not necessarily audio-sample-accurate) status/
-busy-bit model might be enough to get past it. The real PROM-driven
-`nmk_irq` scanline state machine (replacing this milestone's synthetic
-substitution) and mustang's own video/sprite pipeline (Family B's
-tilemap variants, distinct from Tier 1's bjtwin/Family A ones) remain
-separate, larger increments beyond that.
+The third divergence (`RET Z` at `0x0E5F`) is now the clear next thing to
+resolve, and needs different tooling than anything built so far this
+session: a way to inspect NMK004's own live register/RAM state (at least
+`A`, `HL`, and the byte at whatever address `HL` holds at that point)
+against the same state in MAME's own emulation, since the oracle's PC
+trace alone can't say *why* the tested byte differs. Real `jt6295`
+(OKI x2) audio integration — needing actual ADPCM sample ROM data
+extracted and wired through a ROM interface `jt03` doesn't have — the
+real PROM-driven `nmk_irq` scanline state machine (replacing the
+synthetic substitution from Milestone 2), and mustang's own video/sprite
+pipeline (Family B's tilemap variants, distinct from Tier 1's
+bjtwin/Family A ones) remain separate, larger increments beyond that.

@@ -42,6 +42,7 @@ int main(int argc, char **argv) {
 	top.nmi = 0;
 	top.host_to_mcu = 0xff; // idle: nothing written by a (nonexistent, in this testbench) 68000 host yet
 	top.ym_din = 0x00;
+	top.ym_irq_n = 1; // idle: no real YM2203 core in this CPU-only testbench
 	top.oki0_din = 0x00;
 	top.oki1_din = 0x00;
 

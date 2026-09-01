@@ -10,10 +10,14 @@
 // CPU-only TLCS-90 testbench (sim/rtl/tlcs90/tb_nmk004.cpp) could not:
 // does NMK004 actually get *past* the host-handshake wait loop once a
 // real 68000 is on the other end of it? Video (tilemap/sprite rendering)
-// and audio (real jt12/jt6295 cores, as opposed to the register-latch
-// stubs below) are explicitly NOT in scope here — see "Known
-// simplifications" below. Both are natural, separate next increments
-// once this milestone's own question is answered.
+// is explicitly NOT in scope here — see "Known simplifications" below —
+// and is a natural, separate next increment. Audio is now real for
+// YM2203 (jt03, jotego's clone, replacing the earlier register-latch
+// stub — see "Real jt03 (YM2203) integration" below); OKIM6295 x2 remain
+// stubs (real jt6295 integration needs actual ADPCM sample ROM data
+// extracted and wired, genuinely more work than jt03's pure
+// register-interface integration — a separate follow-up, not bundled in
+// here).
 //
 // Memory map (see mustang_map in mame/src/mame/nmk/nmk16.cpp):
 //   000000-03FFFF  ROM (maincpu, 2 x 0x20000-byte chips, ROM_LOAD16_BYTE)
@@ -49,15 +53,31 @@
 //
 // Known simplifications (documented, not hidden — see bjtwin_core.sv's own
 // header for the precedent this follows):
-//   - YM2203/OKIM6295 x2 are plain register-latch stubs here (accept
-//     writes, return a fixed idle byte on reads), NOT the real jt12/jt6295
-//     cores already vendored in rtl/third_party/ — wiring those is real
-//     audio-chip integration work, orthogonal to whether the CPU-to-CPU
-//     handshake mechanically works, and deliberately deferred to keep this
-//     milestone's scope answerable. nmk004_core.sv's own ym_*/oki_* ports
-//     are real external ports specifically so this wrapper (or a later,
-//     more complete one) can swap in real cores without touching NMK004's
-//     own RTL again.
+//   - OKIM6295 x2 are still plain register-latch stubs (accept writes,
+//     return a fixed idle byte on reads), NOT the real jt6295 core already
+//     vendored in rtl/third_party/ — wiring it needs real ADPCM sample ROM
+//     data extracted and wired through a ROM interface jt03 doesn't have
+//     (jt03/YM2203 is pure register-interface, no sample memory), enough
+//     extra work to be a deliberate, separate follow-up rather than
+//     bundled into this milestone. nmk004_core.sv's own oki_* ports are
+//     real external ports specifically so a later wrapper can swap in the
+//     real core without touching NMK004's own RTL again.
+//   - Real jt03 (YM2203) audio timing/mixing is not consumed anywhere in
+//     this simulation harness (no DAC/mixer exists here) — this
+//     integration is specifically about the chip's bus/register-level
+//     behavior (busy/status bits, IRQ) being real, not about audio
+//     fidelity or even necessarily cycle-exact FM synthesis timing.
+//   - jt03's own bus writes are "stretched" (see the write-stretch logic
+//     near its instantiation below) rather than passed through as the
+//     raw single-nmk004_clk_r-cycle pulse nmk004_core.sv's ym_we/ym_dout/
+//     ym_addr_sel naturally are: jt03 has no bus-ready/ack output (real
+//     YM2203 hardware doesn't either — it just expects WR held for its
+//     own minimum pulse width) and only samples its bus inputs on its own
+//     ~1.5MHz cen pulses, which could otherwise land entirely between two
+//     cen edges and miss a narrow write outright. This is a real,
+//     necessary integration detail for any bus-driven peripheral running
+//     on a slower clock-enable than the CPU issuing the write, not
+//     jt03-specific.
 //   - Interrupt generation to the 68000 now uses `nmk_irq_hacky` (Tier
 //     1's own synthetic-first fixed-scanline IRQ generator, reused
 //     unchanged from rtl/bjtwin/) rather than the reference's *real* IRQ
@@ -113,7 +133,16 @@ module mustang_core #(
 	output        dbg_fc2,
 
 	output [15:0] dbg_nmk004_pc,
-	output        dbg_nmk004_valid
+	output        dbg_nmk004_valid,
+
+	// YM2203 (jt03) bus/IRQ debug — same tier as dbg_eab/dbg_write above,
+	// not throwaway bring-up scaffolding (kept permanently, matching
+	// tb_mustang.cpp's own TB_LOG_M68K precedent) — see
+	// docs/tier2-system.md's "Milestone 3" for what these found.
+	output        dbg_ym_we,
+	output        dbg_ym_cs,
+	output  [7:0] dbg_ym_chip_dout,
+	output        dbg_ym_chip_irq_n
 );
 
 	// ------------------------------------------------------------------
@@ -319,16 +348,81 @@ module mustang_core #(
 	reg  [7:0] nmk004_host_to_mcu = 8'hFF;
 	always @(posedge clk_sys) if (cpu_write & sel_nmk004_w & ~LDSn) nmk004_host_to_mcu <= oEdb[7:0];
 
-	// YM2203/OKI register-latch stubs (see header) — accept writes,
-	// return a fixed idle byte on reads. Real enough to let boot-time
+	// OKI register-latch stubs (see header) — accept writes, return a
+	// fixed idle byte on reads. Real enough to let boot-time
 	// register-table-init loops run to completion without hanging on a
-	// busy/status-bit poll (nothing here ever reports "busy").
+	// busy/status-bit poll (nothing here ever reports "busy"). YM2203 is
+	// now the real jt03 core (see below).
 	wire       ym_cs, ym_we, ym_addr_sel;
 	wire [7:0] ym_dout;
 	wire       oki0_cs, oki0_we, oki1_cs, oki1_we;
 	wire [7:0] oki0_dout, oki1_dout;
 	wire       oki0_bank_we, oki1_bank_we;
 	wire [7:0] oki0_bank, oki1_bank;
+
+	// ------------------------------------------------------------------
+	// YM2203 — real jt03 (jotego's YM2203 clone), replacing the earlier
+	// register-latch stub. See header's "Real jt03 (YM2203) integration"
+	// note for the write-stretch rationale.
+	// ------------------------------------------------------------------
+	// 1.5MHz from 32MHz clk_sys (matching the reference's own
+	// YM2203(config,"ymsnd",1500000)) — 1.5/32 = 3/64 exactly, so a plain
+	// phase accumulator gives an exact rate with no fractional error:
+	// increment by 3 mod 64 every clk_sys cycle, pulse on each wraparound
+	// (3 evenly-spaced pulses every 64 cycles).
+	reg [5:0] ym_cen_cnt = 6'd0;
+	reg       ym_cen = 1'b0;
+	always @(posedge clk_sys) begin
+		if (ym_cen_cnt >= 6'd61) begin
+			ym_cen_cnt <= ym_cen_cnt + 6'd3 - 6'd64;
+			ym_cen <= 1'b1;
+		end else begin
+			ym_cen_cnt <= ym_cen_cnt + 6'd3;
+			ym_cen <= 1'b0;
+		end
+	end
+
+	// jt03 has no bus-ready/ack output (matching real YM2203 hardware,
+	// which simply expects WR held for at least its own minimum pulse
+	// width) — but its cen pulses only ~every 21 clk_sys cycles on
+	// average, while nmk004's own ym_we is a single nmk004_clk_r cycle
+	// wide (4 clk_sys cycles), which could land entirely between two cen
+	// pulses and be missed outright. Latch the write request (address +
+	// data) on ym_we's rising edge and hold wr_n asserted for long enough
+	// (40 clk_sys cycles, comfortably more than one cen period) to
+	// guarantee at least one jt03 cen pulse samples it, rather than
+	// passing the narrow raw pulse straight through.
+	reg [7:0] ym_din_latch;
+	reg       ym_addr_latch;
+	reg [5:0] ym_wr_hold = 6'd0;
+	reg       ym_we_prev = 1'b0;
+	always @(posedge clk_sys) begin
+		ym_we_prev <= ym_we;
+		if (ym_we && !ym_we_prev) begin
+			ym_din_latch  <= ym_dout;
+			ym_addr_latch <= ym_addr_sel;
+			ym_wr_hold    <= 6'd40;
+		end else if (ym_wr_hold != 6'd0) begin
+			ym_wr_hold <= ym_wr_hold - 6'd1;
+		end
+	end
+	wire ym_wr_n = ~(ym_wr_hold != 6'd0);
+
+	wire [7:0] ym_chip_dout;
+	wire       ym_chip_irq_n;
+	jt03 ym_chip (
+		.rst(reset), .clk(clk_sys), .cen(ym_cen),
+		.din(ym_din_latch), .addr(ym_addr_latch), .cs_n(1'b0), .wr_n(ym_wr_n),
+		.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),
+		// Embedded YM2149 I/O pins — nothing in this milestone drives
+		// them (mustang's own boot code doesn't touch the PSG I/O ports).
+		.IOA_in(8'hFF), .IOB_in(8'hFF), .IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
+		// Audio outputs unused in this milestone (no DAC/mixer in this
+		// simulation harness) — this integration is about bus/register-
+		// level correctness (busy/status bits, IRQ), not audio fidelity.
+		.psg_A(), .psg_B(), .psg_C(), .fm_snd(), .psg_snd(), .snd(), .snd_sample(),
+		.debug_view()
+	);
 
 	nmk004_core #(
 		.BOOT_ROM_FILE(NMK004_BOOT_FILE),
@@ -337,7 +431,7 @@ module mustang_core #(
 		.clk(nmk004_clk_r), .reset(reset),
 		.nmi(nmi_level),
 		.ym_cs(ym_cs), .ym_we(ym_we), .ym_addr_sel(ym_addr_sel),
-		.ym_dout(ym_dout), .ym_din(8'h00),
+		.ym_dout(ym_dout), .ym_din(ym_chip_dout), .ym_irq_n(ym_chip_irq_n),
 		.oki0_cs(oki0_cs), .oki0_we(oki0_we), .oki0_dout(oki0_dout), .oki0_din(8'hFF),
 		.oki1_cs(oki1_cs), .oki1_we(oki1_we), .oki1_dout(oki1_dout), .oki1_din(8'hFF),
 		.oki0_bank_we(oki0_bank_we), .oki0_bank(oki0_bank),
@@ -399,6 +493,10 @@ module mustang_core #(
 	assign dbg_eab   = eab;
 	assign dbg_data  = cpu_write ? oEdb : iEdb;
 	assign dbg_write = cpu_write;
+	assign dbg_ym_we = ym_we;
+	assign dbg_ym_cs = ym_cs;
+	assign dbg_ym_chip_dout = ym_chip_dout;
+	assign dbg_ym_chip_irq_n = ym_chip_irq_n;
 	assign dbg_as_n  = ASn;
 	assign dbg_fc0   = FC0;
 	assign dbg_fc1   = FC1;

@@ -1106,10 +1106,13 @@ chase).
 **System-level integration is now underway — see `docs/tier2-system.md`.**
 A real 68000 (fx68k) is wired to the completed NMK004 sound board in
 `rtl/mustang/mustang_core.sv`, verified to get past the host-handshake
-boundary this document's CPU-only testbench could never cross, and now
-also given a real (synthetic-first, Tier-1-style) interrupt source so the
-68000 itself doesn't stall — the oracle match has gone 175 (CPU-only
-boundary) → 18,809 → 21,986 checkpoints across those two milestones, with
-the current divergence understood and characterized (likely a status-bit
-poll against the still-stubbed YM2203/OKI ports — see that document's
-"Next step").
+boundary this document's CPU-only testbench could never cross, given a
+real (synthetic-first, Tier-1-style) interrupt source so the 68000 itself
+doesn't stall, and now also given a real YM2203 (`jt03`, jotego's clone —
+genuine bus/IRQ integration, not a stub) — the oracle match has gone 175
+(CPU-only boundary) → 18,809 → 21,986 checkpoints across those milestones.
+The current divergence is now precisely identified (a `RET Z` at
+`0x0E5F` testing a memory bitmask that differs from the oracle's — not
+the YM2203/OKI status-bit poll an earlier milestone guessed, which real
+`jt03` integration has since ruled out directly) — see that document's
+"Next step".

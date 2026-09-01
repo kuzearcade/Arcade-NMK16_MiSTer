@@ -52,6 +52,12 @@ int main(int argc, char **argv) {
 	uint32_t m68k_writes = 0;
 	bool log_m68k = std::getenv("TB_LOG_M68K") != nullptr;
 
+	// YM2203 (jt03) bus/IRQ debug, same tier as TB_LOG_M68K — see
+	// docs/tier2-system.md's "Milestone 3".
+	bool ym_we_prev_dbg = false;
+	uint32_t ym_we_count = 0;
+	bool log_ym = std::getenv("TB_LOG_YM") != nullptr;
+
 	auto tick = [&]() {
 		top.clk_sys = 0;
 		top.eval();
@@ -73,6 +79,16 @@ int main(int argc, char **argv) {
 			last_pc = pc;
 		}
 		prev_dbg_valid = dbg_valid_now;
+
+		bool ym_we_now = top.dbg_ym_we;
+		if (ym_we_now && !ym_we_prev_dbg) {
+			ym_we_count++;
+			if (log_ym)
+				std::fprintf(stderr, "cycle=%llu ym_we cs=%d dout=%02X irq_n=%d\n",
+				             (unsigned long long)clk_sys_ticks, top.dbg_ym_cs,
+				             top.dbg_ym_chip_dout, top.dbg_ym_chip_irq_n);
+		}
+		ym_we_prev_dbg = ym_we_now;
 
 		// 68000 side: same edge-detected-bus-cycle-completion technique
 		// tb_bjtwin.cpp already established (see its own header for why:
@@ -113,5 +129,6 @@ int main(int argc, char **argv) {
 	            still_in_loop ? "STILL STUCK IN" : "past");
 	std::printf("tb_mustang: 68000 last instruction-fetch PC=$%06X, completed %u write bus cycles total\n",
 	            last_fetch_pc, m68k_writes);
+	std::printf("tb_mustang: NMK004 wrote to YM2203 %u times\n", ym_we_count);
 	return 0;
 }

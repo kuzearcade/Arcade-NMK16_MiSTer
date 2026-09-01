@@ -37,6 +37,14 @@ module nmk004_core #(
 	output       ym_addr_sel, // 0 = address port (0xf800), 1 = data port (0xf801)
 	output [7:0] ym_dout,
 	input  [7:0] ym_din,
+	// YM2203's own IRQ (active-low, matching the chip's real convention and
+	// a real core's own irq_n output) — the reference's
+	// ym2203_irq_handler() routes this straight to the CPU's INT0 line
+	// (set_input_line(0,...)), so it's OR'd into irq_req bit0 here rather
+	// than exposed as a separate CPU input; nmk004_periph's own irq_req
+	// output never drives bit0 itself (INT0 has no internal NMK004
+	// peripheral source), so there's no conflict to arbitrate.
+	input        ym_irq_n,
 
 	// OKIM6295 x2
 	output       oki0_cs, oki0_we,
@@ -74,13 +82,17 @@ module nmk004_core #(
 	wire [15:0] cpu_addr;
 	wire [3:0]  cpu_addr_bank;
 	wire        cpu_mem_rd, cpu_mem_wr;
-	wire [10:0] irq_mask, irq_req;
+	wire [10:0] irq_mask, irq_req_periph;
+	// bit0 (INT0) is OR'd in from YM2203's own irq_n here — see the port
+	// comment above. nmk004_periph's own irq_req_r never drives bit0
+	// itself, so this is additive, not a real arbitration.
+	wire [10:0] irq_req_to_cpu = {irq_req_periph[10:1], irq_req_periph[0] | ~ym_irq_n};
 
 	tlcs90 cpu (
 		.clk(clk), .reset(reset),
 		.din(cpu_din), .dout(cpu_dout), .addr(cpu_addr), .addr_bank(cpu_addr_bank),
 		.mem_rd(cpu_mem_rd), .mem_wr(cpu_mem_wr),
-		.nmi(nmi), .irq_req(irq_req), .irq_mask(irq_mask),
+		.nmi(nmi), .irq_req(irq_req_to_cpu), .irq_mask(irq_mask),
 		.ix_bank(bx), .iy_bank(by),
 		.dbg_pc(dbg_pc), .dbg_valid(dbg_valid), .dbg_halt()
 	);
@@ -160,7 +172,7 @@ module nmk004_core #(
 		.we(sel_periph & cpu_mem_wr),
 		.re(sel_periph & cpu_mem_rd),
 		.rdata(periph_rdata),
-		.irq_mask(irq_mask), .irq_req(irq_req),
+		.irq_mask(irq_mask), .irq_req(irq_req_periph),
 		.p4_latch(p4), .bx(bx), .by(by)
 	);
 
