@@ -56,3 +56,4 @@ sim/**/oracle_traces/
 .DS_Store
 *.swp
 sim/rtl/*/*.ppm
+__pycache__/
