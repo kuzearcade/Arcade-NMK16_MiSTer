@@ -59,8 +59,9 @@ module nmk004_core #(
 	output        dbg_valid,
 
 	// P4 bit0 = future 68000-reset drive (nmk004_device::port4_w in the
-	// reference); BX/BY exposed for future IX/IY-banking debug/wiring.
-	// Not consumed by anything yet — see nmk004_periph.sv's header.
+	// reference). BX/BY exposed for debug visibility; the same values are
+	// also wired internally into the CPU core's ix_bank/iy_bank inputs
+	// (see "Address decode" below).
 	output [7:0] p4,
 	output [3:0] bx, by
 );
@@ -71,32 +72,49 @@ module nmk004_core #(
 	wire [7:0]  cpu_din;
 	wire [7:0]  cpu_dout;
 	wire [15:0] cpu_addr;
+	wire [3:0]  cpu_addr_bank;
 	wire        cpu_mem_rd, cpu_mem_wr;
 	wire [10:0] irq_mask, irq_req;
 
 	tlcs90 cpu (
 		.clk(clk), .reset(reset),
-		.din(cpu_din), .dout(cpu_dout), .addr(cpu_addr),
+		.din(cpu_din), .dout(cpu_dout), .addr(cpu_addr), .addr_bank(cpu_addr_bank),
 		.mem_rd(cpu_mem_rd), .mem_wr(cpu_mem_wr),
 		.nmi(nmi), .irq_req(irq_req), .irq_mask(irq_mask),
+		.ix_bank(bx), .iy_bank(by),
 		.dbg_pc(dbg_pc), .dbg_valid(dbg_valid), .dbg_halt()
 	);
 
 	// ------------------------------------------------------------------
 	// Address decode
 	// ------------------------------------------------------------------
-	wire sel_boot_rom = (cpu_addr <= 16'h1fff);
-	wire sel_ext_rom  = (cpu_addr >= 16'h2000) && (cpu_addr <= 16'hefff);
-	wire sel_ext_ram  = (cpu_addr >= 16'hf000) && (cpu_addr <= 16'hf7ff);
-	wire sel_ym       = (cpu_addr == 16'hf800) || (cpu_addr == 16'hf801);
-	wire sel_oki0     = (cpu_addr == 16'hf900);
-	wire sel_oki1     = (cpu_addr == 16'hfa00);
-	wire sel_host_r   = (cpu_addr == 16'hfb00);
-	wire sel_host_w   = (cpu_addr == 16'hfc00);
-	wire sel_oki0bank = (cpu_addr == 16'hfc01);
-	wire sel_oki1bank = (cpu_addr == 16'hfc02);
-	wire sel_int_ram  = (cpu_addr >= 16'hfec0) && (cpu_addr <= 16'hffbf);
-	wire sel_periph   = (cpu_addr >= 16'hffc0) && (cpu_addr <= 16'hffef);
+	// Every region below is bank 0 in the real 20-bit address space
+	// IX/IY-based addressing can reach (see tlcs90.sv's "IX/IY bank
+	// extension" note) — boot ROM, external ROM/RAM, peripherals, and the
+	// host/YM/OKI latches are all sized and placed within the low 64KB,
+	// matching every currently-known NMK004 game (external programs top
+	// out around 56KB, well under 64KB, and the verified boot trace always
+	// leaves BX/BY at their reset value of 0). A nonzero bank access is
+	// therefore real (the CPU core computes it correctly, matching the
+	// reference's bitwise-OR semantics) but currently reaches genuinely
+	// unmapped space — falls through the read mux's default 0 below, and
+	// every sel_* write-enable is gated off — rather than aliasing on top
+	// of bank 0. If a game is ever identified that legitimately banks
+	// beyond 64KB, this is where a real >64KB-backed region would be
+	// added, gated on cpu_addr_bank instead of being dropped.
+	wire bank0        = (cpu_addr_bank == 4'h0);
+	wire sel_boot_rom = bank0 && (cpu_addr <= 16'h1fff);
+	wire sel_ext_rom  = bank0 && (cpu_addr >= 16'h2000) && (cpu_addr <= 16'hefff);
+	wire sel_ext_ram  = bank0 && (cpu_addr >= 16'hf000) && (cpu_addr <= 16'hf7ff);
+	wire sel_ym       = bank0 && ((cpu_addr == 16'hf800) || (cpu_addr == 16'hf801));
+	wire sel_oki0     = bank0 && (cpu_addr == 16'hf900);
+	wire sel_oki1     = bank0 && (cpu_addr == 16'hfa00);
+	wire sel_host_r   = bank0 && (cpu_addr == 16'hfb00);
+	wire sel_host_w   = bank0 && (cpu_addr == 16'hfc00);
+	wire sel_oki0bank = bank0 && (cpu_addr == 16'hfc01);
+	wire sel_oki1bank = bank0 && (cpu_addr == 16'hfc02);
+	wire sel_int_ram  = bank0 && (cpu_addr >= 16'hfec0) && (cpu_addr <= 16'hffbf);
+	wire sel_periph   = bank0 && (cpu_addr >= 16'hffc0) && (cpu_addr <= 16'hffef);
 
 	// ------------------------------------------------------------------
 	// ROMs

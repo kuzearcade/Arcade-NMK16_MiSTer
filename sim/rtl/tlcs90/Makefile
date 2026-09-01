@@ -8,12 +8,16 @@
 #                      # dispatch end-to-end (EI/RETI), since the real boot ROM
 #                      # never reaches EI in this CPU-only-with-stub-host testbench
 #                      # (see docs/tier2-tlcs90.md "Interrupt self-test")
+#   make run-banktest # standalone CPU core + synthetic banked memory model:
+#                      # proves IX/IY bank extension (BX/BY -> ix_bank/iy_bank)
+#                      # end-to-end, since no currently-known game exercises a
+#                      # nonzero bank (see docs/tier2-tlcs90.md)
 #   make clean
 
 CORE_DIR := ../../../rtl/tlcs90
 OBJ_DIR := obj_dir
 
-.PHONY: all run run-nmk004 run-irqtest clean
+.PHONY: all run run-nmk004 run-irqtest run-banktest clean
 
 all: run
 
@@ -57,5 +61,18 @@ $(IRQTEST_DIR)/Vnmk004_irqtest: $(CORE_DIR)/tlcs90.sv $(CORE_DIR)/nmk004_periph.
 run-irqtest: $(IRQTEST_DIR)/Vnmk004_irqtest
 	./$(IRQTEST_DIR)/Vnmk004_irqtest irqtest.trace
 
+BANKTEST_DIR := obj_dir_banktest
+
+$(BANKTEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_banktest.cpp
+	verilator --cc --exe --build -Wall -Wno-fatal --top-module tlcs90 \
+		-y $(CORE_DIR) \
+		$(CORE_DIR)/tlcs90.sv \
+		tb_banktest.cpp \
+		-o Vtlcs90 \
+		--Mdir $(BANKTEST_DIR)
+
+run-banktest: $(BANKTEST_DIR)/Vtlcs90
+	./$(BANKTEST_DIR)/Vtlcs90
+
 clean:
-	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace
+	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace

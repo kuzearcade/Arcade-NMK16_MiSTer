@@ -24,6 +24,16 @@ was verified with a small synthetic self-test program instead — confirmed work
 end-to-end (211 correctly-vectored, correctly-returned-from interrupts over a
 100000-cycle run). See "Fourth verification result" below.
 
+**IX/IY bank extension via BX/BY is now implemented** too (`ix_bank`/`iy_bank`
+CPU inputs, `bank1`/`bank2` address computation, matching the reference's
+bitwise-OR-not-add semantics exactly). Since no currently-known NMK004 game
+ever sets a nonzero bank, this was verified with a dedicated standalone
+synthetic test (`tb_banktest.cpp`) exercising a real 16-bank memory model
+directly against the CPU core — found and fixed one real bug along the way
+(a "sticky" internal register that let a direct-address write spuriously
+inherit a *previous* instruction's bank). See "Fifth verification result"
+below.
+
 ## Why this exists
 
 NMK004 (used by mustang, bioship, vandyke, blkheart, acrobatm, strahl, tdragon,
@@ -101,7 +111,8 @@ The two maps are additive, not exclusive:
 - IX/IY memory addressing (only when used as a *memory address*, i.e. `MR16`/
   `MR16D8` — not when loaded as a plain 16-bit *value*) is bank-extended via
   `BX`/`BY` registers (`0xffec`/`0xffed`, bits 3-0 → address bits 19-16, OR'd not
-  added) into the CPU's real 20-bit address space. Deferred — see "Known gaps."
+  added) into the CPU's real 20-bit address space. Implemented — see "Fifth
+  verification result" below.
 
 ## Addressing modes
 
@@ -254,11 +265,15 @@ they'd perform in real silicon is implicit in our design already).
 
 ## Known gaps / deferred work (documented, not hidden)
 
-1. **IX/IY bank extension (`BX`/`BY`) not yet implemented** — boot trace writes
-   both to 0 (banking disabled), so not yet exercised; needed before trusting any
-   firmware that uses >64KB addressing via IX/IY. `nmk004_periph.sv` stores and
-   reads back BX/BY correctly but doesn't yet apply them to any address
-   computation (still the CPU core's job, per its own header).
+1. **IX/IY bank extension (`BX`/`BY`) is implemented in the CPU core** (see
+   "Fifth verification result" below) but not backed by real >64KB storage at
+   the system level: `nmk004_core.sv`'s memory map gates every currently-mapped
+   region on `cpu_addr_bank==0` (matching every currently-known game, whose
+   boot trace always leaves BX/BY at 0 and whose external programs top out
+   around 56KB) and leaves a nonzero-bank access genuinely unmapped (reads 0,
+   writes dropped) rather than aliasing it onto bank 0. If a game is ever
+   identified that legitimately needs >64KB via IX/IY banking, that's where a
+   real backing region would be added.
 2. **Serial (UART) and ADC peripherals not implemented** — `tmp90840_regs` doesn't
    even map serial registers for this specific device variant (commented out in
    the reference), and P5 (ADC-capable pins) has no plausible use for a sound MCU.
@@ -320,7 +335,7 @@ against a real MAME oracle trace before trusting anything downstream):
   `t90_timer_callback` structurally), timer 4/5 (16-bit free-running with
   independent TREG4/TREG5 compare points, matching `t90_timer4_callback`),
   INTEL/INTEH decode into an 11-bit `irq_mask`, and BX/BY (stored/read back,
-  not yet applied — see "Known gaps").
+  wired via `bx`/`by` outputs into the CPU core's `ix_bank`/`iy_bank` inputs).
 - `rtl/tlcs90/nmk004_core.sv` — the full board wrapper: CPU + peripherals +
   memory map (boot ROM/external ROM/work RAM/internal RAM/peripherals),
   with YM2203/OKI×2/host-handshake exposed as real external ports for a
@@ -332,6 +347,11 @@ against a real MAME oracle trace before trusting anything downstream):
   already-verified) and a synthetic self-test ROM (`sim/rtl/tlcs90/roms/
   irqtest_boot.hex`) that proves the interrupt/timer mechanism end-to-end —
   see "Fourth verification result" below.
+- `sim/rtl/tlcs90/tb_banktest.cpp` + `Makefile` (`make run-banktest`) —
+  standalone CPU-core-only Verilator testbench with a synthetic 16-bank x
+  64KB memory model (independent of nmk004_core.sv, which doesn't back a
+  nonzero bank with real memory yet) that proves IX/IY bank extension
+  end-to-end — see "Fifth verification result" below.
 
 ### First verification result (base table only)
 
@@ -535,8 +555,75 @@ in committed RTL); `tb_nmk004.cpp` now does its own PC-based interrupt-vector
 counting instead, so `make run-irqtest`'s pass/fail signal doesn't depend on
 any peripheral-internal debug port.
 
-Next step: IX/IY bank extension (`BX`/`BY`'s actual address-computation
-effect), block-transfer opcodes (`LDI*`/`CPI*` family), `RLD`/`RRD`,
+### Fifth verification result (IX/IY bank extension)
+
+Implemented BX/BY-driven IX/IY bank extension in the CPU core: two new
+inputs (`ix_bank`/`iy_bank`, sourced from `nmk004_periph.sv`'s existing
+`bx`/`by` outputs) and a widened bus interface (`addr_bank`, a 4-bit output
+alongside the existing 16-bit `addr`) that the CPU sets to the correct bank
+nibble — and only the correct bank nibble — for the two addressing forms the
+reference actually banks: register-indirect through IX/IY with no
+displacement (`MR16`, the "(gg)" prefix groups) and IX/IY-plus-displacement
+(`MR16D8`, the `(ix+d)`/`(iy+d)` indexed groups). Every other addressing
+form (SP-relative, `(HL+A)`, direct/short-address, PC fetches, SP-relative
+push/pop) stays bank 0, matching the reference's own per-addressing-mode
+dispatch (`Read/WriteN_8/16`'s `case e_mode::MR16`/`MR16D8` switching on the
+base register) exactly — including the bitwise-OR-not-add composition (a
+16-bit offset wraparound within one access never carries into the bank) and
+the fact that `MR16R8` (`(HL+A)`) is never banked even though it superficially
+resembles the other two forms.
+
+Verifying this needed a **dedicated standalone test**, since no currently-known
+NMK004 game ever sets BX/BY to anything but 0 (confirmed by the existing
+175-checkpoint oracle trace) — there's no real firmware to diff against for
+this specific behavior. `tb_banktest.cpp` drives the CPU core directly
+(`ix_bank` fixed at a non-zero test value; no peripheral needed, since BX/BY's
+*storage* lives in `nmk004_periph.sv`, not the CPU) against a synthetic
+16-bank x 64KB memory model in C++ — something a single flat address space
+can't distinguish — and runs a small hand-assembled program exercising all
+four combinations (`MR16` read/write, `MR16D8` read/write) plus two plain
+direct-address writes that must **not** pick up a bank:
+
+```
+OK:   bank0[$FFE0] (LD A,(IX) then LD ($FFE0),A) = 0x55
+OK:   bank5[0x1000] (LD (IX),A) = 0x77
+OK:   bank0[0x1000] (must be untouched) = 0xAA
+OK:   bank0[$FFE1] (LD A,(IX+0x10) then LD ($FFE1),A) = 0x66
+OK:   bank5[0x1010] (LD (IX+0x10),A) = 0x88
+OK:   bank0[0x1010] (must be untouched) = 0xBB
+tb_banktest: PASS (all 6 checks)
+```
+
+Each check reads back a bank-specific sentinel byte pre-seeded at the same
+offset in both bank 0 and the test bank, so a read or write that landed in
+the wrong bank is immediately visible, and the "must be untouched" checks
+positively confirm no bleed-through into bank 0 (ruling out an
+add-instead-of-OR bug).
+
+**A real bug was found and fixed on the first run**: a direct-address write
+(`LD ($FFE1),A`, opcode `0x2F` — never banked, per the reference) executed
+immediately after an IX-relative read spuriously inherited that read's bank.
+Root cause: `pfx`/`gg` (registers that record which prefix group, if any,
+produced the current instruction's resolved address — read by the new
+`bank1`/`bank2` logic to tell a genuine direct `M_MI16` address apart from
+an IX/IY-relative one resolved *into* the same `M_MI16` tag) are only ever
+written on the *prefixed* decode path; a following base-table instruction
+never resets them, so they're "sticky" — silently correct for every use
+that existed before this change (nothing else read them outside their own
+prefix's decode sequence), but wrong the instant something started reading
+them for every instruction. Fixed by explicitly resetting `pfx <= PFX_NONE`
+on the base-table decode path (`S_DECODE`'s `d_pfx == PFX_NONE` branch, see
+tlcs90.sv) — re-ran `tb_banktest` clean afterward, and re-confirmed the
+existing 175-checkpoint oracle match and the 211-fire `run-irqtest` result
+are both unchanged.
+
+At the system level, `nmk004_core.sv`'s memory map still gates every
+currently-mapped region on `cpu_addr_bank==0` and leaves a nonzero-bank
+access genuinely unmapped rather than backing it with real >64KB storage —
+see "Known gaps" above for why, and what would change if a game is ever
+identified that needs it.
+
+Next step: block-transfer opcodes (`LDI*`/`CPI*` family), `RLD`/`RRD`,
 `MUL`/`DIV`, and the memory-operand forms of `EX` are the remaining
 CPU-core gaps; getting NMK004 actually driving real YM2203/OKI hardware
 needs system-level integration (a real 68000 + shared RAM + `jt12`/`jt6295`

@@ -46,10 +46,11 @@
 //     reserved_r/reserved_w stub for these (reads return 0, writes are
 //     discarded), since MAME itself doesn't implement them either.
 //   - BX/BY are stored and read back (matching bx_r()/by_r()'s exact
-//     `0xf0|nibble` format) but not yet applied to any address
-//     computation — IX/IY bank extension is still deferred in the CPU
-//     core itself (see tlcs90.sv's header), so wiring the *effect* of
-//     BX/BY through would be premature.
+//     `0xf0|nibble` format) via the `bx`/`by` outputs below, which the
+//     caller wires into the CPU core's `ix_bank`/`iy_bank` inputs — IX/IY
+//     bank extension itself (applying the nibble to IX/IY-based memory
+//     addressing) is the CPU core's job, implemented there (see
+//     tlcs90.sv's header and its `bank1`/`bank2` wires).
 module nmk004_periph (
 	input        clk,
 	input        reset,

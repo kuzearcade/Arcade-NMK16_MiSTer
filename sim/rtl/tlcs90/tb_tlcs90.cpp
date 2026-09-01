@@ -62,6 +62,8 @@ int main(int argc, char **argv) {
 	top.nmi = 0;
 	top.irq_req = 0;
 	top.irq_mask = 0;
+	top.ix_bank = 0;
+	top.iy_bank = 0;
 	top.din = 0;
 
 	auto tick = [&]() {

@@ -44,13 +44,23 @@
 // forms, all only valid when the 0xf8-0xfe group's own opcode byte is
 // exactly 0xfe — see the level-2 decode's PFX_G8 branch), RLD/RRD, LDAR,
 // CALLR, MUL/DIV, SWI, `EX (gg)/(mn)/($FF00+n)/(ix+d)/(iy+d)/(HL+A),rr`
-// (the memory-operand forms of EX — register-only EX is implemented),
+// (the memory-operand forms of EX — register-only EX is implemented), and
 // the TSET/LDA dead opcode space MAME's own reference model can't execute
-// either, IX/IY bank extension via BX/BY (addresses through IX/IY are
-// treated as plain 16-bit — exactly correct at boot, since the boot ROM
-// zeroes both bank registers before doing anything else), and interrupt
-// dispatch beyond a bare NMI input stub (peripheral-driven IRQs need the
-// not-yet-built peripheral module first).
+// either.
+//
+// IX/IY bank extension via BX/BY (`ix_bank`/`iy_bank` inputs, driven from a
+// peripheral module's BX/BY registers) IS implemented — see `bank1`/`bank2`
+// below — matching the reference's RX8/RX16/WX8/WX16 exactly: the bank
+// nibble is bitwise-OR'd (not added) into address bits 19:16, and ONLY for
+// the `MR16`/`MR16D8` addressing forms (register-indirect or +displacement
+// through IX or IY specifically — never SP, never BC/DE/HL, never the
+// `(HL+A)` form, and never a direct/short-address operand) — mirroring the
+// reference's own per-addressing-mode dispatch (`Read/WriteN_8/16`'s
+// `case e_mode::MR16`/`MR16D8` switching on the base register). A 16-bit
+// offset wraparound within one operand (e.g. the low/high byte of a 16-bit
+// access straddling 0xFFFF) never carries into the bank, matching
+// `(a+1) & 0xffff` in the reference — this core's `addr` stays a plain
+// 16-bit offset per access; only `addr_bank` carries the OR'd-in nibble.
 //
 // The wide-register-to-register `ADD HL,rr` flag special-case documented
 // in docs/tier2-tlcs90.md (only S/Z/V get *skipped*, and only for plain
@@ -65,6 +75,13 @@ module tlcs90 (
 	input  [7:0] din,
 	output reg [7:0] dout,
 	output reg [15:0] addr,
+	// Bank nibble (address bits 19:16) for the current `addr`, OR'd in by
+	// the caller to form the real 20-bit bus address — see the module
+	// header's "IX/IY bank extension" note. 0 for every access except an
+	// IX/IY-based MR16/MR16D8 operand, matching the reference exactly
+	// (BC/DE/HL/SP-based accesses, direct/short-address operands, PC
+	// fetches, and SP-relative push/pop are always bank 0).
+	output reg [3:0] addr_bank,
 	output reg   mem_rd,
 	output reg   mem_wr,
 
@@ -84,6 +101,12 @@ module tlcs90 (
 	input        nmi,
 	input [10:0] irq_req,
 	input [10:0] irq_mask,
+
+	// BX/BY's low nibble (0xffec/0xffed in a peripheral module), applied to
+	// IX/IY-based memory addressing only — see `addr_bank` above and the
+	// module header.
+	input  [3:0] ix_bank,
+	input  [3:0] iy_bank,
 
 	// debug: pulses dbg_valid for one cycle at the start of each new
 	// instruction with that instruction's own PC — the same point in time
@@ -588,13 +611,41 @@ module tlcs90 (
 
 	// Effective bus address for a memory-mode operand: M_MI16 already
 	// holds the resolved address directly in r1/r2 (short-address, direct
-	// 16-bit, or the prefix-group's resolved mn/ff address); M_MR16 holds
-	// a register-pair *code* instead, resolved through the register file
-	// (IX/IY bank extension via BX/BY not yet implemented — see module
-	// header — so this is a plain 16-bit register read, matching the
-	// documented simplification already in place for the base table).
+	// 16-bit, or the prefix-group's resolved mn/ff/ixd address); M_MR16
+	// holds a register-pair *code* instead, resolved through the register
+	// file.
 	wire [15:0] eff1 = (mode1 == M_MR16) ? r16_read(r1[3:0]) : r1;
 	wire [15:0] eff2 = (mode2 == M_MR16) ? r16_read(r2[3:0]) : r2;
+
+	// Bank nibble for eff1/eff2 — see module header's "IX/IY bank
+	// extension" note. Two cases produce an IX/IY-based address:
+	//   - mode==M_MR16 with the register code itself (r1[3:0]/r2[3:0])
+	//     equal to R16_IX/R16_IY (the "(gg)" prefix groups, no
+	//     displacement) — mirrors eff1/eff2's own mode/register check.
+	//   - mode==M_MI16 but the address was actually resolved by an
+	//     IXD_SRC/IXD_DST prefix (0xf0-0xf6, "(ix+d)"/"(iy+d)"/"(sp+d)")
+	//     with its own base register (`gg`, latched once at prefix decode
+	//     and stable for the rest of the instruction) equal to R16_IX/
+	//     R16_IY — `gg`==R16_SP falls through to bank 0, matching the
+	//     reference (SP+d is never banked). A genuine M_MI16 direct/short
+	//     address (MN/FF prefixes, or the base table's own direct forms)
+	//     never matches either IXD prefix check, so it correctly stays
+	//     bank 0 too — this is what distinguishes "really M_MI16" from
+	//     "M_MI16 because that's how a resolved IXD address is tagged"
+	//     without needing a separate mode enum for the latter.
+	wire ixd_pfx = (pfx == PFX_IXD_SRC) || (pfx == PFX_IXD_DST);
+	wire [3:0] bank1 =
+		(mode1 == M_MR16 && r1[3:0] == R16_IX[3:0]) ? ix_bank :
+		(mode1 == M_MR16 && r1[3:0] == R16_IY[3:0]) ? iy_bank :
+		(mode1 == M_MI16 && ixd_pfx && gg == R16_IX[3:0]) ? ix_bank :
+		(mode1 == M_MI16 && ixd_pfx && gg == R16_IY[3:0]) ? iy_bank :
+		4'h0;
+	wire [3:0] bank2 =
+		(mode2 == M_MR16 && r2[3:0] == R16_IX[3:0]) ? ix_bank :
+		(mode2 == M_MR16 && r2[3:0] == R16_IY[3:0]) ? iy_bank :
+		(mode2 == M_MI16 && ixd_pfx && gg == R16_IX[3:0]) ? ix_bank :
+		(mode2 == M_MI16 && ixd_pfx && gg == R16_IY[3:0]) ? iy_bank :
+		4'h0;
 
 	function automatic mode_needs_read(input [3:0] m);
 		mode_needs_read = (m == M_MI16) || (m == M_MR16);
@@ -645,6 +696,7 @@ module tlcs90 (
 	always @(posedge clk) begin
 		mem_rd <= 1'b0;
 		mem_wr <= 1'b0;
+		addr_bank <= 4'h0;
 		dbg_valid <= 1'b0;
 
 		// Interrupt request latching: level-sensitive but internally held
@@ -715,6 +767,18 @@ module tlcs90 (
 						r1 <= {12'h0, d_r1e};
 						r2 <= {12'h0, d_r2e};
 						m2bytes_left <= d_m2bytes;
+						// `pfx` is otherwise only written on the prefixed
+						// path below, so without this it would keep holding
+						// a *previous* instruction's prefix kind here — a
+						// real bug found via tb_banktest.cpp: a base-table
+						// direct-address write immediately after an
+						// IX-relative access spuriously inherited that
+						// access's bank, because bank1/bank2 (see their
+						// definition above) key off `pfx`/`gg` to tell a
+						// genuine M_MI16 direct address apart from an
+						// IXD-prefix-resolved one, and both are stored in
+						// the same mode1/mode2 tag.
+						pfx <= PFX_NONE;
 						if (d_m1bytes == 2'd1) begin
 							addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
 							state <= S_M1_BYTE;
@@ -818,7 +882,7 @@ module tlcs90 (
 				// ------------------------------------------------------
 				S_PRE_READ1: begin
 					if (op_reads_m1(op) && mode_needs_read(mode1)) begin
-						addr <= eff1; mem_rd <= 1'b1;
+						addr <= eff1; addr_bank <= bank1; mem_rd <= 1'b1;
 						state <= S_READ1_LO;
 					end else begin
 						val1 <= !op_reads_m1(op) ? r1 : (mode1 == M_R8) ? {8'h00, r8_read(r1[2:0])} : (mode1 == M_R16) ? r16_read(r1[3:0]) : r1;
@@ -828,7 +892,7 @@ module tlcs90 (
 				S_READ1_LO: begin
 					if (wide) begin
 						byte_lo <= din;
-						addr <= eff1 + 16'd1; mem_rd <= 1'b1;
+						addr <= eff1 + 16'd1; addr_bank <= bank1; mem_rd <= 1'b1;
 						state <= S_READ1_HI;
 					end else begin
 						val1 <= {8'h00, din};
@@ -845,7 +909,7 @@ module tlcs90 (
 				// ------------------------------------------------------
 				S_PRE_READ2: begin
 					if (mode2 != M_NONE && mode_needs_read(mode2)) begin
-						addr <= eff2; mem_rd <= 1'b1;
+						addr <= eff2; addr_bank <= bank2; mem_rd <= 1'b1;
 						state <= S_READ2_LO;
 					end else begin
 						if (mode2 != M_NONE) val2 <= (mode2 == M_R8) ? {8'h00, r8_read(r2[2:0])} : (mode2 == M_R16) ? r16_read(r2[3:0]) : r2;
@@ -855,7 +919,7 @@ module tlcs90 (
 				S_READ2_LO: begin
 					if (wide) begin
 						byte_lo <= din;
-						addr <= eff2 + 16'd1; mem_rd <= 1'b1;
+						addr <= eff2 + 16'd1; addr_bank <= bank2; mem_rd <= 1'b1;
 						state <= S_READ2_HI;
 					end else begin
 						val2 <= {8'h00, din};
@@ -894,7 +958,7 @@ module tlcs90 (
 							else if (mode1 == M_R16) r16_write_reg(r1[3:0], wide ? val2 : {8'h00, val2[7:0]});
 							else begin // M_MI16 or M_MR16
 								wb_val <= val2;
-								addr <= eff1; dout <= val2[7:0]; mem_wr <= 1'b1;
+								addr <= eff1; addr_bank <= bank1; dout <= val2[7:0]; mem_wr <= 1'b1;
 								state <= wide ? S_WRITE1_HI : S_FETCH_OP;
 							end
 						end
@@ -979,7 +1043,7 @@ module tlcs90 (
 						OP_BIT: f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | (8'd1<<HF) | sz_bit8(val2[7:0] & (8'd1 << r1[2:0]));
 						OP_SET, OP_RES: begin
 							wb_val <= op == OP_SET ? {8'h00, val2[7:0] | (8'd1 << r1[2:0])} : {8'h00, val2[7:0] & ~(8'd1 << r1[2:0])};
-							addr <= eff2;
+							addr <= eff2; addr_bank <= bank2;
 							dout <= op == OP_SET ? (val2[7:0] | (8'd1 << r1[2:0])) : (val2[7:0] & ~(8'd1 << r1[2:0]));
 							mem_wr <= 1'b1;
 							state <= S_FETCH_OP;
@@ -991,7 +1055,7 @@ module tlcs90 (
 								r8v = val1[7:0] + 8'd1;
 								nf8 = (f & ((8'd1<<IFB)|(8'd1<<CF))) | szhv_inc8(r8v);
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
-								else begin wb_val <= {8'h00,r8v}; addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
+								else begin wb_val <= {8'h00,r8v}; addr <= eff1; addr_bank <= bank1; dout <= r8v; mem_wr <= 1'b1; end
 								f <= nf8;
 							end else begin
 								r16v = val1 + 16'd1;
@@ -1005,7 +1069,7 @@ module tlcs90 (
 								r8v = val1[7:0] - 8'd1;
 								nf8 = (f & ((8'd1<<IFB)|(8'd1<<CF))) | szhv_dec8(r8v);
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
-								else begin wb_val <= {8'h00,r8v}; addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
+								else begin wb_val <= {8'h00,r8v}; addr <= eff1; addr_bank <= bank1; dout <= r8v; mem_wr <= 1'b1; end
 								f <= nf8;
 							end else begin
 								r16v = val1 - 16'd1;
@@ -1018,7 +1082,7 @@ module tlcs90 (
 							if (f[XCF]) begin
 								r8v = val1[7:0] + 8'd1;
 								f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | szhv_inc8(r8v);
-								addr <= eff1; dout <= r8v; mem_wr <= 1'b1;
+								addr <= eff1; addr_bank <= bank1; dout <= r8v; mem_wr <= 1'b1;
 							end
 						end
 						OP_DECX: begin : decx_blk
@@ -1026,7 +1090,7 @@ module tlcs90 (
 							if (f[XCF]) begin
 								r8v = val1[7:0] - 8'd1;
 								f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | szhv_dec8(r8v);
-								addr <= eff1; dout <= r8v; mem_wr <= 1'b1;
+								addr <= eff1; addr_bank <= bank1; dout <= r8v; mem_wr <= 1'b1;
 							end
 						end
 						OP_INCW: begin : incw_blk
@@ -1040,7 +1104,7 @@ module tlcs90 (
 							if ((val1 ^ r16v ^ 16'd1) & 16'h1000) nf8 = nf8 | (8'd1<<HF);
 							f <= nf8;
 							wb_val <= r16v;
-							addr <= eff1; dout <= r16v[7:0]; mem_wr <= 1'b1;
+							addr <= eff1; addr_bank <= bank1; dout <= r16v[7:0]; mem_wr <= 1'b1;
 							state <= S_WRITE1_HI;
 						end
 						OP_DECW: begin : decw_blk
@@ -1053,7 +1117,7 @@ module tlcs90 (
 							if ((val1 ^ r16v ^ 16'd1) & 16'h1000) nf8 = nf8 | (8'd1<<HF);
 							f <= nf8;
 							wb_val <= r16v;
-							addr <= eff1; dout <= r16v[7:0]; mem_wr <= 1'b1;
+							addr <= eff1; addr_bank <= bank1; dout <= r16v[7:0]; mem_wr <= 1'b1;
 							state <= S_WRITE1_HI;
 						end
 
@@ -1070,7 +1134,7 @@ module tlcs90 (
 								if ((b8 ^ a8 ^ 8'h80) & (b8 ^ r8v) & 8'h80) nf8 = nf8 | (8'd1<<PF);
 								f <= nf8;
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
-								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
+								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; addr_bank <= bank1; dout <= r8v; mem_wr <= 1'b1; end
 							end else begin
 								a16 = val1; b16 = val2;
 								s17 = {1'b0,a16} + {1'b0,b16} + (op == OP_ADC ? {16'b0,f[CF]} : 17'd0);
@@ -1109,7 +1173,7 @@ module tlcs90 (
 								f <= nf8;
 								if (op != OP_CP) begin
 									if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
-									else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
+									else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; addr_bank <= bank1; dout <= r8v; mem_wr <= 1'b1; end
 								end
 							end else begin
 								a16 = val1; b16 = val2;
@@ -1131,7 +1195,7 @@ module tlcs90 (
 								r8v = val1[7:0] & val2[7:0];
 								f <= (f & (8'd1<<IFB)) | szp8(r8v) | (8'd1<<HF);
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
-								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
+								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; addr_bank <= bank1; dout <= r8v; mem_wr <= 1'b1; end
 							end else begin
 								r16v = val1 & val2;
 								f <= (f & (8'd1<<IFB)) | (8'd1<<HF) | (r16v == 0 ? (8'd1<<ZF) : 8'h00) | (r16v[15] ? (8'd1<<SF) : 8'h00);
@@ -1144,7 +1208,7 @@ module tlcs90 (
 								r8v = val1[7:0] ^ val2[7:0];
 								f <= (f & (8'd1<<IFB)) | szp8(r8v);
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
-								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
+								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; addr_bank <= bank1; dout <= r8v; mem_wr <= 1'b1; end
 							end else begin
 								r16v = val1 ^ val2;
 								f <= (f & (8'd1<<IFB)) | (r16v == 0 ? (8'd1<<ZF) : 8'h00) | (r16v[15] ? (8'd1<<SF) : 8'h00);
@@ -1157,7 +1221,7 @@ module tlcs90 (
 								r8v = val1[7:0] | val2[7:0];
 								f <= (f & (8'd1<<IFB)) | szp8(r8v);
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
-								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
+								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; addr_bank <= bank1; dout <= r8v; mem_wr <= 1'b1; end
 							end else begin
 								r16v = val1 | val2;
 								f <= (f & (8'd1<<IFB)) | (r16v == 0 ? (8'd1<<ZF) : 8'h00) | (r16v[15] ? (8'd1<<SF) : 8'h00);
@@ -1185,7 +1249,7 @@ module tlcs90 (
 							if (cflag) nf8 = nf8 | (8'd1<<CF) | (8'd1<<XCF);
 							f <= nf8;
 							if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
-							else begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
+							else begin addr <= eff1; addr_bank <= bank1; dout <= r8v; mem_wr <= 1'b1; end
 						end
 
 						default: ; // OP_UNKNOWN: no-op, treated as a bug marker for the testbench to catch via dbg_pc stall
@@ -1193,7 +1257,7 @@ module tlcs90 (
 				end
 
 				S_WRITE1_HI: begin
-					addr <= eff1 + 16'd1; dout <= wb_val[15:8]; mem_wr <= 1'b1;
+					addr <= eff1 + 16'd1; addr_bank <= bank1; dout <= wb_val[15:8]; mem_wr <= 1'b1;
 					state <= S_FETCH_OP;
 				end
 
