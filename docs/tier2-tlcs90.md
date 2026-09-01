@@ -1101,8 +1101,13 @@ afterward.
 With this, the CPU core's own opcode table is complete except for the two
 opcodes MAME's own reference model can never execute (`LDA`/`TSET`, a
 permanent verification blind spot — see "Deferred" above, not a bug to
-chase). Next step: getting NMK004 actually driving real YM2203/OKI
-hardware needs system-level integration (a real 68000 + shared RAM +
-`jt12`/`jt6295` cores) to get past the host-handshake boundary this tier's
-CPU-only testbench can't cross on its own — the natural next milestone now
-that the CPU-core-only work has run its course.
+chase).
+
+**System-level integration is now underway — see `docs/tier2-system.md`.**
+A real 68000 (fx68k) is wired to the completed NMK004 sound board in a new
+`rtl/mustang/mustang_core.sv`, verified to get past the host-handshake
+boundary this document's CPU-only testbench could never cross — the
+oracle match now reaches 18,809 checkpoints (up from 175), with the
+remaining divergence understood and characterized (the 68000 stalls in
+its own boot sequence waiting for an interrupt this milestone
+deliberately doesn't generate yet — see that document's "Next step").
