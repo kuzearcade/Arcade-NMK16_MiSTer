@@ -40,7 +40,7 @@
 // byte only the real 68000 host would ever write (see
 // docs/tier2-tlcs90.md's "Third verification result").
 //
-// Still deferred: RLD/RRD, LDAR, CALLR, MUL/DIV, SWI,
+// Still deferred: LDAR, CALLR, MUL/DIV, SWI,
 // `EX (gg)/(mn)/($FF00+n)/(ix+d)/(iy+d)/(HL+A),rr` (the memory-operand
 // forms of EX — register-only EX is implemented), and the TSET/LDA dead
 // opcode space MAME's own reference model can't execute either.
@@ -55,6 +55,13 @@
 // `pc -= 2` re-fetch of the same 2-byte instruction when their loop
 // condition holds, mirroring the reference's own `m_pc.w.l -= 2` exactly
 // rather than looping internally.
+//
+// RLD/RRD ARE implemented too — reachable via every SRC prefix group's own
+// selector byte 0x10/0x11 (never the base table), see the pfx_is_src
+// level-2 decode branch. Rotate the 12-bit {A_lo,M_hi,M_lo} unit one
+// nibble left (RLD) or right (RRD); A isn't a decoded operand slot in
+// this group's own encoding, so EXECUTE reads/writes it directly, the
+// same reasoning LDI*/CPI* already established for DE.
 //
 // IX/IY bank extension via BX/BY (`ix_bank`/`iy_bank` inputs, driven from a
 // peripheral module's BX/BY registers) IS implemented — see `bank1`/`bank2`
@@ -236,6 +243,10 @@ module tlcs90 (
 		// groups, mirroring the reference's own `LDI+b1-0x58` formula.
 		OP_LDI=46, OP_LDIR=47, OP_LDD=48, OP_LDDR=49,
 		OP_CPI=50, OP_CPIR=51, OP_CPD=52, OP_CPDR=53,
+		// RLD/RRD: reachable via every SRC prefix group's own selector
+		// byte 0x10/0x11 (not the base table) — see the pfx_is_src level-2
+		// decode branch below.
+		OP_RLD=54, OP_RRD=55,
 		OP_UNKNOWN=63;
 
 	// ------------------------------------------------------------------
@@ -520,6 +531,13 @@ module tlcs90 (
 			endcase
 		end else if (pfx_is_src) begin
 			casez (din)
+				// RLD/RRD — reachable via every SRC prefix group ((gg),
+				// (mn), ($FF00+n), (ix+d)/(iy+d), (HL+A)), never the base
+				// table. mode2 stays M_NONE (A isn't a decoded operand
+				// slot here — EXECUTE reads/writes it directly, same
+				// reasoning as LDI*/CPI*'s DE).
+				8'h10: begin d2_op = OP_RLD; d2_mode1 = mem_mode; d2_mem_slot = 2'd1; end
+				8'h11: begin d2_op = OP_RRD; d2_mode1 = mem_mode; d2_mem_slot = 2'd1; end
 				8'h28,8'h29,8'h2a,8'h2b,8'h2c,8'h2d,8'h2e: begin
 					d2_op = OP_LD; d2_mode1 = M_R8; d2_r1e = 4'(din - 8'h28); d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
 				8'h48,8'h49,8'h4a,8'h4c,8'h4d,8'h4e: begin
@@ -1322,6 +1340,35 @@ module tlcs90 (
 							     ((a ^ val1[7:0] ^ b8) & (8'd1<<HF)) | (8'd1<<NF) |
 							     (bc_new != 16'd0 ? (8'd1<<PF) : 8'h00);
 							if ((op == OP_CPIR || op == OP_CPDR) && bc_new != 16'd0 && b8 != 8'h00) pc <= pc - 16'd2;
+						end
+
+						// val1 holds the pre-fetched memory byte (see the
+						// pfx_is_src level-2 decode above); A isn't a
+						// decoded operand here (there's no room for a
+						// second `M_R8` slot alongside the memory one in
+						// this group's own selector-byte encoding), so
+						// EXECUTE reads/writes it directly, mirroring the
+						// reference's own m_af.b.h access. RLD rotates the
+						// 12-bit {A_lo,M_hi,M_lo} unit left by one nibble;
+						// RRD rotates it right — both write the new memory
+						// byte back to the SAME address val1 was read from
+						// (mode1/eff1/bank1 all still valid, unchanged
+						// since the read) and load the new A.
+						OP_RLD: begin : rld_blk
+							reg [7:0] m8, newa;
+							m8 = val1[7:0];
+							newa = {a[7:4], m8[7:4]};
+							addr <= eff1; addr_bank <= bank1; dout <= {m8[3:0], a[3:0]}; mem_wr <= 1'b1;
+							a <= newa;
+							f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | szp8(newa);
+						end
+						OP_RRD: begin : rrd_blk
+							reg [7:0] m8, newa;
+							m8 = val1[7:0];
+							newa = {a[7:4], m8[3:0]};
+							addr <= eff1; addr_bank <= bank1; dout <= {a[3:0], m8[7:4]}; mem_wr <= 1'b1;
+							a <= newa;
+							f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | szp8(newa);
 						end
 
 						default: ; // OP_UNKNOWN: no-op, treated as a bug marker for the testbench to catch via dbg_pc stall

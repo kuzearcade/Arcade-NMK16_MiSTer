@@ -45,6 +45,15 @@ found-early and an exhausted-search compare, and confirming the non-`R`
 single-step forms genuinely don't repeat. All checks passed on the first
 run. See "Sixth verification result" below.
 
+**RLD/RRD are now implemented** too — reachable via every SRC prefix group's
+own selector byte `0x10`/`0x11` (never the base table), rotating the 12-bit
+`{A_lo,M_hi,M_lo}` unit one nibble left or right. Verified with a third
+dedicated standalone test (`tb_rldtest.cpp`) exercising both opcodes through
+two *different* addressing forms — `(HL)` and a direct 16-bit address — to
+prove the shared `mem_mode` decode wiring genuinely generalizes rather than
+happening to work for whichever form was implemented first. All checks
+passed on the first run. See "Seventh verification result" below.
+
 ## Why this exists
 
 NMK004 (used by mustang, bioship, vandyke, blkheart, acrobatm, strahl, tdragon,
@@ -206,8 +215,20 @@ instruction when their loop condition holds, mirroring the reference's own
 `m_pc.w.l -= 2` exactly rather than looping internally. See "Sixth verification
 result" below.
 
+**Phase 5 (RLD/RRD, done):** reachable via every SRC prefix group's own
+selector byte `0x10`/`0x11` — `(gg)`, `(mn)`, `($FF00+n)`, `(ix+d)`/`(iy+d)`,
+`(HL+A)` — never the base table, resolved through the same `pfx_is_src`
+level-2 decode branch every other SRC-side op (`INC`/`DEC`/rotate-shift/etc.)
+already shares. `A` isn't a decoded operand in this group's own encoding
+(there's no room for a second operand slot alongside the memory one), so
+`EXECUTE` reads/writes it directly — the same reasoning Phase 4's `LDI*`/
+`CPI*` already established for `DE`. Rotates the 12-bit `{A_lo,M_hi,M_lo}`
+unit one nibble left (`RLD`) or right (`RRD`), reusing the existing `szp8()`
+helper for the flag formula (`F = (F&(IF|CF)) | SZP[new A]`, exactly
+mirroring the reference). See "Seventh verification result" below.
+
 **Deferred (not yet needed to make further verified progress — add once the oracle
-trace shows where):** `MUL`/`DIV`, `RLD`/`RRD`, `LDAR`, `CALLR`, `SWI`. `LDA` and
+trace shows where):** `MUL`/`DIV`, `LDAR`, `CALLR`, `SWI`. `LDA` and
 `TSET` are **dead opcode space in MAME
 itself** — decode() recognizes them but the reference model's own execute-switch
 has no handler (commented out, would `fatalerror` if ever actually reached),
@@ -381,6 +402,10 @@ against a real MAME oracle trace before trusting anything downstream):
   which also documents each byte's derivation) proving
   `LDI`/`LDIR`/`LDD`/`LDDR`/`CPI`/`CPIR`/`CPD`/`CPDR` end-to-end — see
   "Sixth verification result" below.
+- `sim/rtl/tlcs90/tb_rldtest.cpp` + `gen_rldtest_rom.py` + `Makefile`
+  (`make run-rldtest`) — standalone CPU-core-only Verilator testbench with
+  a synthetic 2-part program proving `RLD`/`RRD` end-to-end through two
+  different addressing forms — see "Seventh verification result" below.
 
 ### First verification result (base table only)
 
@@ -710,9 +735,48 @@ interrupt/timer and bank-extension milestones. Re-confirmed all four
 existing regressions (175-checkpoint oracle match, 211-fire interrupt
 self-test, and the bank-extension test) unchanged afterward.
 
-Next step: `RLD`/`RRD`, `MUL`/`DIV`, `LDAR`, `CALLR`, `SWI`, and the
-memory-operand forms of `EX` are the remaining CPU-core gaps; getting
-NMK004 actually driving real YM2203/OKI hardware needs system-level
-integration (a real 68000 + shared RAM + `jt12`/`jt6295` cores) to get past
-the host-handshake boundary this tier's CPU-only testbench can't cross on
-its own.
+### Seventh verification result (RLD/RRD)
+
+Implemented `RLD`/`RRD` (see "Phase 5" above). Same situation as the prior
+two milestones — no currently-known game's boot trace reaches these
+opcodes — so a fourth dedicated standalone test, `tb_rldtest.cpp` (generated
+from `gen_rldtest_rom.py`), was needed. This one deliberately exercises the
+two opcodes through *different* addressing forms rather than reusing the
+same one twice, since `RLD`/`RRD`'s decode entry is a single `pfx_is_src`
+branch shared by all five SRC prefix groups (`(gg)`, `(mn)`, `($FF00+n)`,
+`(ix+d)`/`(iy+d)`, `(HL+A)`) — a bug specific to how one particular group
+resolves its address (e.g. a `pfx_addr` composition mistake in the `(mn)`
+group's own decode) wouldn't necessarily show up if the test only ever
+went through `(gg)`:
+
+```
+OK:   RLD (HL): M[0x2000] after = 0x5F
+OK:   RLD (HL): A after (observed via $FFE0) = 0x3A
+OK:   RLD (HL): F after = 0x05
+OK:   RRD (0x2100): M[0x2100] after = 0xC9
+OK:   RRD (0x2100): A after (observed via $FFE1) = 0x71
+OK:   RRD (0x2100): F after = 0x04
+tb_rldtest: PASS (all checks)
+```
+
+`RLD (HL)` (the `(gg)` register-indirect form) and `RRD (0x2100)` (the
+`(mn)` direct-address form) both check the memory-side result directly
+(read back from the flat memory model, no observe-write needed since the
+CPU already wrote it there), the register-side result (`A`, via the same
+`LD ($FF00+n),A` observe-write technique established earlier), and `F` (via
+the `PUSH AF`/`POP HL`/`LD (nn),HL` trick `tb_blocktest.cpp` introduced,
+since `F` has no other path to memory) — with the two tests deliberately
+using a preceding `SCF`/`RCF` pair to put `CF` in a *different* known state
+each time (1 then 0), proving the preserved-`CF`-bit half of the flag
+formula is genuinely carried through rather than coincidentally always
+landing on the same value either test would pass with by accident.
+
+All checks passed on the first run. Re-confirmed all five existing
+regressions (175-checkpoint oracle match, 211-fire interrupt self-test, the
+bank-extension test, and the block-transfer test) unchanged afterward.
+
+Next step: `MUL`/`DIV`, `LDAR`, `CALLR`, `SWI`, and the memory-operand forms
+of `EX` are the remaining CPU-core gaps; getting NMK004 actually driving
+real YM2203/OKI hardware needs system-level integration (a real 68000 +
+shared RAM + `jt12`/`jt6295` cores) to get past the host-handshake boundary
+this tier's CPU-only testbench can't cross on its own.

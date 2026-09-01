@@ -16,12 +16,15 @@
 #                      # LDI/LDIR/LDD/LDDR/CPI/CPIR/CPD/CPDR end-to-end,
 #                      # since no currently-known game's boot trace reaches
 #                      # these opcodes (see docs/tier2-tlcs90.md)
+#   make run-rldtest  # standalone CPU core + synthetic program: proves
+#                      # RLD/RRD end-to-end via two different addressing
+#                      # forms (see docs/tier2-tlcs90.md)
 #   make clean
 
 CORE_DIR := ../../../rtl/tlcs90
 OBJ_DIR := obj_dir
 
-.PHONY: all run run-nmk004 run-irqtest run-banktest run-blocktest clean
+.PHONY: all run run-nmk004 run-irqtest run-banktest run-blocktest run-rldtest clean
 
 all: run
 
@@ -91,5 +94,18 @@ $(BLOCKTEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_blocktest.cpp
 run-blocktest: $(BLOCKTEST_DIR)/Vtlcs90
 	./$(BLOCKTEST_DIR)/Vtlcs90
 
+RLDTEST_DIR := obj_dir_rldtest
+
+$(RLDTEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_rldtest.cpp
+	verilator --cc --exe --build -Wall -Wno-fatal --top-module tlcs90 \
+		-y $(CORE_DIR) \
+		$(CORE_DIR)/tlcs90.sv \
+		tb_rldtest.cpp \
+		-o Vtlcs90 \
+		--Mdir $(RLDTEST_DIR)
+
+run-rldtest: $(RLDTEST_DIR)/Vtlcs90
+	./$(RLDTEST_DIR)/Vtlcs90
+
 clean:
-	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace
+	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) $(RLDTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace
