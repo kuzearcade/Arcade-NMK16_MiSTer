@@ -23,6 +23,23 @@
 --                         rely on -seconds_to_run instead)
 --   NMKTRACE_REGS        comma-separated register names to snapshot every
 --                         frame, e.g. "PC,SP" (optional)
+--   NMKTRACE_PC_PERIOD   if set (cycle count), also samples PC via
+--                         emu.register_periodic, throttled to at most once
+--                         per this many cycles. Emits 'R <cycle> PCFINE
+--                         <value>' lines. Requires NMKTRACE_CPU to be set.
+--                         CAVEAT, found the hard way: for this driver,
+--                         register_periodic's underlying callback did not
+--                         fire any more often than once per real frame
+--                         (~177920 cycles) regardless of how small a period
+--                         was requested — it is NOT a reliable way to get
+--                         sub-frame PC resolution for this game. For
+--                         genuine fine-grained control-flow debugging, use
+--                         MAME's own debugger instead (`-debug -debuglog`,
+--                         `wpset`/`bpset`/`trace` commands, output read
+--                         from debug.log) — see docs/tier1-bjtwin.md's
+--                         "Sprite rendering verification" section for a
+--                         worked example that proved decisive where this
+--                         env var did not.
 
 local out_path = os.getenv("NMKTRACE_OUT")
 if not out_path then
@@ -38,6 +55,7 @@ local screen_tag     = os.getenv("NMKTRACE_SCREEN") or ":screen"
 local clock_hz       = tonumber(os.getenv("NMKTRACE_CLOCK_HZ") or "8000000")
 local max_frames     = tonumber(os.getenv("NMKTRACE_MAX_FRAMES") or "0")
 local reg_list_raw   = os.getenv("NMKTRACE_REGS")
+local pc_period      = tonumber(os.getenv("NMKTRACE_PC_PERIOD") or "0")
 
 local reg_names = {}
 if reg_list_raw then
@@ -47,6 +65,8 @@ if reg_list_raw then
 end
 
 local out = assert(io.open(out_path, "w"))
+local out_closed = false -- register_periodic/frame_done can still fire briefly
+                          -- after out:close() below; guard writes on this.
 
 -- ---------------------------------------------------------------------
 -- Pure-Lua CRC32 (IEEE 802.3 / zlib polynomial), so frame checksums are
@@ -149,10 +169,32 @@ emu.register_frame_done(function()
 
 	if max_frames > 0 and frame_count >= max_frames then
 		print(string.format("[nmktrace] reached NMKTRACE_MAX_FRAMES=%d, exiting", max_frames))
+		out_closed = true
 		out:close()
 		manager.machine:exit()
 	end
 end)
+
+-- ---------------------------------------------------------------------
+-- Fine-grained PC sampling (optional, see NMKTRACE_PC_PERIOD above)
+-- ---------------------------------------------------------------------
+if pc_period > 0 and cpu_tag then
+	local cpu = manager.machine.devices[cpu_tag]
+	if cpu then
+		local pc_state = cpu.state["PC"]
+		local last_sample_cycle = -pc_period
+		emu.register_periodic(function()
+			if out_closed then return end
+			local now = cycle_ts()
+			if now - last_sample_cycle >= pc_period then
+				last_sample_cycle = now
+				out:write(string.format("R %d PCFINE %x\n", now, pc_state.value))
+				out:flush()
+			end
+		end)
+		print(string.format("[nmktrace] fine PC sampling every >=%d cycles", pc_period))
+	end
+end
 
 -- No Lua-exposed machine-exit/stop notifier exists in this MAME build (only
 -- register_prestart/frame_done/sound_update/periodic are bound) — the trace
