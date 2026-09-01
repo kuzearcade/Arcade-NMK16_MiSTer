@@ -1,9 +1,14 @@
 # Tier 2 — TLCS-90 CPU core (NMK004 sound MCU)
 
-Status: **design + first RTL slice in progress.** Register file, flag semantics, and
-the fetch/decode/execute skeleton are being built against the ISA reference below.
-No oracle-verified execution yet — that's the immediate next step once a first
-instruction subset is wired up.
+Status: **RTL in progress, real verified execution.** Register file, flags, condition
+codes, and a two-level fetch/decode/execute FSM are built and cover the full base
+opcode table plus all six prefixed opcode groups (register-indirect "(gg)" and
+full-16-bit-direct/short-address "(mn)"/"($FF00+n)" addressing for every register).
+Verified against a real MAME oracle: **86 real instructions match MAME's own CPU core
+exactly**, running the actual NMK004 boot ROM chained into `mustang`'s real firmware —
+covering both RAM-clear loops and the full YM2203 register-table init loop — before
+diverging at the first not-yet-implemented addressing mode (`(HL+A)`-indexed, a
+documented deferred case, not a surprise). See "Second verification result" below.
 
 ## Why this exists
 
@@ -108,24 +113,40 @@ via an `OP_16` flag bit rather than a true prefix byte) is large. Phased by what
 real boot trace exercises first (captured via MAME's own debugger `trace` command
 against `:nmk004:mcu` — see "Verification" below) vs. deferred:
 
-**Phase 1 (this milestone's target — covers the entire captured boot trace):**
-`NOP`, `LD`/`LDW` (register/immediate/direct/indirect forms — by far the most
-opcode space), `EX`/`EXX`, `INC`/`DEC` (r8/r16/`INCW`/`DECW` memory forms),
-`DJNZ` (both the 8-bit-B and 16-bit-BC forms — both seen in the boot trace's RAM-
-clear loops), `ADD`/`SUB`/`CP`/`AND`/`OR`/`XOR`/`ADC`/`SBC`, `JP`/`JR`/`CALL`/
-`CALLR`/`RET`/`RETI` (all condition-code gated forms), `PUSH`/`POP`, `DI`/`EI`
-(with the delayed-EI one-instruction latency), `HALT`, `RCF`/`SCF`/`CCF`/`CPL`/
-`NEG`/`DAA`, `BIT`/`SET`/`RES`.
+**Phase 1 (base table, done):** `NOP`, `LD`/`LDW` (register/immediate/direct/
+indirect forms — by far the most opcode space), `EX`/`EXX`, `INC`/`DEC` (r8/r16/
+`INCW`/`DECW` memory forms), `DJNZ` (both the 8-bit-B and 16-bit-BC forms — both
+seen in the boot trace's RAM-clear loops), `ADD`/`SUB`/`CP`/`AND`/`OR`/`XOR`/`ADC`/
+`SBC`, `JP`/`JR`/`CALL`/`CALLR`/`RET`/`RETI` (all condition-code gated forms),
+`PUSH`/`POP`, `DI`/`EI` (with the delayed-EI one-instruction latency), `HALT`,
+`RCF`/`SCF`/`CCF`/`CPL`/`NEG`/`DAA`, `BIT`/`SET`/`RES`, `INCX`/`DECX`.
 
-**Deferred (not yet seen in the captured trace, add once needed):** `MUL`/`DIV`,
-`RLC`/`RRC`/`RL`/`RR`/`SLA`/`SRA`/`SLL`/`SRL`/`RLD`/`RRD`, block transfer
-`LDI`/`LDIR`/`LDD`/`LDDR`/`CPI`/`CPIR`/`CPD`/`CPDR`, `INCX`/`DECX`, `SWI`.
-`LDA` and `TSET` are **dead opcode space in MAME itself** — decode() recognizes
-them but the reference model's own execute-switch has no handler (commented out,
-would `fatalerror` if ever actually reached), meaning no MAME oracle trace can ever
-exercise or validate them. Implementing them with the obvious/documented semantics
-is safe (real silicon surely supports them) but they can never be cross-checked —
-flagged as a permanent verification blind spot, not a bug to chase.
+**Phase 2 (all six prefixed opcode groups, done):** register-indirect `(gg)` and
+full-16-bit-direct/short-address `(mn)`/`($FF00+n)` addressing extended to *every*
+register (not just the A/HL-only short forms Phase 1 covers) for `LD`/`ADD`-family/
+`INC`/`DEC`/`INCW`/`DECW`/rotate-shift/`BIT`/`SET`/`RES`, plus register-indirect and
+direct-address `JP`/`CALL`. Implemented as a second decode level: once the base
+opcode byte identifies one of `0xe0-0xe6`/`0xe3`/`0xe7`/`0xe8-0xee`/`0xeb`/`0xef`,
+the FSM fetches whatever the group needs (a register code is already embedded in
+the opcode byte for the `(gg)` groups; the `(mn)`/`($FF00+n)` groups fetch an
+address first) then the operation-selector byte, and a second combinational table
+(mirroring the first) resolves the same op/mode/register fields the base table
+produces directly — the rest of the FSM doesn't know or care which table an
+instruction came from. `EX (gg)/(mn)/($FF00+n),rr` (the memory-operand forms of
+`EX` — register-only `EX` is implemented) is the one op in this opcode space still
+deferred, alongside everything below.
+
+**Deferred (not yet needed to make further verified progress — add once the oracle
+trace shows where):** `MUL`/`DIV`, `RLD`/`RRD`, `MR16D8`/`MR16R8` addressing (the
+`(ix+d)`/`(iy+d)`/`(HL+A)` forms, opcode groups `0xf0-0xf7`), block transfer
+`LDI`/`LDIR`/`LDD`/`LDDR`/`CPI`/`CPIR`/`CPD`/`CPDR`, `LDAR`, `CALLR`, `SWI`, IX/IY
+bank extension via `BX`/`BY`. `LDA` and `TSET` are **dead opcode space in MAME
+itself** — decode() recognizes them but the reference model's own execute-switch
+has no handler (commented out, would `fatalerror` if ever actually reached),
+meaning no MAME oracle trace can ever exercise or validate them. Implementing them
+with the obvious/documented semantics is safe (real silicon surely supports them)
+but they can never be cross-checked — flagged as a permanent verification blind
+spot, not a bug to chase.
 
 ### Flag-formula highlights worth getting exactly right (see reference for full detail)
 
@@ -238,24 +259,20 @@ against a real MAME oracle trace before trusting anything downstream):
 
 ## What's built so far
 
-- `rtl/tlcs90/tlcs90.sv` — a real, working CPU core covering the *base*
-  (non-prefixed) opcode table: register file (BC/DE/HL/AF + full shadow
-  set with the AF2-shared-IF quirk), flags with the correct non-Z80 bit
-  layout, condition codes, and a FETCH→DECODE→(operand bytes)→READ→
-  EXECUTE→WRITE state machine implementing NOP/HALT/DI/EI/EX(register-
-  only)/EXX/DAA/RCF/SCF/CCF/CPL/NEG/DJNZ(both forms)/JP/JR(cc)/CALL/RET/
-  RETI/LD(register, immediate, short-address forms)/PUSH/POP/ADD/ADC/SUB/
-  SBC/AND/XOR/OR/CP(A and HL forms)/INC/DEC/INCX/DECX/INCW/DECW/rotate-
-  shift(A only)/BIT/SET/RES — see the module's own header for the
-  authoritative scope/deferred list, mirrored in this doc's "Instruction
-  set" section above.
+- `rtl/tlcs90/tlcs90.sv` — a real, working CPU core covering the base opcode
+  table plus all six prefixed opcode groups (see "Instruction set" above):
+  register file (BC/DE/HL/AF + full shadow set with the AF2-shared-IF
+  quirk), flags with the correct non-Z80 bit layout, condition codes, and a
+  two-level FETCH→DECODE→(operand/prefix bytes)→READ→EXECUTE→WRITE state
+  machine. See the module's own header for the authoritative scope/deferred
+  list, mirrored in this doc's "Instruction set" section above.
 - `sim/rtl/tlcs90/tb_tlcs90.cpp` + `Makefile` — Verilator testbench. Loads
   the real `nmk004.bin` (internal boot ROM, from the shared `nmk004.zip`
   device ROM) and `mustang`'s real external program (`90058-7`), runs the
   core, and logs every instruction boundary's PC to `tlcs90_rtl.trace` for
   direct comparison against a MAME oracle trace.
 
-### First verification result
+### First verification result (base table only)
 
 Captured a real oracle trace via MAME's own debugger (`trace file,:nmk004:mcu`
 + `go` + `exit`, run against `mustang` with `mame_roms/` — see "Verification
@@ -268,23 +285,62 @@ matched 16 of 6982 compared instructions before first mismatch
   oracle: ....(same through 0103).......................... 0107 010A ...
 ```
 
-**17 real instructions (indices 0-16 inclusive) match MAME's own CPU core
-exactly, PC-for-PC** — the full implemented boot sequence: `NOP`, `LD D,n`,
-`LD SP,nn`, an unconditional `JP`, and 13 consecutive `LD ($FF00+n),n`
-short-address writes initializing `BX`/`BY`/`P01CR`/`P2CR`/`P3CR`/`P4CR`/
-`P67CR`/`P8CR`/`TRUN`/`TMOD`/`TCLK`/`TFFCR`. The divergence at instruction
-17 is exactly the predicted one: PC=0x103 is `LD HL,($EFFE)`, a full
-16-bit-direct-address form from the deferred prefixed opcode group (MAME's
-oracle jumps 0x103→0x107, a 4-byte instruction; the RTL, correctly
-recognizing it doesn't implement that opcode, decodes it as unknown and
-falls out of sync one byte at a time from there). This is real, if
-narrow-scope, verified evidence the core's fetch/decode/execute
-architecture, register file, flag formulas, and condition-code logic are
-all correct for everything currently implemented — a from-scratch CPU
-core with zero prior reference RTL to build from, executing a real
-firmware boot sequence identically to MAME's own reference model.
+**17 real instructions match MAME's own CPU core exactly, PC-for-PC** — the
+full base-table boot sequence: `NOP`, `LD D,n`, `LD SP,nn`, an unconditional
+`JP`, and 13 consecutive `LD ($FF00+n),n` short-address writes. The
+divergence at instruction 17 was exactly the predicted one: PC=0x103 is
+`LD HL,($EFFE)`, a full 16-bit-direct-address form from a not-yet-implemented
+prefixed opcode group.
 
-Next step: implement the 0xe0-0xe6/0xe7/0xe8-0xee/0xeb/0xef prefixed
-opcode groups (register-indirect "(gg)" and full-16-bit-direct "(mn)"
-addressing) to get past this divergence point and reach further into real
-firmware execution.
+### Second verification result (prefixed groups added)
+
+After implementing all six prefixed opcode groups, re-diffed against a fresh,
+longer oracle capture. MAME's `trace` command **collapses repeated loop
+bodies** in its output (`(loops for N instructions)` summary lines instead of
+literally repeating them) — a straight positional diff produces false
+mismatches right at every loop boundary, so the comparison instead checks
+that the (collapsed) oracle PC sequence appears as an **exact ordered
+subsequence** of the RTL's fully-unrolled trace, which correctly tolerates
+the collapsed regions while still catching any real divergence:
+
+```
+matched 86 oracle checkpoints as an exact ordered subsequence
+stopped at oracle checkpoint 87 (PC=0x017D), not found in the remaining trace
+last matched checkpoint: PC=0x017B
+```
+
+**86 real instructions match MAME's own CPU core exactly** — both the 2048-
+and 256-byte RAM-clear loops (each confirmed to run the exact expected
+iteration count) and the complete YM2203 register-table init loop (420
+collapsed iterations in the oracle, all correctly traversed), using `LD A,
+(HL)`, `LD ($F800/$F801),A` (16-bit direct address), and `CP (HL),n`
+(register-indirect) — real exercise of every one of the six new prefix
+groups' addressing paths, not just the ones the divergence point happened to
+land on. The divergence at PC=0x17B is `XOR A,(HL+A)` — a `MR16R8`-indexed
+form from the still-deferred `0xf0-0xf7` opcode group, exactly matching the
+documented scope, not a new gap discovered by surprise.
+
+**A real, reproducible Verilator bug was found and fixed along the way,
+not just a project bug**: a `resolve_direct(mode, rsel)` helper function —
+wrapping a `case` that dispatches to `r8_read()`/`r16_read()` — silently
+returned `0x0000` instead of the correct register value specifically when
+called from inside a ternary on the right-hand side of a non-blocking
+assignment (`val1 <= cond ? resolve_direct(...) : r1;`). Caught by directly
+comparing a separately-exposed live `r16_read()` debug signal (correct)
+against `val1` moments after the same non-blocking assignment fired
+(wrong) — same inputs, same cycle, two different answers depending only on
+which call path computed them. Root cause not pinned down further (Verilator
+composing one `function automatic`'s case-dispatch return value through
+another in that specific expression position, as best as could be
+determined — not anything wrong with `r8_read()`/`r16_read()` themselves,
+confirmed independently correct). Fixed by inlining the same three-way
+mode selection directly at both call sites instead of routing through the
+wrapper function — measurably fixes it, so kept, rather than chasing the
+simulator bug further. This is exactly the class of bug the "verify against
+a real MAME oracle, not just clean compilation" methodology exists to catch
+— a register that silently reads back the wrong value has no reason to show
+up as a lint warning or a compile error.
+
+Next step: `MR16D8`/`MR16R8` addressing (`(ix+d)`/`(iy+d)`/`(HL+A)`, opcode
+groups `0xf0-0xf7`) to get past this divergence point; block transfer and a
+real peripheral/timer/interrupt module are the next tier of work after that.

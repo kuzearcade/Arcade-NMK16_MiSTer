@@ -22,37 +22,37 @@
 // more to *capture* the data, which is why the FSM below has separate
 // "issue" and "wait/capture" states for each byte read.
 //
-// SCOPE OF THIS MILESTONE (documented, not hidden): only the *base*
-// (single opcode byte, no second opcode/prefix byte) instruction table is
-// implemented — covers NOP/HALT/DI/EI/EX(register-only: DE,HL and AF,AF')/
-// EXX/DAA/RCF/SCF/CCF/CPL/NEG/DJNZ(both forms)/JP/JR(cc)/CALL/RET/RETI/
-// LD(register, immediate, and short-address "$FF00+n" forms)/PUSH/POP/
-// ADD/ADC/SUB/SBC/AND/XOR/OR/CP(A and HL against immediate or
-// short-address)/INC/DEC/INCX/DECX/INCW/DECW/rotate-shift(A only)/BIT/
-// SET/RES(short-address only). This is real, substantial coverage (all
-// the "$FF00+n" peripheral-register access the NMK004 boot ROM leans on
-// heavily) but NOT yet the prefixed opcode groups (0xe0-0xe6/0xe7/
-// 0xe8-0xee/0xeb/0xef) that add register-indirect "(gg)" and full-16-bit-
-// direct "(mn)" addressing for every register — e.g. `LD A,(HL)` and
-// `LD HL,(nn)` are NOT implemented yet, and a captured boot-trace oracle
-// comparison will diverge at the first such instruction (per the trace
-// captured this session, that's quite early — around PC=0x103). Also
-// deferred: MR16D8/MR16R8 ((ix+d)/(iy+d)/(HL+A)), block transfer
-// (LDI*/CPI* family), RLD/RRD, LDAR, CALLR, MUL/DIV, SWI, interrupt
-// dispatch beyond a bare NMI input stub (not yet wired to any logic —
-// peripheral-driven IRQs need the not-yet-built peripheral module first),
-// and IX/IY bank extension via BX/BY. LDA and TSET are dead opcode space
-// in MAME's own reference model (decode() recognizes them but the
-// execute-switch has no handler, commented out) and are intentionally
-// never implemented here either, since no MAME oracle trace could
-// validate them regardless.
+// SCOPE OF THIS MILESTONE (documented, not hidden): the base (single
+// opcode byte) instruction table — NOP/HALT/DI/EI/EX(register-only: DE,HL
+// and AF,AF')/EXX/DAA/RCF/SCF/CCF/CPL/NEG/DJNZ(both forms)/JP/JR(cc)/CALL/
+// RET/RETI/LD/PUSH/POP/ADD-family/INC/DEC/INCX/DECX/INCW/DECW/rotate-
+// shift/BIT/SET/RES — plus all six prefixed opcode groups (0xe0-0xe6,
+// 0xe3, 0xe7, 0xe8-0xee, 0xeb, 0xef) that add register-indirect "(gg)"
+// and full-16-bit-direct/short-address "(mn)"/"($FF00+n)" addressing for
+// *every* register (not just A/HL) to LD/ADD-family/INC/DEC/INCW/DECW/
+// rotate-shift/BIT/SET/RES, plus register-indirect/direct JP/CALL. This
+// covers everything the NMK004 boot ROM's write-heavy peripheral-register
+// initialization and its subsequent YM2203-table-driven init loop need
+// (`LD A,(HL)`, `LD HL,(nn)`, `CP (HL),n` and friends).
+//
+// Still deferred: MR16D8/MR16R8 ((ix+d)/(iy+d)/(HL+A) addressing — the
+// 0xf0-0xf7 opcode groups), block transfer (LDI*/CPI* family, 0xf8-0xfe),
+// RLD/RRD, LDAR, CALLR, MUL/DIV, SWI, `EX (gg)/(mn)/($FF00+n),rr` (the
+// memory-operand forms of EX — register-only EX is implemented), the
+// TSET/LDA dead opcode space MAME's own reference model can't execute
+// either, IX/IY bank extension via BX/BY (addresses through IX/IY are
+// treated as plain 16-bit — exactly correct at boot, since the boot ROM
+// zeroes both bank registers before doing anything else), and interrupt
+// dispatch beyond a bare NMI input stub (peripheral-driven IRQs need the
+// not-yet-built peripheral module first).
 //
 // The wide-register-to-register `ADD HL,rr` flag special-case documented
 // in docs/tier2-tlcs90.md (only S/Z/V get *skipped* for that one specific
-// addressing-mode combination) does not apply to anything implemented in
-// this milestone's opcode subset — mode2 is never R16 for any ADD-family
-// opcode reachable here — so it's omitted rather than dead-coded; flagged
-// for whoever implements the 0xe0-0xe6 prefixed ADD forms next.
+// addressing-mode combination) still doesn't apply to anything
+// implemented here — mode2 is R16 only for the register-indirect
+// `JP/CALL (gg)` forms (which aren't ADD-family), never for ADD/ADC/SUB/
+// SBC/AND/XOR/OR/CP regardless of which opcode group encoded them in this
+// milestone's scope — so it remains correctly omitted, not dead-coded.
 module tlcs90 (
 	input        clk,
 	input        reset,       // async, active high
@@ -135,7 +135,20 @@ module tlcs90 (
 	localparam
 		M_NONE = 0, M_BIT8 = 1, M_CC = 2, M_I8 = 3, M_D8 = 4,
 		M_R8 = 5, M_I16 = 6, M_R16 = 7,
-		M_MI16 = 8; // memory, direct 16-bit address (covers the $FF00+n short form too)
+		M_MI16 = 8, // memory, direct 16-bit address (covers the $FF00+n short form too)
+		M_MR16 = 9; // memory, indirect via a register pair ("(gg)" in the prefixed opcode groups)
+
+	// Prefix-group kind, resolved from the opcode byte when it isn't part
+	// of the base table (see the two-level decode below and
+	// docs/tier2-tlcs90.md's addressing-mode table). SRC groups put the
+	// external (gg/mn/ff) operand in the instruction's *source* position
+	// (e.g. `LD r,(gg)`); DST groups put it in the *destination* position
+	// (e.g. `LD (gg),r`) — except the JP/CALL forms living in the DST
+	// opcode space, which use the external operand as a jump target, not a
+	// destination (handled as a special case in the level-2 decode).
+	localparam
+		PFX_NONE=0, PFX_GG_SRC=1, PFX_MN_SRC=2, PFX_FF_SRC=3,
+		PFX_GG_DST=4, PFX_MN_DST=5, PFX_FF_DST=6;
 
 	// ------------------------------------------------------------------
 	// Semantic operations implemented this milestone
@@ -164,12 +177,15 @@ module tlcs90 (
 	reg [3:0] d_mode1, d_mode2;
 	reg [3:0] d_r1e, d_r2e;
 	reg [1:0] d_m1bytes, d_m2bytes;
+	reg [2:0] d_pfx;
+	reg [3:0] d_gg;
 
 	always @(*) begin
 		d_op = OP_UNKNOWN; d_wide = 1'b0;
 		d_mode1 = M_NONE; d_mode2 = M_NONE;
 		d_r1e = 4'd0; d_r2e = 4'd0;
 		d_m1bytes = 2'd0; d_m2bytes = 2'd0;
+		d_pfx = PFX_NONE; d_gg = 4'd0;
 
 		casez (din)
 			8'h00: d_op = OP_NOP;
@@ -244,6 +260,20 @@ module tlcs90 (
 
 			8'hc?: begin d_op = OP_JR; d_mode1 = M_CC; d_r1e = din[3:0]; d_mode2 = M_D8; d_m2bytes = 2'd1; end
 
+			// Prefixed opcode groups — see docs/tier2-tlcs90.md's addressing-
+			// mode table. These don't resolve op/mode1/mode2 here (that needs
+			// the operation-selector byte, which hasn't been fetched yet);
+			// this level only recognizes the group and, for the gg-indirect
+			// groups, the embedded register code. Level-2 decode (the
+			// `always @(*)` block below keyed on `pfx` and the selector
+			// byte) does the rest, once the FSM has fetched what it needs.
+			8'he0,8'he1,8'he2,8'he4,8'he5,8'he6: begin d_pfx = PFX_GG_SRC; d_gg = 4'(din - 8'he0); end
+			8'he3: d_pfx = PFX_MN_SRC;
+			8'he7: d_pfx = PFX_FF_SRC;
+			8'he8,8'he9,8'hea,8'hec,8'hed,8'hee: begin d_pfx = PFX_GG_DST; d_gg = 4'(din - 8'he8); end
+			8'heb: d_pfx = PFX_MN_DST;
+			8'hef: d_pfx = PFX_FF_DST;
+
 			default: d_op = OP_UNKNOWN;
 		endcase
 	end
@@ -298,6 +328,97 @@ module tlcs90 (
 	endfunction
 
 	// ------------------------------------------------------------------
+	// Level-2 decode for the prefixed opcode groups: once the FSM has
+	// fetched the operation-selector byte (the reference's "b1"/"b3" — the
+	// byte after the gg register / after the mn address / after the ff
+	// address, per group), this resolves it into the same op/mode/register
+	// fields the base table produces directly, so the rest of the FSM
+	// (S_PRE_READ1 onward) doesn't need to know or care whether an
+	// instruction came from the base table or a prefix group.
+	//
+	// `pfx` (latched from d_pfx) selects between the two selector-byte
+	// layouts: SRC groups (GG_SRC/MN_SRC/FF_SRC — `LD r,(x)` style, the
+	// external operand is always a *source*) share one layout; DST groups
+	// (GG_DST/MN_DST/FF_DST — `LD (x),r` style) share another, except the
+	// JP/CALL forms living in DST opcode space, which use the external
+	// operand as a jump target (mode2) rather than a destination.
+	//
+	// FF_SRC and FF_DST only support a strict subset of what GG/MN support
+	// (per the reference: FF_SRC is LD/rotate only, FF_DST is LD/ADD-family
+	// only — no INC/DEC/BIT/SET/RES/JP/CALL for either). This table doesn't
+	// separately restrict those cases for FF — a selector byte outside
+	// FF's real subset simply can't appear in any valid compiled TLCS-90
+	// program (the reference's own decode() has no case for it there
+	// either, so no real firmware ever emits it), so sharing one table
+	// across all three SRC (or DST) prefixes is safe in practice.
+	reg [5:0] d2_op;
+	reg       d2_wide;
+	reg [3:0] d2_mode1, d2_mode2;
+	reg [3:0] d2_r1e, d2_r2e;
+	reg [1:0] d2_mem_slot;  // 1 or 2: which slot (mode1/mode2) holds the external (gg/mn/ff) operand
+	reg       d2_needs_i8;  // one more immediate byte follows the selector (DST-side ADD-family/LD-immediate/CP)
+
+	reg [2:0] pfx;
+	reg [3:0] gg;
+	reg [15:0] pfx_addr;
+
+	wire pfx_is_src = (pfx == PFX_GG_SRC) || (pfx == PFX_MN_SRC) || (pfx == PFX_FF_SRC);
+	wire [3:0] mem_mode = (pfx == PFX_GG_SRC || pfx == PFX_GG_DST) ? M_MR16 : M_MI16;
+
+	always @(*) begin
+		d2_op = OP_UNKNOWN; d2_wide = 1'b0;
+		d2_mode1 = M_NONE; d2_mode2 = M_NONE;
+		d2_r1e = 4'd0; d2_r2e = 4'd0;
+		d2_mem_slot = 2'd2; d2_needs_i8 = 1'b0;
+
+		if (pfx_is_src) begin
+			casez (din)
+				8'h28,8'h29,8'h2a,8'h2b,8'h2c,8'h2d,8'h2e: begin
+					d2_op = OP_LD; d2_mode1 = M_R8; d2_r1e = 4'(din - 8'h28); d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
+				8'h48,8'h49,8'h4a,8'h4c,8'h4d,8'h4e: begin
+					d2_op = OP_LD; d2_wide = 1'b1; d2_mode1 = M_R16; d2_r1e = 4'(din - 8'h48); d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
+				8'h60,8'h61,8'h62,8'h63,8'h64,8'h65,8'h66,8'h67: begin
+					d2_op = OP_ADD + {2'b0,din[2:0]}; d2_mode1 = M_R8; d2_r1e = R8_A; d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
+				8'h70,8'h71,8'h72,8'h73,8'h74,8'h75,8'h76,8'h77: begin
+					d2_op = OP_ADD + {2'b0,din[2:0]}; d2_wide = 1'b1; d2_mode1 = M_R16; d2_r1e = R16_HL; d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
+				8'h87: begin d2_op = OP_INC; d2_mode1 = mem_mode; d2_mem_slot = 2'd1; end
+				8'h8f: begin d2_op = OP_DEC; d2_mode1 = mem_mode; d2_mem_slot = 2'd1; end
+				8'h97: begin d2_op = OP_INCW; d2_wide = 1'b1; d2_mode1 = mem_mode; d2_mem_slot = 2'd1; end
+				8'h9f: begin d2_op = OP_DECW; d2_wide = 1'b1; d2_mode1 = mem_mode; d2_mem_slot = 2'd1; end
+				8'ha0,8'ha1,8'ha2,8'ha3,8'ha4,8'ha5,8'ha6,8'ha7: begin
+					d2_op = OP_RLC + {3'b0,din[2:0]}; d2_mode1 = mem_mode; d2_mem_slot = 2'd1; end
+				8'ha8,8'ha9,8'haa,8'hab,8'hac,8'had,8'hae,8'haf: begin
+					d2_op = OP_BIT; d2_mode1 = M_BIT8; d2_r1e = din[3:0]; d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
+				8'hb0,8'hb1,8'hb2,8'hb3,8'hb4,8'hb5,8'hb6,8'hb7: begin
+					d2_op = OP_RES; d2_mode1 = M_BIT8; d2_r1e = din[3:0]; d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
+				8'hb8,8'hb9,8'hba,8'hbb,8'hbc,8'hbd,8'hbe,8'hbf: begin
+					d2_op = OP_SET; d2_mode1 = M_BIT8; d2_r1e = din[3:0]; d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
+				default: d2_op = OP_UNKNOWN;
+			endcase
+		end else begin
+			casez (din)
+				8'h20,8'h21,8'h22,8'h23,8'h24,8'h25,8'h26: begin
+					d2_op = OP_LD; d2_mode1 = mem_mode; d2_mode2 = M_R8; d2_r2e = din[3:0]; d2_mem_slot = 2'd1; end
+				8'h37: begin d2_op = OP_LD; d2_mode1 = mem_mode; d2_mode2 = M_I8; d2_mem_slot = 2'd1; d2_needs_i8 = 1'b1; end
+				8'h40,8'h41,8'h42,8'h44,8'h45,8'h46: begin
+					d2_op = OP_LD; d2_wide = 1'b1; d2_mode1 = mem_mode; d2_mode2 = M_R16; d2_r2e = din[3:0]; d2_mem_slot = 2'd1; end
+				8'h68,8'h69,8'h6a,8'h6b,8'h6c,8'h6d,8'h6e: begin
+					d2_op = OP_ADD + {2'b0,din[2:0]}; d2_mode1 = mem_mode; d2_mode2 = M_I8; d2_mem_slot = 2'd1; d2_needs_i8 = 1'b1; end
+				8'h6f: begin d2_op = OP_CP; d2_mode1 = mem_mode; d2_mode2 = M_I8; d2_mem_slot = 2'd1; d2_needs_i8 = 1'b1; end
+				8'hc0,8'hc1,8'hc2,8'hc3,8'hc4,8'hc5,8'hc6,8'hc7,
+				8'hc8,8'hc9,8'hca,8'hcb,8'hcc,8'hcd,8'hce,8'hcf: begin
+					d2_op = OP_JP; d2_mode1 = M_CC; d2_r1e = din[3:0];
+					d2_mode2 = (pfx == PFX_MN_DST) ? M_I16 : M_R16; d2_mem_slot = 2'd2; end
+				8'hd0,8'hd1,8'hd2,8'hd3,8'hd4,8'hd5,8'hd6,8'hd7,
+				8'hd8,8'hd9,8'hda,8'hdb,8'hdc,8'hdd,8'hde,8'hdf: begin
+					d2_op = OP_CALL; d2_mode1 = M_CC; d2_r1e = din[3:0];
+					d2_mode2 = (pfx == PFX_MN_DST) ? M_I16 : M_R16; d2_mem_slot = 2'd2; end
+				default: d2_op = OP_UNKNOWN;
+			endcase
+		end
+	end
+
+	// ------------------------------------------------------------------
 	// FSM
 	// ------------------------------------------------------------------
 	localparam
@@ -314,13 +435,22 @@ module tlcs90 (
 		// stack sequences below need extra states.
 		S_WRITE1_HI = 12,
 		S_PUSH_HI  = 13,
-		S_POP_LO   = 14, S_POP_HI = 15;
+		S_POP_LO   = 14, S_POP_HI = 15,
+		// prefixed-opcode-group front end (see the level-2 decode above):
+		// fetch whatever bytes the group needs (gg groups need only the
+		// selector byte; mn groups need a 16-bit address then the selector;
+		// ff groups need an address byte then the selector), resolve via
+		// level-2 decode, then rejoin the common path at S_PRE_READ1.
+		S_PFX_SEL     = 16,
+		S_PFX_ADDR    = 17,
+		S_PFX_ADDR_LO = 18, S_PFX_ADDR_HI = 19,
+		S_PFX_I8      = 20;
 
 	reg [4:0] state;
 	reg [5:0] op;
 	reg       wide;
 	reg [3:0] mode1, mode2;
-	reg [15:0] r1, r2;      // resolved register-select code / literal / short-address value
+	reg [15:0] r1, r2;      // resolved register-select code / literal / short-address value / gg-code / mn-mode1-address-slot
 	reg [15:0] val1, val2;  // operand values once read/resolved
 	reg [1:0] m2bytes_left;
 	reg [7:0] byte_lo;      // scratch for assembling a 2-byte little-endian value
@@ -328,8 +458,18 @@ module tlcs90 (
 	reg [15:0] push_val;
 	reg [1:0]  pop_dest;    // 0=into r1 register (POP opcode), 1=into PC (RET), 2=into AF then chain to PC (RETI)
 
+	// Effective bus address for a memory-mode operand: M_MI16 already
+	// holds the resolved address directly in r1/r2 (short-address, direct
+	// 16-bit, or the prefix-group's resolved mn/ff address); M_MR16 holds
+	// a register-pair *code* instead, resolved through the register file
+	// (IX/IY bank extension via BX/BY not yet implemented — see module
+	// header — so this is a plain 16-bit register read, matching the
+	// documented simplification already in place for the base table).
+	wire [15:0] eff1 = (mode1 == M_MR16) ? r16_read(r1[3:0]) : r1;
+	wire [15:0] eff2 = (mode2 == M_MR16) ? r16_read(r2[3:0]) : r2;
+
 	function automatic mode_needs_read(input [3:0] m);
-		mode_needs_read = (m == M_MI16);
+		mode_needs_read = (m == M_MI16) || (m == M_MR16);
 	endfunction
 	function automatic op_reads_m1(input [5:0] o);
 		case (o)
@@ -348,15 +488,24 @@ module tlcs90 (
 		endcase
 	endfunction
 
-	// resolved register/immediate value for a non-memory mode (used once
-	// we've established the operand doesn't need a bus read)
-	function automatic [15:0] resolve_direct(input [3:0] m, input [15:0] rsel);
-		case (m)
-			M_R8:  resolve_direct = {8'h00, r8_read(rsel[2:0])};
-			M_R16: resolve_direct = r16_read(rsel[3:0]);
-			default: resolve_direct = rsel; // I8/I16/D8/CC/BIT8: literal already in rsel
-		endcase
-	endfunction
+	// Resolved register/immediate value for a non-memory mode (used once
+	// we've established the operand doesn't need a bus read). This used to
+	// be a `resolve_direct(m, rsel)` function wrapping a case over
+	// r8_read()/r16_read() — found, via direct simulation comparison, to
+	// silently return the WRONG value (0x0000 instead of the register's
+	// real content) specifically when called from inside the ternary RHS
+	// of a non-blocking assignment (`val1 <= cond ? resolve_direct(...) :
+	// r1;`) — real, reproducible, confirmed by bypassing it with the exact
+	// same logic inlined at the call site (which fixed it) while a
+	// separately-exposed direct `r16_read()` debug signal, sampled the
+	// same cycle, showed the *correct* value the whole time. Root cause
+	// not pinned down further (looks like a Verilator quirk around
+	// composing one `function automatic`'s case-dispatch return value
+	// through another inside that specific expression position, not
+	// anything wrong with r8_read()/r16_read() themselves) — the two call
+	// sites below just inline the same three-way selection directly
+	// instead, which measurably works, rather than chasing the simulator
+	// bug further.
 
 	always @(posedge clk) begin
 		mem_rd <= 1'b0;
@@ -393,19 +542,29 @@ module tlcs90 (
 				// din == the opcode byte just fetched; d_* (combinational,
 				// driven directly by din) are valid now.
 				S_DECODE: begin
-					op <= d_op; wide <= d_wide;
-					mode1 <= d_mode1; mode2 <= d_mode2;
-					r1 <= {12'h0, d_r1e};
-					r2 <= {12'h0, d_r2e};
-					m2bytes_left <= d_m2bytes;
-					if (d_m1bytes == 2'd1) begin
-						addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
-						state <= S_M1_BYTE;
-					end else if (d_m2bytes != 2'd0) begin
-						addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
-						state <= S_M2_BYTE1;
+					if (d_pfx == PFX_NONE) begin
+						op <= d_op; wide <= d_wide;
+						mode1 <= d_mode1; mode2 <= d_mode2;
+						r1 <= {12'h0, d_r1e};
+						r2 <= {12'h0, d_r2e};
+						m2bytes_left <= d_m2bytes;
+						if (d_m1bytes == 2'd1) begin
+							addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
+							state <= S_M1_BYTE;
+						end else if (d_m2bytes != 2'd0) begin
+							addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
+							state <= S_M2_BYTE1;
+						end else begin
+							state <= S_PRE_READ1;
+						end
 					end else begin
-						state <= S_PRE_READ1;
+						pfx <= d_pfx; gg <= d_gg;
+						addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
+						case (d_pfx)
+							PFX_FF_SRC, PFX_FF_DST: state <= S_PFX_ADDR;
+							PFX_MN_SRC, PFX_MN_DST: state <= S_PFX_ADDR_LO;
+							default:                state <= S_PFX_SEL; // GG_SRC/GG_DST: only the selector byte remains
+						endcase
 					end
 				end
 
@@ -435,21 +594,63 @@ module tlcs90 (
 				end
 
 				// ------------------------------------------------------
+				// Prefixed opcode groups: fetch whatever's left (address
+				// byte(s) for FF/MN groups, none for GG), then the
+				// operation-selector byte, then resolve via level-2 decode.
+				// ------------------------------------------------------
+				S_PFX_ADDR: begin // FF_SRC/FF_DST: address low byte -> $FF00|byte
+					pfx_addr <= {8'hFF, din};
+					addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
+					state <= S_PFX_SEL;
+				end
+				S_PFX_ADDR_LO: begin // MN_SRC/MN_DST: imm16 low byte
+					byte_lo <= din;
+					addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
+					state <= S_PFX_ADDR_HI;
+				end
+				S_PFX_ADDR_HI: begin // MN_SRC/MN_DST: imm16 high byte
+					pfx_addr <= {din, byte_lo};
+					addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
+					state <= S_PFX_SEL;
+				end
+				S_PFX_SEL: begin // din == the operation-selector byte; d2_* valid now
+					op <= d2_op; wide <= d2_wide;
+					mode1 <= d2_mode1; mode2 <= d2_mode2;
+					if (d2_mem_slot == 2'd1) begin
+						r1 <= (pfx == PFX_GG_SRC || pfx == PFX_GG_DST) ? {12'h0, gg} : pfx_addr;
+						r2 <= {12'h0, d2_r2e};
+					end else begin
+						r2 <= (pfx == PFX_GG_SRC || pfx == PFX_GG_DST) ? {12'h0, gg} : pfx_addr;
+						r1 <= {12'h0, d2_r1e};
+					end
+					if (d2_needs_i8) begin
+						addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
+						state <= S_PFX_I8;
+					end else begin
+						state <= S_PRE_READ1;
+					end
+				end
+				S_PFX_I8: begin // trailing immediate byte for DST-side ADD-family/LD-imm/CP forms (mode2 always M_I8)
+					r2 <= {8'h00, din};
+					state <= S_PRE_READ1;
+				end
+
+				// ------------------------------------------------------
 				// Resolve operand 1: memory read, or direct (no bus access)
 				// ------------------------------------------------------
 				S_PRE_READ1: begin
 					if (op_reads_m1(op) && mode_needs_read(mode1)) begin
-						addr <= r1; mem_rd <= 1'b1;
+						addr <= eff1; mem_rd <= 1'b1;
 						state <= S_READ1_LO;
 					end else begin
-						val1 <= op_reads_m1(op) ? resolve_direct(mode1, r1) : r1;
+						val1 <= !op_reads_m1(op) ? r1 : (mode1 == M_R8) ? {8'h00, r8_read(r1[2:0])} : (mode1 == M_R16) ? r16_read(r1[3:0]) : r1;
 						state <= S_PRE_READ2;
 					end
 				end
 				S_READ1_LO: begin
 					if (wide) begin
 						byte_lo <= din;
-						addr <= r1 + 16'd1; mem_rd <= 1'b1;
+						addr <= eff1 + 16'd1; mem_rd <= 1'b1;
 						state <= S_READ1_HI;
 					end else begin
 						val1 <= {8'h00, din};
@@ -466,17 +667,17 @@ module tlcs90 (
 				// ------------------------------------------------------
 				S_PRE_READ2: begin
 					if (mode2 != M_NONE && mode_needs_read(mode2)) begin
-						addr <= r2; mem_rd <= 1'b1;
+						addr <= eff2; mem_rd <= 1'b1;
 						state <= S_READ2_LO;
 					end else begin
-						if (mode2 != M_NONE) val2 <= resolve_direct(mode2, r2);
+						if (mode2 != M_NONE) val2 <= (mode2 == M_R8) ? {8'h00, r8_read(r2[2:0])} : (mode2 == M_R16) ? r16_read(r2[3:0]) : r2;
 						state <= S_EXECUTE;
 					end
 				end
 				S_READ2_LO: begin
 					if (wide) begin
 						byte_lo <= din;
-						addr <= r2 + 16'd1; mem_rd <= 1'b1;
+						addr <= eff2 + 16'd1; mem_rd <= 1'b1;
 						state <= S_READ2_HI;
 					end else begin
 						val2 <= {8'h00, din};
@@ -513,12 +714,10 @@ module tlcs90 (
 						OP_LD: begin
 							if (mode1 == M_R8) a_or_r8_write(r1[2:0], val2[7:0]);
 							else if (mode1 == M_R16) r16_write_reg(r1[3:0], wide ? val2 : {8'h00, val2[7:0]});
-							else begin // M_MI16
+							else begin // M_MI16 or M_MR16
 								wb_val <= val2;
-								addr <= r1; dout <= val2[7:0]; mem_wr <= 1'b1;
+								addr <= eff1; dout <= val2[7:0]; mem_wr <= 1'b1;
 								state <= wide ? S_WRITE1_HI : S_FETCH_OP;
-								if (!wide) state <= S_FETCH_OP;
-								else state <= S_WRITE1_HI;
 							end
 						end
 
@@ -602,7 +801,7 @@ module tlcs90 (
 						OP_BIT: f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | (8'd1<<HF) | sz_bit8(val2[7:0] & (8'd1 << r1[2:0]));
 						OP_SET, OP_RES: begin
 							wb_val <= op == OP_SET ? {8'h00, val2[7:0] | (8'd1 << r1[2:0])} : {8'h00, val2[7:0] & ~(8'd1 << r1[2:0])};
-							addr <= r2;
+							addr <= eff2;
 							dout <= op == OP_SET ? (val2[7:0] | (8'd1 << r1[2:0])) : (val2[7:0] & ~(8'd1 << r1[2:0]));
 							mem_wr <= 1'b1;
 							state <= S_FETCH_OP;
@@ -614,7 +813,7 @@ module tlcs90 (
 								r8v = val1[7:0] + 8'd1;
 								nf8 = (f & ((8'd1<<IFB)|(8'd1<<CF))) | szhv_inc8(r8v);
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
-								else begin wb_val <= {8'h00,r8v}; addr <= r1; dout <= r8v; mem_wr <= 1'b1; end
+								else begin wb_val <= {8'h00,r8v}; addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
 								f <= nf8;
 							end else begin
 								r16v = val1 + 16'd1;
@@ -628,7 +827,7 @@ module tlcs90 (
 								r8v = val1[7:0] - 8'd1;
 								nf8 = (f & ((8'd1<<IFB)|(8'd1<<CF))) | szhv_dec8(r8v);
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
-								else begin wb_val <= {8'h00,r8v}; addr <= r1; dout <= r8v; mem_wr <= 1'b1; end
+								else begin wb_val <= {8'h00,r8v}; addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
 								f <= nf8;
 							end else begin
 								r16v = val1 - 16'd1;
@@ -641,7 +840,7 @@ module tlcs90 (
 							if (f[XCF]) begin
 								r8v = val1[7:0] + 8'd1;
 								f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | szhv_inc8(r8v);
-								addr <= r1; dout <= r8v; mem_wr <= 1'b1;
+								addr <= eff1; dout <= r8v; mem_wr <= 1'b1;
 							end
 						end
 						OP_DECX: begin : decx_blk
@@ -649,7 +848,7 @@ module tlcs90 (
 							if (f[XCF]) begin
 								r8v = val1[7:0] - 8'd1;
 								f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | szhv_dec8(r8v);
-								addr <= r1; dout <= r8v; mem_wr <= 1'b1;
+								addr <= eff1; dout <= r8v; mem_wr <= 1'b1;
 							end
 						end
 						OP_INCW: begin : incw_blk
@@ -663,7 +862,7 @@ module tlcs90 (
 							if ((val1 ^ r16v ^ 16'd1) & 16'h1000) nf8 = nf8 | (8'd1<<HF);
 							f <= nf8;
 							wb_val <= r16v;
-							addr <= r1; dout <= r16v[7:0]; mem_wr <= 1'b1;
+							addr <= eff1; dout <= r16v[7:0]; mem_wr <= 1'b1;
 							state <= S_WRITE1_HI;
 						end
 						OP_DECW: begin : decw_blk
@@ -676,7 +875,7 @@ module tlcs90 (
 							if ((val1 ^ r16v ^ 16'd1) & 16'h1000) nf8 = nf8 | (8'd1<<HF);
 							f <= nf8;
 							wb_val <= r16v;
-							addr <= r1; dout <= r16v[7:0]; mem_wr <= 1'b1;
+							addr <= eff1; dout <= r16v[7:0]; mem_wr <= 1'b1;
 							state <= S_WRITE1_HI;
 						end
 
@@ -693,6 +892,7 @@ module tlcs90 (
 								if ((b8 ^ a8 ^ 8'h80) & (b8 ^ r8v) & 8'h80) nf8 = nf8 | (8'd1<<PF);
 								f <= nf8;
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
+								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
 							end else begin
 								a16 = val1; b16 = val2;
 								s17 = {1'b0,a16} + {1'b0,b16} + (op == OP_ADC ? {16'b0,f[CF]} : 17'd0);
@@ -719,7 +919,10 @@ module tlcs90 (
 								if ((a8 ^ r8v ^ b8) & 8'h10) nf8 = nf8 | (8'd1<<HF);
 								if ((b8 ^ a8) & (a8 ^ r8v) & 8'h80) nf8 = nf8 | (8'd1<<PF);
 								f <= nf8;
-								if (op != OP_CP && mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
+								if (op != OP_CP) begin
+									if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
+									else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
+								end
 							end else begin
 								a16 = val1; b16 = val2;
 								d17 = {1'b0,a16} - {1'b0,b16} - (op == OP_SBC ? {16'b0,f[CF]} : 17'd0);
@@ -740,6 +943,7 @@ module tlcs90 (
 								r8v = val1[7:0] & val2[7:0];
 								f <= (f & (8'd1<<IFB)) | szp8(r8v) | (8'd1<<HF);
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
+								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
 							end else begin
 								r16v = val1 & val2;
 								f <= (f & (8'd1<<IFB)) | (8'd1<<HF) | (r16v == 0 ? (8'd1<<ZF) : 8'h00) | (r16v[15] ? (8'd1<<SF) : 8'h00);
@@ -752,6 +956,7 @@ module tlcs90 (
 								r8v = val1[7:0] ^ val2[7:0];
 								f <= (f & (8'd1<<IFB)) | szp8(r8v);
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
+								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
 							end else begin
 								r16v = val1 ^ val2;
 								f <= (f & (8'd1<<IFB)) | (r16v == 0 ? (8'd1<<ZF) : 8'h00) | (r16v[15] ? (8'd1<<SF) : 8'h00);
@@ -764,6 +969,7 @@ module tlcs90 (
 								r8v = val1[7:0] | val2[7:0];
 								f <= (f & (8'd1<<IFB)) | szp8(r8v);
 								if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
+								else if (mode1 == M_MI16 || mode1 == M_MR16) begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
 							end else begin
 								r16v = val1 | val2;
 								f <= (f & (8'd1<<IFB)) | (r16v == 0 ? (8'd1<<ZF) : 8'h00) | (r16v[15] ? (8'd1<<SF) : 8'h00);
@@ -790,7 +996,8 @@ module tlcs90 (
 								nf8 = (f & (8'd1<<IFB)) | szp8(r8v);
 							if (cflag) nf8 = nf8 | (8'd1<<CF) | (8'd1<<XCF);
 							f <= nf8;
-							a_or_r8_write(r1[2:0], r8v);
+							if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
+							else begin addr <= eff1; dout <= r8v; mem_wr <= 1'b1; end
 						end
 
 						default: ; // OP_UNKNOWN: no-op, treated as a bug marker for the testbench to catch via dbg_pc stall
@@ -798,7 +1005,7 @@ module tlcs90 (
 				end
 
 				S_WRITE1_HI: begin
-					addr <= r1 + 16'd1; dout <= wb_val[15:8]; mem_wr <= 1'b1;
+					addr <= eff1 + 16'd1; dout <= wb_val[15:8]; mem_wr <= 1'b1;
 					state <= S_FETCH_OP;
 				end
 
