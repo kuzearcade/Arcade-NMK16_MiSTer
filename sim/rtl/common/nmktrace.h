@@ -45,6 +45,19 @@ public:
 		std::fprintf(f, "R %llu %s %x\n", (unsigned long long)cycle, name.c_str(), value);
 	}
 
+	// Mirrors sim/oracle/trace.lua's NMKTRACE_ITEM_INDEX 'I' line: a
+	// per-frame dump of u16 words as a concatenated lowercase hex string,
+	// same field order (cycle, frame_num) so the two sides line up for a
+	// direct diff. words[i] should already be masked to 16 bits.
+	void item(uint64_t cycle, uint32_t frame_num, const uint16_t *words, size_t count) {
+		if (!f) return;
+		std::fprintf(f, "I %llu %u ", (unsigned long long)cycle, frame_num);
+		for (size_t i = 0; i < count; i++) {
+			std::fprintf(f, "%04x", words[i]);
+		}
+		std::fprintf(f, "\n");
+	}
+
 	void flush() {
 		if (f) std::fflush(f);
 	}

@@ -59,6 +59,14 @@ module video_bjtwin #(
 	input  [7:0] rd_y,
 	output [23:0] rd_rgb,
 
+	// sprite_snap readback for the testbench, to verify against MAME's
+	// m_spriteram_old (see docs/tier1-bjtwin.md "Sprite rendering
+	// verification" — that buffer is a host-memory copy in MAME, never a
+	// CPU bus transaction, so it needs this kind of direct internal-state
+	// comparison rather than a bus trace)
+	input  [10:0] dbg_snap_addr,
+	output [15:0] dbg_snap_data,
+
 	output reg frame_done // pulses for one clk_sys cycle when a new frame is ready to read
 );
 
@@ -141,6 +149,7 @@ module video_bjtwin #(
 	// Sprite RAM snapshot (single-buffered, per docs/tier1-bjtwin.md)
 	// ------------------------------------------------------------------
 	reg [15:0] sprite_snap [0:2047]; // 256 sprites x 8 words
+	assign dbg_snap_data = sprite_snap[dbg_snap_addr];
 	reg        snap_pending;
 	reg [11:0] snap_idx;
 

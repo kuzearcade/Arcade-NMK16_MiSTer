@@ -173,6 +173,21 @@ int main(int argc, char **argv) {
 				std::fclose(ppm);
 			}
 
+			// dump sprite_snap (video_bjtwin's DMA'd sprite draw buffer)
+			// via the dbg_snap_addr/dbg_snap_data readback port, for direct
+			// comparison against MAME's m_spriteram_old (captured via
+			// trace.lua's NMKTRACE_ITEM_INDEX=6) — see docs/tier1-bjtwin.md's
+			// "sprite_dma() buffer verification" section.
+			{
+				static uint16_t snap[2048];
+				for (uint32_t a = 0; a < 2048; a++) {
+					top.dbg_snap_addr = a;
+					top.eval();
+					snap[a] = top.dbg_snap_data;
+				}
+				trace.item(cpu_cycle, frame_count, snap, 2048);
+			}
+
 			frame_count++;
 		}
 		prev_frame_done = frame_done_now;

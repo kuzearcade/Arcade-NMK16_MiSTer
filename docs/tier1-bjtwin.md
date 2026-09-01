@@ -160,12 +160,33 @@ Re-running the palette comparison the same way surfaced a clean, well-understood
 
 The earlier note in this doc (and in `docs/sim-harness.md`) worrying that `mame_roms/cactus.zip` was missing `i03.bin`/`s-01.bin`/`s-02.bin` was wrong — it didn't account for MAME's **split romset** convention. `cactus`'s parent is `sabotenb` (`mame -verifyroms` reports `romset cactus [sabotenb] is good`), and MAME transparently merges files from the parent zip by CRC when the clone's own zip doesn't contain them — confirmed directly with `-verbose`: loading `cactus` opens both `cactus.zip` and `sabotenb.zip`, and `sabotenb.zip` contains same-sized, presumably CRC-matching files (`ic35.sb3` = 0x10000 bytes matching `i03.bin`'s fgtile region; `ic27.sb7`/`ic30.sb6` = 0x100000 bytes each matching `s-01.bin`/`s-02.bin`'s OKI regions) under different filenames. **The romset is genuinely complete** — see the full completeness audit below, done properly this time against all 101 romsets.
 
+## sprite_dma() buffer verification
+
+`sprite_dma()`'s output (`m_spriteram_old`) is a host-memory C++ array copy from a scanline timer callback, so — as flagged above — it's invisible to both the Lua bus tap and `debug_capture.py`'s debugger watchpoints; neither ever sees it as a `:maincpu` bus transaction. Closing this gap needed direct save-state item access instead:
+
+- **MAME side**: `sim/oracle/trace.lua` extended with `NMKTRACE_ITEM_INDEX`/`NMKTRACE_ITEM_LABEL` env vars, using `emu.item(index):read(i)` — a mechanism that bypasses bus transactions entirely by reading the save-state system's own view of driver-private memory. Found the index with a throwaway `for name,idx in pairs(manager.machine.devices[":"].items) do print(name,idx) end` scan: `0/m_spriteram_old -> 6` (`size=2 count=2048`, i.e. 2048 u16 words = 4KB, matching the sprite RAM's own size). Emits one `'I <cycle> <frame> <hex...>'` line per frame.
+- **RTL side**: `rtl/bjtwin/video_bjtwin.sv` already had an internal `sprite_snap [0:2047]` array (the RTL's own DMA'd draw buffer, populated on `sprite_dma_trigger` the same way MAME's `sprite_dma()` populates `m_spriteram_old`) but no way to read it from outside the module. Added a `dbg_snap_addr`/`dbg_snap_data` combinational readback port, threaded through `bjtwin_core.sv`'s top-level port list the same way `rd_x`/`rd_y`/`rd_rgb` already were. `sim/rtl/bjtwin/tb_bjtwin.cpp` scans all 2048 words through that port right after each `frame_done` pulse and writes an `'I'` line via a new `NmkTraceWriter::item()` method (added to `sim/rtl/common/nmktrace.h`) — the identical line grammar the Lua side emits, so the two traces diff directly.
+
+Result — captured 15 rendered RTL frames (`cactus_rtl.trace`) and 16 MAME frames (`cactus_spriteram_old.trace`, `NMKTRACE_ITEM_INDEX=6 NMKTRACE_MAX_FRAMES=16`), then compared every RTL frame's full 2048-word dump against the corresponding MAME frame:
+
+```
+RTL frame N  <->  MAME frame N+1   (fixed one-frame offset — the RTL's
+                                     procedural render FSM needs one extra
+                                     frame at boot before its first
+                                     frame_done pulse, vs. MAME's real-time
+                                     first frame; a bookkeeping offset, not
+                                     a content divergence)
+
+matches=15 mismatches=0   (every one of the 15 RTL frames, all 2048 words each)
+```
+
+**Complete, exact match — the RTL's `sprite_snap` buffer is bit-for-bit identical to MAME's `m_spriteram_old` for the entire captured run**, including the first frame with real content (word[240]/[241]=`0101`/`007f`, word[248]/[249]=`0101`/`007f` — sprite entries 30 & 31, visible flag set, W=15/H=7 large sprites — identical hex in both traces). This closes the last of the three internal-state verification gaps (CPU/mainram, tilemap VRAM, sprite DMA buffer); only frame-level video *rendering* (pixel output, gated on the real-time-synchronization work below) remains unverified end-to-end.
+
 ## Next steps
 
-1. Sprite-buffer verification proper (MAME's internal `m_spriteram_old`, the actual DMA'd draw buffer) still needs a separate workaround since `sprite_dma()` is a host-memory copy, never bus-visible by either the Lua tap or `debug_capture.py` (both only see the CPU's own bus transactions) — a dedicated Lua hook exposing that buffer, or waiting for real-time-synchronized rendering.
-2. Exercise the untested decode paths once real gameplay content is reachable: tile bank-select (bit 11, addressing `bgtile` not `fgtile`), non-zero tile colors.
-3. Real-time scanline-synchronized render architecture (replacing the procedural per-frame FSM) — needed for direct frame-CRC comparison against MAME once palette/VRAM/sprite state are all independently trusted, and for eventual hardware synthesis regardless (the procedural FSM was never going to be synthesizable as-is).
-4. `nmk112` + 2x jt6295 functional audio integration (currently stubbed).
-5. Real `nmk_irq` dual-PROM state machine for `bjtwinp`/`nouryokup` (cactus-only `nmk_irq_hacky` doesn't cover them).
-6. `cactus`'s scrambled graphics ROMs (see "Hardware spec" above) need the fixed bitswap applied — either in `tools/mkgfxrom.py` or at `.mra` build time — before `bjtwinp`/`nouryokup` (which use unscrambled ROMs) and `cactus` can share one `.rbf`. Not yet needed for the current milestone since `cactus`'s ROMs were used as-is (scrambled) and the game still booted and rendered something coherent — worth understanding why before assuming it doesn't matter.
-7. Extend the CPU-correctness oracle trace further into the boot sequence using `debug_capture.py` (proven far faster than the Lua-tap-overhead-limited approach) to validate beyond the first ~1618 events, and add read-cycle coverage (this window happened to be write-only). Given `debug_capture.py`'s speed, revisiting the *palette*/*VRAM* comparisons with it too (the Lua tap left VRAM's coverage incomplete at 1706/2048) is now cheap and would close that last small gap.
+1. Exercise the untested decode paths once real gameplay content is reachable: tile bank-select (bit 11, addressing `bgtile` not `fgtile`), non-zero tile colors.
+2. Real-time scanline-synchronized render architecture (replacing the procedural per-frame FSM) — needed for direct frame-CRC comparison against MAME now that palette/VRAM/sprite-DMA state are all independently trusted, and for eventual hardware synthesis regardless (the procedural FSM was never going to be synthesizable as-is).
+3. `nmk112` + 2x jt6295 functional audio integration (currently stubbed).
+4. Real `nmk_irq` dual-PROM state machine for `bjtwinp`/`nouryokup` (cactus-only `nmk_irq_hacky` doesn't cover them).
+5. `cactus`'s scrambled graphics ROMs (see "Hardware spec" above) need the fixed bitswap applied — either in `tools/mkgfxrom.py` or at `.mra` build time — before `bjtwinp`/`nouryokup` (which use unscrambled ROMs) and `cactus` can share one `.rbf`. Not yet needed for the current milestone since `cactus`'s ROMs were used as-is (scrambled) and the game still booted and rendered something coherent — worth understanding why before assuming it doesn't matter.
+6. Extend the CPU-correctness oracle trace further into the boot sequence using `debug_capture.py` (proven far faster than the Lua-tap-overhead-limited approach) to validate beyond the first ~1618 events, and add read-cycle coverage (this window happened to be write-only). Given `debug_capture.py`'s speed, revisiting the *palette*/*VRAM* comparisons with it too (the Lua tap left VRAM's coverage incomplete at 1706/2048) is now cheap and would close that last small gap.

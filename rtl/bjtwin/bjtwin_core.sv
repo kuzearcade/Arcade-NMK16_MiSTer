@@ -79,6 +79,11 @@ module bjtwin_core #(
 	input  [8:0]  rd_x,
 	input  [7:0]  rd_y,
 	output [23:0] rd_rgb,
+
+	// sprite_snap readback for the testbench, see video_bjtwin.sv
+	input  [10:0] dbg_snap_addr,
+	output [15:0] dbg_snap_data,
+
 	output        frame_done
 );
 
@@ -334,6 +339,7 @@ module bjtwin_core #(
 		.tilebank_reg(tilebank_reg),
 		.scroll_y_reg(scroll_y_reg),
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
+		.dbg_snap_addr(dbg_snap_addr), .dbg_snap_data(dbg_snap_data),
 		.frame_done(frame_done)
 	);
 

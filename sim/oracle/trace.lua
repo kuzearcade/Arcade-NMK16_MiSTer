@@ -40,6 +40,27 @@
 --                         "Sprite rendering verification" section for a
 --                         worked example that proved decisive where this
 --                         env var did not.
+--   NMKTRACE_ITEM_INDEX  if set, dumps the full contents of a MAME
+--                         save-state item (emu.item(index):read(...)) once
+--                         per frame — for verifying host-memory state that
+--                         is never a CPU bus transaction and so is
+--                         invisible to both the bus tap above and
+--                         sim/oracle/debug_capture.py's debugger
+--                         watchpoints (nmk16.cpp's sprite_dma() is exactly
+--                         this: a straight C++ array copy from a scanline
+--                         timer callback, not a 68000 bus write). Find the
+--                         index for a given driver-private variable with
+--                         `for name,idx in pairs(manager.machine.devices[":"].items)
+--                         do print(name,idx) end` in a throwaway
+--                         -autoboot_script — root-device (driver_device)
+--                         members registered via save_item/save_pointer
+--                         show up there as "0/<member name>". Emits
+--                         'I <cycle> <frame> <hex bytes...>' lines (u16
+--                         entries, little-endian byte pairs, one 'I' line
+--                         per frame — NMKTRACE_ITEM_LABEL is cosmetic only,
+--                         not part of the line format, just echoed to
+--                         stdout at startup for a sanity check).
+--   NMKTRACE_ITEM_LABEL  cosmetic label for the above (optional)
 
 local out_path = os.getenv("NMKTRACE_OUT")
 if not out_path then
@@ -56,6 +77,8 @@ local clock_hz       = tonumber(os.getenv("NMKTRACE_CLOCK_HZ") or "8000000")
 local max_frames     = tonumber(os.getenv("NMKTRACE_MAX_FRAMES") or "0")
 local reg_list_raw   = os.getenv("NMKTRACE_REGS")
 local pc_period      = tonumber(os.getenv("NMKTRACE_PC_PERIOD") or "0")
+local item_index     = tonumber(os.getenv("NMKTRACE_ITEM_INDEX") or "")
+local item_label     = os.getenv("NMKTRACE_ITEM_LABEL") or "item"
 
 local reg_names = {}
 if reg_list_raw then
@@ -127,6 +150,21 @@ if cpu_tag then
 end
 
 -- ---------------------------------------------------------------------
+-- Optional save-item dump (see NMKTRACE_ITEM_INDEX above)
+-- ---------------------------------------------------------------------
+local save_item_obj = nil
+if item_index then
+	save_item_obj = emu.item(item_index)
+	if save_item_obj.count == 0 then
+		print(string.format("[nmktrace] WARNING: item index %d ('%s') has zero count, bad index?", item_index, item_label))
+		save_item_obj = nil
+	else
+		print(string.format("[nmktrace] dumping item %d ('%s') per frame: size=%d count=%d",
+			item_index, item_label, save_item_obj.size, save_item_obj.count))
+	end
+end
+
+-- ---------------------------------------------------------------------
 -- Per-frame screen checksum + optional register snapshot
 -- ---------------------------------------------------------------------
 local frame_count = 0
@@ -162,6 +200,14 @@ emu.register_frame_done(function()
 				end
 			end
 		end
+	end
+
+	if save_item_obj then
+		local parts = {}
+		for i = 0, save_item_obj.count - 1 do
+			parts[#parts + 1] = string.format("%04x", save_item_obj:read(i) & 0xFFFF)
+		end
+		out:write(string.format("I %d %d %s\n", cycle_ts(), frame_count, table.concat(parts, "")))
 	end
 
 	out:flush()
