@@ -40,13 +40,21 @@
 // byte only the real 68000 host would ever write (see
 // docs/tier2-tlcs90.md's "Third verification result").
 //
-// Still deferred: block transfer (LDI*/CPI* family and RET cc's sibling
-// forms, all only valid when the 0xf8-0xfe group's own opcode byte is
-// exactly 0xfe — see the level-2 decode's PFX_G8 branch), RLD/RRD, LDAR,
-// CALLR, MUL/DIV, SWI, `EX (gg)/(mn)/($FF00+n)/(ix+d)/(iy+d)/(HL+A),rr`
-// (the memory-operand forms of EX — register-only EX is implemented), and
-// the TSET/LDA dead opcode space MAME's own reference model can't execute
-// either.
+// Still deferred: RLD/RRD, LDAR, CALLR, MUL/DIV, SWI,
+// `EX (gg)/(mn)/($FF00+n)/(ix+d)/(iy+d)/(HL+A),rr` (the memory-operand
+// forms of EX — register-only EX is implemented), and the TSET/LDA dead
+// opcode space MAME's own reference model can't execute either.
+//
+// Block transfer (LDI/LDIR/LDD/LDDR/CPI/CPIR/CPD/CPDR) and RET cc's second
+// encoding ARE implemented — both only valid when the 0xf8-0xfe group's own
+// opcode byte is exactly 0xfe (gg==R16_SP), see the level-2 decode's
+// PFX_G8 branch. LDI*/CPI* reuse the normal M_MR16/r1=R16_HL read pipeline
+// to fetch RM8(HL) for free, then LDI* writes it straight to (DE) and
+// CPI* compares it against A, both directly in S_EXECUTE (see the
+// OP_LDI*/OP_CPI* execute blocks); the *IR/*DR repeat forms are a literal
+// `pc -= 2` re-fetch of the same 2-byte instruction when their loop
+// condition holds, mirroring the reference's own `m_pc.w.l -= 2` exactly
+// rather than looping internally.
 //
 // IX/IY bank extension via BX/BY (`ix_bank`/`iy_bank` inputs, driven from a
 // peripheral module's BX/BY registers) IS implemented — see `bank1`/`bank2`
@@ -222,6 +230,12 @@ module tlcs90 (
 		OP_ADD=29, OP_ADC=30, OP_SUB=31, OP_SBC=32, OP_AND=33, OP_XOR=34,
 		OP_OR=35, OP_CP=36, OP_RLC=37, OP_RRC=38, OP_RL=39, OP_RR=40,
 		OP_SLA=41, OP_SRA=42, OP_SLL=43, OP_SRL=44, OP_DJNZ=45,
+		// Block transfer/compare family (0xf8-0xfe group, selector byte
+		// 0x58-0x5f, only valid when b0==0xfe — see the PFX_G8 decode
+		// branch below). Contiguous like ADD/RLC's own op-plus-offset
+		// groups, mirroring the reference's own `LDI+b1-0x58` formula.
+		OP_LDI=46, OP_LDIR=47, OP_LDD=48, OP_LDDR=49,
+		OP_CPI=50, OP_CPIR=51, OP_CPD=52, OP_CPDR=53,
 		OP_UNKNOWN=63;
 
 	// ------------------------------------------------------------------
@@ -486,6 +500,21 @@ module tlcs90 (
 				8'hd8,8'hd9,8'hda,8'hdb,8'hdc,8'hdd,8'hde,8'hdf: begin
 					if (gg == R16_SP) begin d2_op = OP_RET; d2_mode1 = M_CC; d2_r1e = din[3:0]; end
 					else d2_op = OP_UNKNOWN;
+				end
+				// LDI/LDIR/LDD/LDDR/CPI/CPIR/CPD/CPDR — same b0==0xfe gate
+				// as RET cc above. mode1=M_MR16 with r1 forced to R16_HL
+				// (not gg — the reference always reads/writes through HL/DE
+				// specifically for this group, never the b0-encoded
+				// register) reuses the existing S_PRE_READ1 pipeline to
+				// fetch RM8(HL) into val1 for free; mode2 stays M_NONE
+				// since there's no second bus operand (DE is a destination
+				// EXECUTE writes directly, not a decoded operand slot —
+				// see the OP_LDI*/OP_CPI* execute block).
+				8'h58,8'h59,8'h5a,8'h5b,8'h5c,8'h5d,8'h5e,8'h5f: begin
+					if (gg == R16_SP) begin
+						d2_op = OP_LDI + 6'(din - 8'h58);
+						d2_mode1 = M_MR16; d2_r1e = R16_HL; d2_mem_slot = 2'd2;
+					end else d2_op = OP_UNKNOWN;
 				end
 				default: d2_op = OP_UNKNOWN;
 			endcase
@@ -1250,6 +1279,49 @@ module tlcs90 (
 							f <= nf8;
 							if (mode1 == M_R8) a_or_r8_write(r1[2:0], r8v);
 							else begin addr <= eff1; addr_bank <= bank1; dout <= r8v; mem_wr <= 1'b1; end
+						end
+
+						// val1 already holds RM8(HL) (fetched via mode1=
+						// M_MR16/r1=R16_HL through the normal read pipeline
+						// — see the level-2 decode above). Write it straight
+						// to (DE) here: DE is never IX/IY-banked, matching
+						// the reference's WM8 (never routed through WX8), so
+						// addr_bank is forced to 0. LDIR/LDDR's repeat is a
+						// literal `pc -= 2` re-fetch of this same 2-byte
+						// instruction (opcode 0xfe + selector byte), exactly
+						// mirroring the reference's own `m_pc.w.l -= 2`
+						// rather than looping internally — the next
+						// S_FETCH_OP naturally redecodes and re-executes it.
+						OP_LDI, OP_LDIR, OP_LDD, OP_LDDR: begin : ldblk_blk
+							reg [15:0] bc_new;
+							addr <= de; addr_bank <= 4'h0; dout <= val1[7:0]; mem_wr <= 1'b1;
+							if (op == OP_LDI || op == OP_LDIR) begin de <= de + 16'd1; hl <= hl + 16'd1; end
+							else begin de <= de - 16'd1; hl <= hl - 16'd1; end
+							bc_new = bc - 16'd1;
+							bc <= bc_new;
+							f <= (f & ((8'd1<<SF)|(8'd1<<ZF)|(8'd1<<IFB)|(8'd1<<XCF)|(8'd1<<CF))) |
+							     (bc_new != 16'd0 ? (8'd1<<PF) : 8'h00);
+							if ((op == OP_LDIR || op == OP_LDDR) && bc_new != 16'd0) pc <= pc - 16'd2;
+						end
+
+						// Same val1=RM8(HL) source as above, but compare-only
+						// (like CP: A-val1, no writeback) — HL still
+						// increments/decrements and BC still counts down,
+						// but nothing is written to memory. CPIR/CPDR's
+						// repeat additionally requires a mismatch (b8!=0),
+						// unlike LDIR/LDDR which always repeats until BC==0.
+						OP_CPI, OP_CPIR, OP_CPD, OP_CPDR: begin : cpblk_blk
+							reg [8:0] d9; reg [7:0] b8; reg [15:0] bc_new;
+							d9 = {1'b0,a} - {1'b0,val1[7:0]};
+							b8 = d9[7:0];
+							if (op == OP_CPI || op == OP_CPIR) hl <= hl + 16'd1;
+							else hl <= hl - 16'd1;
+							bc_new = bc - 16'd1;
+							bc <= bc_new;
+							f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | sz8(b8) |
+							     ((a ^ val1[7:0] ^ b8) & (8'd1<<HF)) | (8'd1<<NF) |
+							     (bc_new != 16'd0 ? (8'd1<<PF) : 8'h00);
+							if ((op == OP_CPIR || op == OP_CPDR) && bc_new != 16'd0 && b8 != 8'h00) pc <= pc - 16'd2;
 						end
 
 						default: ; // OP_UNKNOWN: no-op, treated as a bug marker for the testbench to catch via dbg_pc stall

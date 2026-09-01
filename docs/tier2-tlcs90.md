@@ -34,6 +34,17 @@ directly against the CPU core — found and fixed one real bug along the way
 inherit a *previous* instruction's bank). See "Fifth verification result"
 below.
 
+**The block-transfer/compare family (`LDI`/`LDIR`/`LDD`/`LDDR`/`CPI`/`CPIR`/
+`CPD`/`CPDR`) is now implemented** too, reusing the existing `M_MR16`/`r1=HL`
+read pipeline to fetch `RM8(HL)` and a literal `pc -= 2` re-fetch for the
+`*IR`/`*DR` repeat forms, mirroring the reference exactly. Since no
+currently-known game's boot trace reaches these opcodes either, verified
+with a second dedicated standalone test (`tb_blocktest.cpp`) — a 5-part
+synthetic program covering ascending and descending block copy, a
+found-early and an exhausted-search compare, and confirming the non-`R`
+single-step forms genuinely don't repeat. All checks passed on the first
+run. See "Sixth verification result" below.
+
 ## Why this exists
 
 NMK004 (used by mustang, bioship, vandyke, blkheart, acrobatm, strahl, tdragon,
@@ -182,10 +193,22 @@ now, so not a regression, but worth naming as a latent gap this closed incidenta
 register-only `EX` is implemented) is the one op across all these groups still
 deferred, alongside everything below.
 
+**Phase 4 (block transfer/compare, done):** `LDI`/`LDIR`/`LDD`/`LDDR`/`CPI`/`CPIR`/
+`CPD`/`CPDR` — same `0xf8-0xfe` group as Phase 3's register-to-register forms,
+selector byte `0x58-0x5f`, only valid when the group's own opcode byte is exactly
+`0xfe` (same `gg==R16_SP` gate Phase 3's second `RET cc` encoding already uses).
+Reuses the existing `M_MR16`/`r1=R16_HL` read pipeline to fetch `RM8(HL)` for
+free (mode2 stays `M_NONE` — `DE` is a destination `EXECUTE` writes to directly,
+not a decoded operand slot, since this is a two-different-addresses operation
+the existing single-address-pair architecture doesn't otherwise support); the
+`*IR`/`*DR` repeat forms are a literal `pc -= 2` re-fetch of the same 2-byte
+instruction when their loop condition holds, mirroring the reference's own
+`m_pc.w.l -= 2` exactly rather than looping internally. See "Sixth verification
+result" below.
+
 **Deferred (not yet needed to make further verified progress — add once the oracle
-trace shows where):** `MUL`/`DIV`, `RLD`/`RRD`, block transfer
-`LDI`/`LDIR`/`LDD`/`LDDR`/`CPI`/`CPIR`/`CPD`/`CPDR`, `LDAR`, `CALLR`, `SWI`, IX/IY
-bank extension via `BX`/`BY`. `LDA` and `TSET` are **dead opcode space in MAME
+trace shows where):** `MUL`/`DIV`, `RLD`/`RRD`, `LDAR`, `CALLR`, `SWI`. `LDA` and
+`TSET` are **dead opcode space in MAME
 itself** — decode() recognizes them but the reference model's own execute-switch
 has no handler (commented out, would `fatalerror` if ever actually reached),
 meaning no MAME oracle trace can ever exercise or validate them. Implementing them
@@ -352,6 +375,12 @@ against a real MAME oracle trace before trusting anything downstream):
   64KB memory model (independent of nmk004_core.sv, which doesn't back a
   nonzero bank with real memory yet) that proves IX/IY bank extension
   end-to-end — see "Fifth verification result" below.
+- `sim/rtl/tlcs90/tb_blocktest.cpp` + `gen_blocktest_rom.py` + `Makefile`
+  (`make run-blocktest`) — standalone CPU-core-only Verilator testbench
+  with a synthetic 5-part program (assembled by the sibling `.py` script,
+  which also documents each byte's derivation) proving
+  `LDI`/`LDIR`/`LDD`/`LDDR`/`CPI`/`CPIR`/`CPD`/`CPDR` end-to-end — see
+  "Sixth verification result" below.
 
 ### First verification result (base table only)
 
@@ -623,9 +652,67 @@ access genuinely unmapped rather than backing it with real >64KB storage —
 see "Known gaps" above for why, and what would change if a game is ever
 identified that needs it.
 
-Next step: block-transfer opcodes (`LDI*`/`CPI*` family), `RLD`/`RRD`,
-`MUL`/`DIV`, and the memory-operand forms of `EX` are the remaining
-CPU-core gaps; getting NMK004 actually driving real YM2203/OKI hardware
-needs system-level integration (a real 68000 + shared RAM + `jt12`/`jt6295`
-cores) to get past the host-handshake boundary this tier's CPU-only
-testbench can't cross on its own.
+### Sixth verification result (block transfer/compare family)
+
+Implemented `LDI`/`LDIR`/`LDD`/`LDDR`/`CPI`/`CPIR`/`CPD`/`CPDR` (see "Phase 4"
+above for the exact decode/execute mechanism). Like the block-transfer
+family's decode-only relatives (RET cc's second encoding, IX/IY bank
+extension), no currently-known game's boot trace reaches these opcodes —
+they weren't exercised before the host-handshake boundary the 175-checkpoint
+oracle trace stops at — so this needed a third dedicated standalone test,
+`tb_blocktest.cpp`, generated from `gen_blocktest_rom.py` (a small Python
+"assembler" the same way `gen_irqtest_rom.py` and (informally) `tb_banktest.cpp`
+derived their own synthetic programs, kept here as a real regeneratable
+source rather than a comment describing hand-counted bytes).
+
+Five sub-tests, run against a flat 64KB memory model (no banking needed —
+these ops always address through HL/DE, never IX/IY):
+
+```
+OK:   LDIR final BC = 0x0000
+OK:   LDIR final HL = 0x2005
+OK:   LDIR final DE = 0x3005
+OK:   LDIR copied bytes match source exactly
+OK:   LDIR byte past destination end (must be untouched) = 0x00
+OK:   LDDR final BC = 0x0000
+OK:   LDDR final HL = 0x20FF
+OK:   LDDR final DE = 0x30FF
+OK:   LDDR copied bytes match source exactly
+OK:   LDDR byte before destination start (must be untouched) = 0x00
+OK:   CPIR final BC (found, stops early) = 0x0002
+OK:   CPIR final HL (one past the match) = 0x2203
+OK:   CPIR final F (Z=1,N=1,PF=1,CF preserved=1) = 0x47
+OK:   CPDR final BC (not found, exhausted) = 0x0000
+OK:   CPDR final F (Z=0,N=1,PF=0,SF=1,CF preserved=1) = 0x83
+OK:   LDI final BC (decremented once, not driven to 0) = 0x0001
+OK:   LDI copied first byte = 0x77
+OK:   LDI did not touch second byte (no repeat) = 0x00
+tb_blocktest: PASS (all checks)
+```
+
+`LDIR`/`LDDR` prove ascending and descending block copy (byte-exact, with an
+explicit "one byte past/before the block must stay untouched" check ruling
+out an off-by-one), and that `BC`/`HL`/`DE` land exactly where the
+reference's algorithm says they should once the loop naturally exhausts
+`BC` to 0. `CPIR` (found at index 2 of 5, stops early) and `CPDR` (not
+present, exhausts the whole block) prove both loop-exit conditions
+independently, plus the exact flag formula for each outcome (F values
+hand-derived from the reference's `F = (F&(IF|CF)) | SZ[b8] |
+((A^a8^b8)&HF) | NF`, checked via the same PUSH AF/POP HL/`LD (nn),HL`
+register-observation trick `tb_banktest.cpp` didn't need but this test
+does, since F has no other path to memory). `LDI` (the non-repeating
+single-step form) proves the *IR*/*DR* gate is real — that a bare `LDI`
+transfers exactly one byte and decrements `BC` exactly once, rather than
+silently behaving like `LDIR`.
+
+All checks passed on the first run — no bug found this time, unlike the
+interrupt/timer and bank-extension milestones. Re-confirmed all four
+existing regressions (175-checkpoint oracle match, 211-fire interrupt
+self-test, and the bank-extension test) unchanged afterward.
+
+Next step: `RLD`/`RRD`, `MUL`/`DIV`, `LDAR`, `CALLR`, `SWI`, and the
+memory-operand forms of `EX` are the remaining CPU-core gaps; getting
+NMK004 actually driving real YM2203/OKI hardware needs system-level
+integration (a real 68000 + shared RAM + `jt12`/`jt6295` cores) to get past
+the host-handshake boundary this tier's CPU-only testbench can't cross on
+its own.
