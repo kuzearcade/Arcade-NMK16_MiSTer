@@ -40,10 +40,9 @@
 // byte only the real 68000 host would ever write (see
 // docs/tier2-tlcs90.md's "Third verification result").
 //
-// Still deferred:
-// `EX (gg)/(mn)/($FF00+n)/(ix+d)/(iy+d)/(HL+A),rr` (the memory-operand
-// forms of EX — register-only EX is implemented), and the TSET/LDA dead
-// opcode space MAME's own reference model can't execute either.
+// Still deferred: the TSET/LDA dead opcode space MAME's own reference
+// model can't execute either — this is the CPU core's entire real opcode
+// table, complete.
 //
 // Block transfer (LDI/LDIR/LDD/LDDR/CPI/CPIR/CPD/CPDR) and RET cc's second
 // encoding ARE implemented — both only valid when the 0xf8-0xfe group's own
@@ -99,6 +98,22 @@
 // IF at all, matching the reference calling take_interrupt() directly
 // rather than going through check_interrupts()'s `if (!(F&IF)) return;`
 // gate.
+//
+// The memory-operand forms of EX ARE implemented too — reachable via
+// every SRC prefix group's own selector byte 0x50-0x56 (skipping 0x53,
+// same register-code-skip pattern as every other rr-selecting range in
+// this table), unlike every other pfx_is_src entry the memory operand
+// sits in slot 1 here (mem_slot=1), matching the reference's own
+// MR16(1,...)/R16(2,...) ordering — a genuine 16-bit swap has no natural
+// "source"/"destination" side to match LD's convention. OP_EX was
+// removed from op_reads_m1's exclusion list (harmless for the existing
+// base-table register-only forms, since mode_needs_read() already gates
+// M_R16 out regardless) so the new form's memory word gets read before
+// being overwritten — the swap can't happen otherwise. See the OP_EX
+// execute block's mode1==M_R16 branch (unchanged, base-table forms) vs.
+// its else branch (new, reusing OP_LD's own wb_val/S_WRITE1_HI
+// wide-memory-write chain for the memory side, with the register side
+// written the same cycle via r16_write_reg).
 //
 // IX/IY bank extension via BX/BY (`ix_bank`/`iy_bank` inputs, driven from a
 // peripheral module's BX/BY registers) IS implemented — see `bank1`/`bank2`
@@ -642,6 +657,16 @@ module tlcs90 (
 					d2_op = OP_LD; d2_mode1 = M_R8; d2_r1e = 4'(din - 8'h28); d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
 				8'h48,8'h49,8'h4a,8'h4c,8'h4d,8'h4e: begin
 					d2_op = OP_LD; d2_wide = 1'b1; d2_mode1 = M_R16; d2_r1e = 4'(din - 8'h48); d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
+				// EX (gg)/(mn)/($FF00+n)/(ix+d)/(iy+d)/(HL+A),rr — the
+				// memory-operand forms of EX (register-only EX lives in
+				// the base table, opcodes 0x08/0x09). Unlike every other
+				// entry in this table, the memory operand sits in slot 1
+				// here (mem_slot=1), matching the reference's own
+				// MR16(1,...)/R16(2,...) ordering — a genuine 16-bit
+				// swap, not a one-way copy, so there's no natural
+				// "source"/"destination" side to match LD's convention.
+				8'h50,8'h51,8'h52,8'h54,8'h55,8'h56: begin
+					d2_op = OP_EX; d2_wide = 1'b1; d2_mode1 = mem_mode; d2_mode2 = M_R16; d2_r2e = 4'(din - 8'h50); d2_mem_slot = 2'd1; end
 				8'h60,8'h61,8'h62,8'h63,8'h64,8'h65,8'h66,8'h67: begin
 					d2_op = OP_ADD + {2'b0,din[2:0]}; d2_mode1 = M_R8; d2_r1e = R8_A; d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
 				8'h70,8'h71,8'h72,8'h73,8'h74,8'h75,8'h76,8'h77: begin
@@ -799,8 +824,15 @@ module tlcs90 (
 	endfunction
 	function automatic op_reads_m1(input [5:0] o);
 		case (o)
+			// OP_EX is deliberately NOT here: the base-table register-only
+			// forms never need it (mode1 is M_R16, and mode_needs_read()
+			// already gates M_R16 out regardless of this table), but the
+			// memory-operand forms (EX (gg)/(mn)/...,rr) genuinely need to
+			// read the memory word before overwriting it — the swap can't
+			// happen otherwise. Defaulting to "reads" is correct for both
+			// cases at once, so no case-by-case distinction is needed here.
 			OP_LD, OP_JP, OP_JR, OP_CALL, OP_RET, OP_PUSH, OP_POP,
-			OP_DJNZ, OP_BIT, OP_SET, OP_RES, OP_EX, OP_EXX, OP_NOP,
+			OP_DJNZ, OP_BIT, OP_SET, OP_RES, OP_EXX, OP_NOP,
 			OP_HALT, OP_DI, OP_EI, OP_RETI: op_reads_m1 = 1'b0;
 			default: op_reads_m1 = 1'b1;
 		endcase
@@ -1087,11 +1119,30 @@ module tlcs90 (
 						OP_NOP: ;
 
 						OP_EX: begin
-							if (r1[3:0] == R16_DE) begin
-								de <= hl; hl <= de;
-							end else begin // AF <-> AF2
-								{a, f} <= r16_read(R16_AF2);
-								{a2, f2} <= {a, f};
+							if (mode1 == M_R16) begin
+								// base-table register-only forms
+								if (r1[3:0] == R16_DE) begin
+									de <= hl; hl <= de;
+								end else begin // AF <-> AF2
+									{a, f} <= r16_read(R16_AF2);
+									{a2, f2} <= {a, f};
+								end
+							end else begin
+								// M_MI16/M_MR16: memory-operand form — a
+								// genuine 16-bit swap. val1 already holds
+								// the pre-read memory word (op_reads_m1
+								// defaults true for OP_EX now, specifically
+								// so this read happens); write val2 (rr's
+								// current value) back to that same address
+								// (eff1/bank1 still valid, unchanged since
+								// the read) via the same wb_val/S_WRITE1_HI
+								// wide-write chain OP_LD's memory
+								// destination already uses, while val1
+								// lands in rr the same cycle.
+								wb_val <= val2;
+								addr <= eff1; addr_bank <= bank1; dout <= val2[7:0]; mem_wr <= 1'b1;
+								state <= S_WRITE1_HI;
+								r16_write_reg(r2[3:0], val1);
 							end
 						end
 						OP_EXX: begin

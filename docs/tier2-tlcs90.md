@@ -101,12 +101,23 @@ guards the real vector with two self-trapping "poison" blocks at
 neighboring addresses (`0x0008` and NMI's own `0x0018`), and has the ISR
 deliberately corrupt `A` before returning so checking it's restored
 afterward proves `RETI`'s round-trip is real. All checks passed on the
-first run. See "Tenth verification result" below. With this, **the CPU
-core's own opcode table is complete** except for the memory-operand forms
-of `EX` and the two opcodes MAME's own reference model can never execute
-(`LDA`/`TSET` — see "Deferred" below); everything else now needs either a
-real oracle trace to exercise (most of what's implemented) or
-system-level integration to get past the host-handshake boundary.
+first run. See "Tenth verification result" below.
+
+**The memory-operand forms of `EX` are now implemented** too — the very
+last CPU-core opcode gap. Reachable via every SRC prefix group's own
+selector byte `0x50-0x56` (skip `0x53`, same register-code-skip pattern
+every other `rr`-selecting range in this table already uses), unlike every
+other entry sharing that decode branch the memory operand sits in *slot 1*
+here, matching the reference's own ordering — a genuine 16-bit swap has no
+natural "source"/"destination" side the way a one-way `LD` does. Verified
+with an eighth dedicated standalone test (`tb_extest.cpp`) exercising both
+directions of the swap through two different addressing forms. All checks
+passed on the first run. See "Eleventh verification result" below. **With
+this, the CPU core's own opcode table is complete** except for the two
+opcodes MAME's own reference model can never execute (`LDA`/`TSET` — see
+"Deferred" below); everything else now needs either a real oracle trace to
+exercise (most of what's implemented) or system-level integration to get
+past the host-handshake boundary.
 
 ## Why this exists
 
@@ -253,8 +264,8 @@ IX/IY from any other register code — but silently a no-op, since those registe
 didn't exist yet; not something the verification trace happened to exercise before
 now, so not a regression, but worth naming as a latent gap this closed incidentally).
 `EX (gg)/(mn)/($FF00+n)/(ix+d)/(iy+d)/(HL+A),rr` (the memory-operand forms of `EX` —
-register-only `EX` is implemented) is the one op across all these groups still
-deferred, alongside everything below.
+register-only `EX` was implemented at this point) was the one op across all these
+groups deferred until Phase 9 (see below).
 
 **Phase 4 (block transfer/compare, done):** `LDI`/`LDIR`/`LDD`/`LDDR`/`CPI`/`CPIR`/
 `CPD`/`CPDR` — same `0xf8-0xfe` group as Phase 3's register-to-register forms,
@@ -332,9 +343,26 @@ at all, matching the reference calling `take_interrupt()` directly rather
 than going through `check_interrupts()`'s `if (!(F&IF)) return;` gate. See
 "Tenth verification result" below.
 
-With SWI done, the CPU core's own opcode table is now complete except for
-the two items below (`LDA`/`TSET`, permanently unverifiable) and the
-memory-operand forms of `EX` noted in "Instruction set" above.
+**Phase 9 (memory-operand `EX`, done):** `EX (gg)/(mn)/($FF00+n)/(ix+d)/
+(iy+d)/(HL+A),rr` — reachable via every SRC prefix group's own selector
+byte `0x50-0x56` (skip `0x53`, same register-code-skip pattern every other
+`rr`-selecting range in this table already uses; falls in the exact same
+`pfx_is_src` casez block as Phase 5's `RLD`/`RRD`). Unlike every other
+entry sharing that decode branch, the memory operand sits in *slot 1* here
+(`d2_mem_slot=1`), matching the reference's own `MR16(1,...)`/`R16(2,...)`
+ordering — a genuine 16-bit swap has no natural "source"/"destination"
+side the way a one-way `LD` does, so there was no reason to force it into
+the same slot convention. `OP_EX` was removed from `op_reads_m1`'s
+exclusion list (harmless for the two existing base-table register-only
+forms, since `mode_needs_read()` already gates `M_R16` out regardless of
+that table) so the new form's memory word gets read before being
+overwritten — the swap can't happen otherwise. The memory side reuses
+`LD`'s own `wb_val`/`S_WRITE1_HI` wide-memory-write chain; the register
+side writes the same cycle via `r16_write_reg()`. See "Eleventh
+verification result" below.
+
+With this, the CPU core's own opcode table is complete except for the two
+items below (`LDA`/`TSET`, permanently unverifiable).
 
 **Deferred (not yet needed to make further verified progress — add once the oracle
 trace shows where):** `LDA` and
@@ -529,6 +557,11 @@ against a real MAME oracle trace before trusting anything downstream):
   proving `SWI` end-to-end, including that it's genuinely non-maskable and
   that its vector doesn't land on a neighboring one — see "Tenth
   verification result" below.
+- `sim/rtl/tlcs90/tb_extest.cpp` + `gen_extest_rom.py` + `Makefile`
+  (`make run-extest`) — standalone CPU-core-only Verilator testbench
+  proving the memory-operand forms of `EX` end-to-end through two
+  different addressing forms, checking both directions of the swap
+  independently — see "Eleventh verification result" below.
 
 ### First verification result (base table only)
 
@@ -1030,12 +1063,46 @@ regressions (175-checkpoint oracle match, 211-fire interrupt self-test,
 the bank-extension test, the block-transfer test, the RLD/RRD test, the
 MUL/DIV test, and the LDAR/CALLR/16-bit-JR test) unchanged afterward.
 
-With this, the CPU core's own opcode table is complete except for the
-memory-operand forms of `EX` and the two opcodes MAME's own reference
-model can never execute (`LDA`/`TSET`, a permanent verification blind
-spot — see "Deferred" above, not a bug to chase). Next step: getting
-NMK004 actually driving real YM2203/OKI hardware needs system-level
-integration (a real 68000 + shared RAM + `jt12`/`jt6295` cores) to get
-past the host-handshake boundary this tier's CPU-only testbench can't
-cross on its own — the natural next milestone now that the CPU-core-only
-work has run its course.
+### Eleventh verification result (memory-operand EX)
+
+Implemented the memory-operand forms of `EX` (see "Phase 9" above) — the
+very last CPU-core opcode gap. Same situation as every synthetic-only
+milestone this session: no currently-known game's boot trace reaches
+these opcodes, so an eighth (and, with the opcode table now complete,
+likely final for this tier) dedicated standalone test, `tb_extest.cpp`
+(generated from `gen_extest_rom.py`), was needed:
+
+```
+OK:   EX (HL),DE: DE after (was M[0x2000]) = 0x1234
+OK:   EX (HL),DE: M[0x2000] after (was DE) = 0xABCD
+OK:   EX (0x2100),BC: BC after (was M[0x2100]) = 0x5678
+OK:   EX (0x2100),BC: M[0x2100] after (was BC) = 0x9ABC
+tb_extest: PASS (all checks)
+```
+
+Two sub-tests deliberately use two *different* addressing forms —
+register-indirect `EX (HL),DE` and direct-address `EX (0x2100),BC` — since
+this decode branch is shared with `RLD`/`RRD` (Phase 5), and
+`tb_rldtest.cpp` already established that exercising only one form can
+leave a bug specific to a different prefix group's own address resolution
+undetected. Each sub-test checks *both* directions of the swap
+independently: the register ends up holding the memory word's original
+value, and the memory word ends up holding the register's original value
+— a bug that only wrote one direction, or that wrote the same value to
+both instead of genuinely swapping, would still leave one of the four
+checks wrong even if the other three happened to look right.
+
+All checks passed on the first run. Re-confirmed all nine existing
+regressions (175-checkpoint oracle match, 211-fire interrupt self-test,
+the bank-extension test, the block-transfer test, the RLD/RRD test, the
+MUL/DIV test, the LDAR/CALLR/16-bit-JR test, and the SWI test) unchanged
+afterward.
+
+With this, the CPU core's own opcode table is complete except for the two
+opcodes MAME's own reference model can never execute (`LDA`/`TSET`, a
+permanent verification blind spot — see "Deferred" above, not a bug to
+chase). Next step: getting NMK004 actually driving real YM2203/OKI
+hardware needs system-level integration (a real 68000 + shared RAM +
+`jt12`/`jt6295` cores) to get past the host-handshake boundary this tier's
+CPU-only testbench can't cross on its own — the natural next milestone now
+that the CPU-core-only work has run its course.

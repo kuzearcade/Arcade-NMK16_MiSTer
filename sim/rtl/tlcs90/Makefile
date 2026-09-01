@@ -28,12 +28,15 @@
 #   make run-switest  # standalone CPU core + synthetic program: proves
 #                      # SWI end-to-end, including that it's genuinely
 #                      # non-maskable (see docs/tier2-tlcs90.md)
+#   make run-extest   # standalone CPU core + synthetic program: proves
+#                      # the memory-operand forms of EX end-to-end via two
+#                      # different addressing forms (see docs/tier2-tlcs90.md)
 #   make clean
 
 CORE_DIR := ../../../rtl/tlcs90
 OBJ_DIR := obj_dir
 
-.PHONY: all run run-nmk004 run-irqtest run-banktest run-blocktest run-rldtest run-muldivtest run-ldarcallrtest run-switest clean
+.PHONY: all run run-nmk004 run-irqtest run-banktest run-blocktest run-rldtest run-muldivtest run-ldarcallrtest run-switest run-extest clean
 
 all: run
 
@@ -155,5 +158,18 @@ $(SWITEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_switest.cpp
 run-switest: $(SWITEST_DIR)/Vtlcs90
 	./$(SWITEST_DIR)/Vtlcs90
 
+EXTEST_DIR := obj_dir_extest
+
+$(EXTEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_extest.cpp
+	verilator --cc --exe --build -Wall -Wno-fatal --top-module tlcs90 \
+		-y $(CORE_DIR) \
+		$(CORE_DIR)/tlcs90.sv \
+		tb_extest.cpp \
+		-o Vtlcs90 \
+		--Mdir $(EXTEST_DIR)
+
+run-extest: $(EXTEST_DIR)/Vtlcs90
+	./$(EXTEST_DIR)/Vtlcs90
+
 clean:
-	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) $(RLDTEST_DIR) $(MULDIVTEST_DIR) $(LDARCALLRTEST_DIR) $(SWITEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace
+	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) $(RLDTEST_DIR) $(MULDIVTEST_DIR) $(LDARCALLRTEST_DIR) $(SWITEST_DIR) $(EXTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace
