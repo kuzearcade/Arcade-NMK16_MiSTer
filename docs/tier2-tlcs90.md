@@ -1104,10 +1104,12 @@ permanent verification blind spot — see "Deferred" above, not a bug to
 chase).
 
 **System-level integration is now underway — see `docs/tier2-system.md`.**
-A real 68000 (fx68k) is wired to the completed NMK004 sound board in a new
+A real 68000 (fx68k) is wired to the completed NMK004 sound board in
 `rtl/mustang/mustang_core.sv`, verified to get past the host-handshake
-boundary this document's CPU-only testbench could never cross — the
-oracle match now reaches 18,809 checkpoints (up from 175), with the
-remaining divergence understood and characterized (the 68000 stalls in
-its own boot sequence waiting for an interrupt this milestone
-deliberately doesn't generate yet — see that document's "Next step").
+boundary this document's CPU-only testbench could never cross, and now
+also given a real (synthetic-first, Tier-1-style) interrupt source so the
+68000 itself doesn't stall — the oracle match has gone 175 (CPU-only
+boundary) → 18,809 → 21,986 checkpoints across those two milestones, with
+the current divergence understood and characterized (likely a status-bit
+poll against the still-stubbed YM2203/OKI ports — see that document's
+"Next step").

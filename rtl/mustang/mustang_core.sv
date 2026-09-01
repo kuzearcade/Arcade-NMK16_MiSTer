@@ -58,15 +58,29 @@
 //     are real external ports specifically so this wrapper (or a later,
 //     more complete one) can swap in real cores without touching NMK004's
 //     own RTL again.
-//   - No interrupt generation to the 68000 at all (IPL0-2n tied inactive).
-//     The reference's real IRQ source for this family is a PROM-driven
-//     scanline state machine (`set_interrupt_timing`/`NMK_IRQ` in the
-//     reference, a per-game V-PROM dump) — genuinely separate, substantial
-//     video-timing work (see docs/PLAN.md's "nmk_irq timing generator"
-//     component), not yet built for this family. If the boot sequence
-//     turns out to require a periodic VBlank interrupt to make forward
-//     progress, that will show up directly as a stall in the PC trace and
-//     is the first thing to add — not preemptively built here.
+//   - Interrupt generation to the 68000 now uses `nmk_irq_hacky` (Tier
+//     1's own synthetic-first fixed-scanline IRQ generator, reused
+//     unchanged from rtl/bjtwin/) rather than the reference's *real* IRQ
+//     source for this family, `set_interrupt_timing`/`NMK_IRQ` — a
+//     PROM-driven scanline state machine (per-game V-PROM dump), which
+//     is genuinely separate, substantial video-timing work (see
+//     docs/PLAN.md's "nmk_irq timing generator" component) not yet built
+//     for this family. This is a deliberate, documented substitution, not
+//     an accident: the fixed-scanline table `nmk_irq_hacky` encodes is
+//     copied directly from the reference's own
+//     `nmk16_hacky_scanline`/`set_hacky_interrupt_timing` — MAME's own
+//     documented fallback for exactly this situation (real PROM-driven
+//     games with an undumped PROM) — and mustang uses the same "lowres"
+//     screen class (`set_screen_lowres`) as Tier 1's bjtwin/cactus, with
+//     an *independently confirmed* matching frame geometry (278 total
+//     scanlines, VBlank-in at line 16, VBlank-out at line 240 — both the
+//     hacky scanline constants and the reference's own frame-timing
+//     comment block agree, and both match `video_timing.sv`'s existing
+//     bjtwin-family constants exactly), so reusing both modules unchanged
+//     is a real methodology match, not a coincidence of convenience. See
+//     docs/tier2-system.md for what this unblocks and the oracle-match
+//     result. The real per-game PROM timing (and non-lowres games) remain
+//     future work.
 //   - NMK004's own `clk` is fed a genuine divided-down clock (clk_sys/4,
 //     matching the 68000's own bus-cycle divider, since both CPUs are
 //     nominally 8MHz per the reference's machine config) rather than a
@@ -86,7 +100,7 @@ module mustang_core #(
 	parameter NMK004_BOOT_FILE = "",
 	parameter NMK004_EXT_FILE  = ""
 ) (
-	input clk_sys,       // 32 MHz (68000 effective bus = clk_sys/4 = 8MHz)
+	input clk_sys,       // 32 MHz (68000 effective bus and pixel/raster clock both clk_sys/4 = 8MHz)
 	input reset,          // async, active high
 
 	// debug/trace outputs for the Verilator testbench
@@ -121,6 +135,17 @@ module mustang_core #(
 	always @(posedge clk_sys) nmk004_div <= reset ? 2'd0 : nmk004_div + 2'd1;
 	wire nmk004_clk_r = nmk004_div[1];
 
+	// Pixel/raster-timing clock enable for video_timing/nmk_irq_hacky: 8MHz
+	// from 32MHz clk_sys (clk_sys/4 — the same ratio the 68000 bus divider
+	// above uses, and matching bjtwin's own 8MHz pixel clock; see the
+	// header for why the same "lowres" family constants apply here too).
+	// Reset-gated (not free-running) for the same reason bjtwin_core.sv's
+	// own ce_pix already is: keeps it in lockstep with video_timing's
+	// hcount, which is held at 0 through reset.
+	reg [1:0] pix_div = 2'd0;
+	wire ce_pix = (pix_div == 2'd3);
+	always @(posedge clk_sys) pix_div <= reset ? 2'd0 : (ce_pix ? 2'd0 : pix_div + 2'd1);
+
 	// ------------------------------------------------------------------
 	// fx68k
 	// ------------------------------------------------------------------
@@ -129,10 +154,16 @@ module mustang_core #(
 	wire [15:0] iEdb, oEdb;
 	wire [23:1] eab;
 
-	// No interrupt generation yet — see header. Autovector plumbing is
-	// still real (matches bjtwin_core.sv exactly) so a stray IACK cycle
-	// (there shouldn't be one, with IPL tied inactive) is handled safely
-	// rather than left to fx68k's own undefined-input behavior.
+	wire [2:0] ipl_level;
+	wire       IPL0n = ~ipl_level[0];
+	wire       IPL1n = ~ipl_level[1];
+	wire       IPL2n = ~ipl_level[2];
+
+	// Autovector plumbing matches bjtwin_core.sv exactly, including the
+	// same DTACKn-must-not-assert-during-IACK fix that project's own
+	// history found necessary (see bjtwin_core.sv's header for the full
+	// story — a stray vectored-interrupt read instead of autovectoring,
+	// caught via PC-trace divergence).
 	wire iack_cycle = FC0 & FC1 & FC2 & ~ASn;
 	wire VPAn = ~iack_cycle;
 	wire DTACKn = ASn | iack_cycle;
@@ -154,7 +185,7 @@ module mustang_core #(
 		.DTACKn(DTACKn), .VPAn(VPAn),
 		.BERRn(1'b1),
 		.BRn(1'b1), .BGACKn(1'b1),
-		.IPL0n(1'b1), .IPL1n(1'b1), .IPL2n(1'b1),
+		.IPL0n(IPL0n), .IPL1n(IPL1n), .IPL2n(IPL2n),
 		.iEdb(iEdb), .oEdb(oEdb),
 		.eab(eab)
 	);
@@ -337,6 +368,30 @@ module mustang_core #(
 		else                  rdata = 16'hFFFF; // unmapped
 	end
 	assign iEdb = rdata;
+
+	// ------------------------------------------------------------------
+	// Raster timing + interrupt generation — see header for why these
+	// two modules (both from rtl/bjtwin/, reused unchanged) apply here.
+	// ------------------------------------------------------------------
+	wire [9:0] vt_hcount, vt_vcount;
+	wire vt_line_start, vt_hblank, vt_vblank;
+	video_timing vtiming (
+		.clk_sys(clk_sys), .ce_pix(ce_pix), .reset(reset),
+		.hcount(vt_hcount), .vcount(vt_vcount),
+		.line_start(vt_line_start), .hblank(vt_hblank), .vblank(vt_vblank)
+	);
+
+	wire sprite_dma_trigger; // not consumed yet — no sprite engine in this milestone
+	nmk_irq_hacky irq_gen (
+		.clk_sys(clk_sys),
+		.reset(reset),
+		.line_start(vt_line_start),
+		.vcount(vt_vcount),
+		.iack_cycle(iack_cycle),
+		.iack_level(eab[3:1]),
+		.ipl_level(ipl_level),
+		.sprite_dma_trigger(sprite_dma_trigger)
+	);
 
 	// ------------------------------------------------------------------
 	// Debug/trace outputs

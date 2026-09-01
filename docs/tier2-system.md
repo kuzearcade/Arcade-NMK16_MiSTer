@@ -1,15 +1,19 @@
 # Tier 2 — system-level integration (mustang: 68000 + NMK004)
 
-Status: **First integration milestone done and verified.** A real 68000
+Status: **Two integration milestones done and verified.** A real 68000
 (fx68k, the same core Tier 1's `bjtwin_core.sv` already oracle-verifies) is
-now wired to the completed NMK004 sound board (`rtl/tlcs90/nmk004_core.sv`)
-through the real shared-latch host handshake, in a new top-level module,
-`rtl/mustang/mustang_core.sv`. This answers the question CPU-only
-verification (`sim/rtl/tlcs90/tb_nmk004.cpp`) structurally couldn't: does
-NMK004 actually get *past* its host-handshake poll loop once a real 68000
-is on the other end of it? **Yes** — verified against the same MAME oracle
-trace used throughout Tier 2's CPU work, extending the matched checkpoint
-count from 175 (the CPU-only boundary) to **18,809** — over 100x further.
+wired to the completed NMK004 sound board (`rtl/tlcs90/nmk004_core.sv`)
+through the real shared-latch host handshake, in a top-level module,
+`rtl/mustang/mustang_core.sv` — Milestone 1 answered the question CPU-only
+verification (`sim/rtl/tlcs90/tb_nmk004.cpp`) structurally couldn't (does
+NMK004 get *past* its host-handshake poll loop once a real 68000 is
+attached? yes), and Milestone 2 (this update) gave the 68000 itself a real
+interrupt source, unsticking a *second* stall this document's own
+Milestone 1 had already predicted and characterized in advance. Verified
+against the same MAME oracle trace used throughout Tier 2's CPU work, the
+matched checkpoint count has gone 175 (CPU-only boundary) → 18,809
+(Milestone 1) → **21,986** (Milestone 2) — over 125x the original
+CPU-only ceiling.
 
 ## Why this exists
 
@@ -53,15 +57,17 @@ authoritative memory map and scope notes; summary:
   the same oracle trace), and tracks the 68000's own last fetch PC + bus
   write count for diagnosing stalls.
 
-**Explicitly out of scope for this milestone** (see the module header's
+**Explicitly out of scope for Milestone 1** (see the module header's
 "Known simplifications" for the full list, each documented not hidden):
 video/sprite rendering, real `jt12`/`jt6295` audio cores (YM2203/OKI are
 plain register-latch stubs — accept writes, return a fixed idle byte),
 and interrupt generation to the 68000 (`IPL0-2n` tied inactive — the real
 source is a PROM-driven scanline state machine, genuinely separate video-
 timing work per `docs/PLAN.md`'s "nmk_irq timing generator" component,
-not yet built for this family). All three are natural next increments,
-not accidentally-skipped work.
+not yet built for this family). The third of these is now addressed by
+Milestone 2 below (with a documented synthetic substitution, not the real
+PROM-driven state machine); video/sprite rendering and real audio cores
+remain out of scope.
 
 ## A real bug found and fixed: odd-byte-address decode
 
@@ -140,38 +146,107 @@ session:
    window for this specific game's chosen timer period to elapse, unlike
    the deliberately-fast period the synthetic test configured for a quick
    check.
-2. **Second divergence (open, understood, deferred): NMK004's NMI never
-   fires, because the 68000 stalls first.** The match now stops at
-   checkpoint 18810 (PC=`0x0018`, the fixed NMI vector). Direct
-   investigation (`TB_LOG_M68K`) shows the 68000 never writes to
-   `0x080016`/`0x080017` (the NMI/watchdog-keepalive register) at all in
-   this run, and its own last instruction-fetch PC settles at a fixed
+2. **Second divergence (resolved in Milestone 2 below): NMK004's NMI
+   never fired, because the 68000 stalled first, exactly as predicted.**
+   The match stopped at checkpoint 18810 (PC=`0x0018`, the fixed NMI
+   vector). Direct investigation (`TB_LOG_M68K`) showed the 68000 never
+   wrote to `0x080016`/`0x080017` (the NMI/watchdog-keepalive register)
+   at all, and its own last instruction-fetch PC settled at a fixed
    address (`0x070E`/`0x070A`) even across a 60,000,000-cycle run (3x
    longer than what resolved the timer divergence) — ruling out "just
    needs more time" for this one. Reading the ROM directly at that
-   address confirms it: `TST.W $F901C` / `BNE.S -8` — a tight poll loop
+   address confirmed it: `TST.W $F901C` / `BNE.S -8` — a tight poll loop
    waiting for something to write a nonzero flag to that RAM address, the
    classic 68000 idiom for "wait for an interrupt handler to signal
-   completion." This is exactly the scenario this milestone's own module
+   completion." This was exactly the scenario Milestone 1's own module
    header predicted before ever running it ("If the boot sequence turns
    out to require a periodic VBlank interrupt to make forward progress,
    that will show up directly as a stall in the PC trace") — `IPL0-2n`
-   are tied inactive (see "What's built" above), so no interrupt ever
-   reaches the 68000, so it never reaches the code that would write
-   NMK004's NMI register, so NMK004 never receives it either. Not a bug —
-   a documented, anticipated scope boundary, now empirically confirmed
-   rather than assumed.
+   were tied inactive, so no interrupt ever reached the 68000, so it
+   never reached the code that would write NMK004's NMI register. Not a
+   bug — a documented, anticipated scope boundary, confirmed rather than
+   assumed, and fixed in Milestone 2.
+
+## Milestone 2: real interrupt generation to the 68000
+
+Wires a real interrupt source into `mustang_core.sv`, using a **deliberate
+synthetic substitution** rather than the reference's actual PROM-driven
+`NMK_IRQ` scanline state machine (see `docs/PLAN.md`'s "nmk_irq timing
+generator" component — genuinely separate, substantial video-timing work,
+still not built for this family). The substitution reuses two modules
+from Tier 1's `rtl/bjtwin/` **completely unchanged**:
+
+- `video_timing.sv` — a free-running raster counter (278 total scanlines,
+  VBlank-in at line 16, VBlank-out at line 240).
+- `nmk_irq_hacky.sv` — a fixed-scanline `IPL0-2` generator, holding IRQ1
+  (twice per frame), IRQ2 (VBlank-in), and IRQ4 (VBlank-out) until the
+  68000 acknowledges each at the matching autovector level.
+
+This isn't a coincidental convenience reuse: `nmk_irq_hacky.sv`'s own
+fixed-scanline table is copied directly from the reference's own
+`nmk16_hacky_scanline`/`set_hacky_interrupt_timing` — MAME's own
+documented fallback for games whose real timing PROM is undumped — and
+mustang uses the exact same `set_screen_lowres` screen class Tier
+1's bjtwin/cactus does. Two independent sources in the reference (the
+hacky-scanline constants, and a separate frame-timing comment block in
+`mustang_map`'s own machine-config section) agree on the same frame
+geometry, and both match `video_timing.sv`'s existing constants exactly —
+strong independent confirmation this is a real methodology match, not a
+convenient guess. A pixel/raster clock enable (`clk_sys/4` = 8MHz, the
+same ratio the 68000's own bus divider already uses) drives both reused
+modules; `IPL0-2n` are wired from tied-inactive to the generator's real
+output.
+
+### Verification result
+
+```
+matched 21986 of 359693 oracle checkpoints as a subsequence of 1083467 rtl trace lines
+```
+
+Up from 18,809. The 68000's own completed write-bus-cycle count also
+climbs meaningfully with interrupts flowing (94,351 → 139,156 over the
+same 25,000,000-cycle budget that previously plateaued), confirming real
+forward progress, not just a cosmetic PC change. A third divergence point
+was found and investigated the same way as the first two:
+
+3. **Third divergence (open, characterized, deferred): NMK004 matches the
+   oracle up to `0x0E5F`, then diverges instead of continuing to
+   `0x0E61`.** The RTL trace never reaches `0x0E61` at all — instead of
+   continuing past `0x0E5F` into what the oracle shows as a call chain
+   (`0x0066` → `0x02FF` → ...), the RTL returns to the `0x01DA`/`0x01DB`
+   idle loop. Confirmed via a 4x-longer run (100,000,000 cycles) that this
+   is *not* a "needs more time" situation like the first divergence was —
+   the RTL stops at the exact same checkpoint regardless. The PC range
+   just before the divergence (`0x0E4A`-`0x0E5F`, short 2-3-byte
+   instruction spacing) has the shape of NMK004's own register-table-init
+   loops seen earlier in the boot sequence (see
+   `docs/tier2-tlcs90.md`'s "Second verification result" — the YM2203
+   init loop uses the exact same idiom), strongly suggesting this is
+   further FM/OKI register setup or status-bit polling — and
+   `mustang_core.sv`'s YM2203/OKI ports are still plain register-latch
+   stubs (see "What's built" above), always reporting a fixed idle byte
+   rather than a real busy/status flag. A conditional branch testing that
+   status bit taking the *stub's* value instead of what real silicon
+   would report is a plausible, consistent explanation for a clean
+   divergence right at this boundary — not proven by a bus-level trace
+   the way the two earlier bugs were, but consistent with everything
+   observed and with the next already-documented scope boundary (real
+   `jt12`/`jt6295` audio). Flagged as the first thing to check when that
+   work begins, not chased further in this milestone.
+
+Re-confirmed all existing Tier 2 regressions (175-checkpoint CPU oracle
+match, 211-fire interrupt self-test, and every synthetic CPU-opcode test
+this session built) unchanged, and Tier 1's own `bjtwin_core.sv` build
+still succeeds using the same `video_timing.sv`/`nmk_irq_hacky.sv` files
+now shared between the two families.
 
 ## Next step
 
-Wiring a real interrupt source to the 68000 (either the real PROM-driven
-`nmk_irq` scanline state machine, or — as a smaller, faster-to-verify
-intermediate step — a synthetic fixed-rate VBlank pulse, the same
-"synthetic-first, real-hardware-timing-later" sequencing Tier 1 itself
-used for `nmk_irq_hacky.sv`) is the direct next increment: it should
-unstick the 68000's own poll loop, let it write NMK004's NMI register,
-and very likely extend the oracle match significantly further past
-checkpoint 18809. Real `jt12`/`jt6295` audio integration and mustang's
-own video/sprite pipeline (Family B's tilemap variants, distinct from
-Tier 1's bjtwin/Family A ones) remain separate, larger increments beyond
-that.
+Real `jt12`/`jt6295` audio integration is the most promising next
+increment given the third divergence's own likely cause — even a
+register-level-accurate (not necessarily audio-sample-accurate) status/
+busy-bit model might be enough to get past it. The real PROM-driven
+`nmk_irq` scanline state machine (replacing this milestone's synthetic
+substitution) and mustang's own video/sprite pipeline (Family B's
+tilemap variants, distinct from Tier 1's bjtwin/Family A ones) remain
+separate, larger increments beyond that.

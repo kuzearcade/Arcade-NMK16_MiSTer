@@ -9,13 +9,18 @@
 
 FX68K_DIR := ../../../rtl/third_party/fx68k
 TLCS90_DIR := ../../../rtl/tlcs90
+BJTWIN_DIR := ../../../rtl/bjtwin
 CORE_DIR := ../../../rtl/mustang
 ROMS_DIR := ../../../mame_roms
 TOOLS_DIR := ../../../tools
 OBJ_DIR := obj_dir
 TOP := mustang_core
 
-SOURCES := $(CORE_DIR)/$(TOP).sv $(TLCS90_DIR)/tlcs90.sv $(TLCS90_DIR)/nmk004_periph.sv $(TLCS90_DIR)/nmk004_core.sv
+# video_timing.sv/nmk_irq_hacky.sv are reused unchanged from Tier 1's
+# bjtwin — see mustang_core.sv's header for why the same "lowres" family
+# constants and fixed-scanline IRQ table apply here too.
+SOURCES := $(CORE_DIR)/$(TOP).sv $(TLCS90_DIR)/tlcs90.sv $(TLCS90_DIR)/nmk004_periph.sv $(TLCS90_DIR)/nmk004_core.sv \
+           $(BJTWIN_DIR)/video_timing.sv $(BJTWIN_DIR)/nmk_irq_hacky.sv
 
 .PHONY: all rom run clean
 
