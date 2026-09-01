@@ -20,8 +20,12 @@
 // performs an interrupt-acknowledge bus cycle at that level.
 module nmk_irq_hacky (
 	input        clk_sys,
-	input        ce_pix,       // 8MHz pixel-clock enable, one pulse per pixel
 	input        reset,
+
+	// raster position, from the shared video_timing instance (bjtwin_core
+	// owns one copy; both this module and the video pipeline consume it)
+	input        line_start,   // pulse at hcount==0
+	input  [9:0] vcount,
 
 	input        iack_cycle,   // FC=111 & ~ASn, from bjtwin_core
 	input  [3:1] iack_level,   // eab[3:1] during an iack cycle == level being acked
@@ -30,33 +34,11 @@ module nmk_irq_hacky (
 	output       sprite_dma_trigger
 );
 
-	localparam HTOTAL = 512;
-	localparam VTOTAL = 278;
-
 	localparam SL_IRQ2      = 16;
 	localparam SL_IRQ1_A    = 68;
 	localparam SL_IRQ1_B    = 196;
 	localparam SL_IRQ4      = 240;
 	localparam SL_SPRDMA    = 242;
-
-	reg [9:0] hcount;
-	reg [9:0] vcount;
-
-	always @(posedge clk_sys) begin
-		if (reset) begin
-			hcount <= 10'd0;
-			vcount <= 10'd0;
-		end else if (ce_pix) begin
-			if (hcount == HTOTAL - 1) begin
-				hcount <= 10'd0;
-				vcount <= (vcount == VTOTAL - 1) ? 10'd0 : vcount + 10'd1;
-			end else begin
-				hcount <= hcount + 10'd1;
-			end
-		end
-	end
-
-	wire line_start = ce_pix & (hcount == 10'd0);
 
 	reg pending1, pending2, pending4;
 	reg sprdma_pulse;

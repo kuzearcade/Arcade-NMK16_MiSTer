@@ -55,3 +55,4 @@ sim/**/oracle_traces/
 # OS / editor cruft
 .DS_Store
 *.swp
+sim/rtl/*/*.ppm

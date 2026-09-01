@@ -51,7 +51,10 @@
 //     pressed" input state for a boot-sequence trace, but not yet wired to
 //     actual controller input.
 module bjtwin_core #(
-	parameter ROM_FILE = ""
+	parameter ROM_FILE     = "",
+	parameter FGTILE_FILE  = "",
+	parameter BGTILE_FILE  = "",
+	parameter SPRITES_FILE = ""
 ) (
 	input clk_sys,       // 40 MHz
 	input reset,          // async, active high
@@ -64,7 +67,13 @@ module bjtwin_core #(
 	output        dbg_lds_n,
 	output        dbg_as_n,
 	output [7:0]  dbg_pc_valid_pulse, // one-hot-ish marker, unused placeholder
-	output [31:0] dbg_pc
+	output [31:0] dbg_pc,
+
+	// video pixel readback for the testbench (mirrors MAME's screen:pixel(x,y))
+	input  [8:0]  rd_x,
+	input  [7:0]  rd_y,
+	output [23:0] rd_rgb,
+	output        frame_done
 );
 
 	// ------------------------------------------------------------------
@@ -169,6 +178,12 @@ module bjtwin_core #(
 	end
 	always @(*) mainram_dout = mainram[mainram_addr];
 
+	// second, video-side read tap (sprite RAM DMA snapshot lives in
+	// mainram[0x8000-0x8FFF], see video_bjtwin.sv)
+	wire [14:0] vid_mainram_addr;
+	reg  [15:0] vid_mainram_dout;
+	always @(*) vid_mainram_dout = mainram[vid_mainram_addr];
+
 	// ------------------------------------------------------------------
 	// Palette RAM (1024 x 16)
 	// ------------------------------------------------------------------
@@ -183,6 +198,11 @@ module bjtwin_core #(
 	end
 	always @(*) palette_dout = palette[palette_addr];
 
+	// second, video-side read tap
+	wire [9:0] vid_palette_addr;
+	reg  [15:0] vid_palette_dout;
+	always @(*) vid_palette_dout = palette[vid_palette_addr];
+
 	// ------------------------------------------------------------------
 	// BG tilemap VRAM (2048 x 16, mirrored)
 	// ------------------------------------------------------------------
@@ -196,6 +216,11 @@ module bjtwin_core #(
 		end
 	end
 	always @(*) bgvram_dout = bgvram[bgvram_addr];
+
+	// second, video-side read tap
+	wire [10:0] vid_bgvram_addr;
+	reg  [15:0] vid_bgvram_dout;
+	always @(*) vid_bgvram_dout = bgvram[vid_bgvram_addr];
 
 	// ------------------------------------------------------------------
 	// I/O registers (stubs where noted, see module header)
@@ -245,6 +270,17 @@ module bjtwin_core #(
 	assign iEdb = rdata;
 
 	// ------------------------------------------------------------------
+	// Shared video raster timing (see rtl/bjtwin/video_timing.sv)
+	// ------------------------------------------------------------------
+	wire [9:0] vt_hcount, vt_vcount;
+	wire vt_line_start, vt_hblank, vt_vblank;
+	video_timing vtiming (
+		.clk_sys(clk_sys), .ce_pix(ce_pix), .reset(reset),
+		.hcount(vt_hcount), .vcount(vt_vcount),
+		.line_start(vt_line_start), .hblank(vt_hblank), .vblank(vt_vblank)
+	);
+
+	// ------------------------------------------------------------------
 	// nmk_irq — cactus "hacky" fixed-scanline variant
 	// (bjtwinp/nouryokup need the real vtiming-PROM state machine, a
 	// separate module — see docs/PLAN.md Tier 1 notes; not implemented
@@ -254,12 +290,33 @@ module bjtwin_core #(
 	wire sprite_dma_trigger;
 	nmk_irq_hacky irq_gen (
 		.clk_sys(clk_sys),
-		.ce_pix(ce_pix),
 		.reset(reset),
+		.line_start(vt_line_start),
+		.vcount(vt_vcount),
 		.iack_cycle(iack_cycle),
 		.iack_level(eab[3:1]),
 		.ipl_level(ipl_level),
 		.sprite_dma_trigger(sprite_dma_trigger)
+	);
+
+	// ------------------------------------------------------------------
+	// Video pipeline (see rtl/bjtwin/video_bjtwin.sv)
+	// ------------------------------------------------------------------
+	video_bjtwin #(
+		.FGTILE_FILE(FGTILE_FILE),
+		.BGTILE_FILE(BGTILE_FILE),
+		.SPRITES_FILE(SPRITES_FILE)
+	) video (
+		.clk_sys(clk_sys),
+		.reset(reset),
+		.sprite_dma_trigger(sprite_dma_trigger),
+		.bgvram_addr(vid_bgvram_addr), .bgvram_data(vid_bgvram_dout),
+		.palette_addr(vid_palette_addr), .palette_data(vid_palette_dout),
+		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout),
+		.tilebank_reg(tilebank_reg),
+		.scroll_y_reg(scroll_y_reg),
+		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
+		.frame_done(frame_done)
 	);
 
 	// ------------------------------------------------------------------

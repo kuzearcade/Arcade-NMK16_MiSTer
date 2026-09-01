@@ -1,9 +1,12 @@
 // Testbench for rtl/bjtwin/bjtwin_core.sv — runs the real cactus 68000 ROM
-// (converted by tools/mkrom.py) and logs every completed bus write cycle
-// through NmkTraceWriter, in the same nmktrace v1 grammar as
-// sim/oracle/trace.lua, for comparison via sim/compare/oracle_diff.py
-// against a real MAME-captured oracle trace
-// (sim/oracle/traces/cactus_io.trace).
+// (converted by tools/mkrom.py) and logs:
+//   - every completed bus write cycle ('B' lines), for CPU/memory
+//     correctness verification (see docs/tier1-bjtwin.md)
+//   - a CRC32 checksum per rendered video frame ('F' lines), for video
+//     pipeline verification, computed identically to sim/oracle/trace.lua's
+//     screen:pixel() loop (row-major, byte order low-to-high = B,G,R,
+//     matching a 0xRRGGBB-packed pixel read out low-byte-first) so
+//     sim/compare/oracle_diff.py can diff either trace type unmodified.
 //
 // A bus write "completes" when ASn rises after having been asserted with
 // eRWn low — the module exposes dbg_* signals sampled combinationally
@@ -17,6 +20,13 @@
 // a first ordered-sequence comparison; exact cycle alignment against
 // MAME's own bus-cycle timing model is a follow-up refinement once the
 // value sequence itself is confirmed to match.
+//
+// video_bjtwin.sv's render FSM is a simulation-only per-frame procedural
+// renderer (not real-time scanline-synchronized — see that file's header),
+// so RUN_CYCLES here budgets for however long that FSM actually takes to
+// reach the first sprite_dma_trigger (~scanline 242, which itself needs
+// real raster time to arrive) plus a full tilemap+sprite render pass —
+// substantially more clk_sys cycles than the CPU-only milestone needed.
 
 #include <cstdint>
 #include <cstdio>
@@ -24,17 +34,21 @@
 #include "Vbjtwin_core.h"
 #include "verilated.h"
 
+#include "../common/crc32.h"
 #include "../common/nmktrace.h"
 
 static constexpr uint64_t RESET_CYCLES = 200;
-static constexpr uint64_t RUN_CYCLES   = 400000; // clk_sys cycles; see header comment for budget rationale
+static constexpr uint64_t RUN_CYCLES   = 6000000; // clk_sys cycles; see header comment for budget rationale
+static constexpr int SCREEN_W = 384;
+static constexpr int SCREEN_H = 224;
 
 int main(int argc, char **argv) {
 	VerilatedContext contextp;
 	contextp.commandArgs(argc, argv);
 
 	Vbjtwin_core top{&contextp};
-	NmkTraceWriter trace("cactus_rtl.trace", "cactus", 10000000, ":maincpu", "program", 0x80000, 0xfffff, "-");
+	NmkTraceWriter trace("cactus_rtl.trace", "cactus", 10000000, ":maincpu", "program", 0x80000, 0xfffff, ":screen");
+	Crc32 crc;
 
 	top.reset = 1;
 
@@ -42,6 +56,8 @@ int main(int argc, char **argv) {
 	bool prev_as_n = true;
 	bool prev_write = false;
 	uint32_t last_addr = 0, last_data = 0, last_mask = 0;
+	uint32_t frame_count = 0;
+	bool prev_frame_done = false;
 
 	auto tick = [&]() {
 		top.clk_sys = 0;
@@ -79,11 +95,65 @@ int main(int argc, char **argv) {
 		}
 		prev_as_n = as_n_now;
 
+		bool frame_done_now = top.frame_done;
+		if (!prev_frame_done && frame_done_now) {
+			// scan the whole frame and checksum it exactly like
+			// sim/oracle/trace.lua's screen:pixel() loop
+			uint32_t frame_crc = 0xFFFFFFFFu;
+			// use Crc32's table-driven compute() one byte at a time via
+			// a small local buffer to match the running-CRC semantics
+			uint8_t bytes[SCREEN_W * SCREEN_H * 3];
+			size_t bi = 0;
+			for (int y = 0; y < SCREEN_H; y++) {
+				for (int x = 0; x < SCREEN_W; x++) {
+					top.rd_x = x;
+					top.rd_y = y;
+					top.eval();
+					uint32_t rgb = top.rd_rgb; // {R8,G8,B8}
+					bytes[bi++] = (uint8_t)(rgb & 0xFF);         // B (low byte first, matches trace.lua)
+					bytes[bi++] = (uint8_t)((rgb >> 8) & 0xFF);  // G
+					bytes[bi++] = (uint8_t)((rgb >> 16) & 0xFF); // R
+				}
+			}
+			frame_crc = crc.compute(bytes, bi);
+			uint64_t cpu_cycle = clk_sys_ticks / 4;
+			trace.frame(cpu_cycle, frame_count, frame_crc);
+
+			// dump every frame as a PPM for visual debugging (cheap: these
+			// are tiny 384x224 images) — bytes[] is already B,G,R order,
+			// PPM wants R,G,B, so re-derive from rgb per pixel instead of
+			// reusing the CRC byte buffer directly.
+			{
+				char fname[64];
+				std::snprintf(fname, sizeof(fname), "frame_%02u.ppm", frame_count);
+				FILE *ppm = std::fopen(fname, "wb");
+				std::fprintf(ppm, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
+				for (int y = 0; y < SCREEN_H; y++) {
+					for (int x = 0; x < SCREEN_W; x++) {
+						top.rd_x = x;
+						top.rd_y = y;
+						top.eval();
+						uint32_t rgb = top.rd_rgb;
+						uint8_t rgb_bytes[3] = {
+							(uint8_t)((rgb >> 16) & 0xFF),
+							(uint8_t)((rgb >> 8) & 0xFF),
+							(uint8_t)(rgb & 0xFF)
+						};
+						std::fwrite(rgb_bytes, 1, 3, ppm);
+					}
+				}
+				std::fclose(ppm);
+			}
+
+			frame_count++;
+		}
+		prev_frame_done = frame_done_now;
+
 		tick();
 	}
 
 	trace.flush();
-	std::printf("tb_bjtwin: ran %llu clk_sys cycles (~%llu CPU cycles), wrote cactus_rtl.trace\n",
-	            (unsigned long long)RUN_CYCLES, (unsigned long long)(RUN_CYCLES / 4));
+	std::printf("tb_bjtwin: ran %llu clk_sys cycles (~%llu CPU cycles), %u frame(s) rendered, wrote cactus_rtl.trace\n",
+	            (unsigned long long)RUN_CYCLES, (unsigned long long)(RUN_CYCLES / 4), frame_count);
 	return 0;
 }
