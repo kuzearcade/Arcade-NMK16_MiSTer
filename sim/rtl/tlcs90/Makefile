@@ -19,12 +19,15 @@
 #   make run-rldtest  # standalone CPU core + synthetic program: proves
 #                      # RLD/RRD end-to-end via two different addressing
 #                      # forms (see docs/tier2-tlcs90.md)
+#   make run-muldivtest # standalone CPU core + synthetic program: proves
+#                      # MUL/DIV end-to-end, including the divide-by-zero
+#                      # special case (see docs/tier2-tlcs90.md)
 #   make clean
 
 CORE_DIR := ../../../rtl/tlcs90
 OBJ_DIR := obj_dir
 
-.PHONY: all run run-nmk004 run-irqtest run-banktest run-blocktest run-rldtest clean
+.PHONY: all run run-nmk004 run-irqtest run-banktest run-blocktest run-rldtest run-muldivtest clean
 
 all: run
 
@@ -107,5 +110,18 @@ $(RLDTEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_rldtest.cpp
 run-rldtest: $(RLDTEST_DIR)/Vtlcs90
 	./$(RLDTEST_DIR)/Vtlcs90
 
+MULDIVTEST_DIR := obj_dir_muldivtest
+
+$(MULDIVTEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_muldivtest.cpp
+	verilator --cc --exe --build -Wall -Wno-fatal --top-module tlcs90 \
+		-y $(CORE_DIR) \
+		$(CORE_DIR)/tlcs90.sv \
+		tb_muldivtest.cpp \
+		-o Vtlcs90 \
+		--Mdir $(MULDIVTEST_DIR)
+
+run-muldivtest: $(MULDIVTEST_DIR)/Vtlcs90
+	./$(MULDIVTEST_DIR)/Vtlcs90
+
 clean:
-	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) $(RLDTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace
+	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) $(RLDTEST_DIR) $(MULDIVTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace

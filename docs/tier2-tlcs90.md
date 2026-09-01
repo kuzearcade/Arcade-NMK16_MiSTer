@@ -54,6 +54,20 @@ prove the shared `mem_mode` decode wiring genuinely generalizes rather than
 happening to work for whichever form was implemented first. All checks
 passed on the first run. See "Seventh verification result" below.
 
+**MUL/DIV are now implemented** too — reachable via the `0xf8-0xfe` group's
+selector byte `0x12`/`0x13`, valid for any `b0` (unlike block-transfer/RET
+cc's second encoding, no `gg==R16_SP` gate). Pure register-register ops:
+`MUL` multiplies `HL`'s low byte by an 8-bit register `g` into all of `HL`
+and touches no flags at all; `DIV` divides `HL` by `g` into
+remainder(H)/quotient(L) and only ever touches the overflow flag, including
+the reference's exact divide-by-zero special case (`HL` becomes
+`{old L, ~old H}`, overflow forced set, no actual division attempted).
+Verified with a fourth dedicated standalone test (`tb_muldivtest.cpp`)
+chaining the flag register across three back-to-back `DIV` calls so the
+same running `F` proves both the set-on-overflow and clear-on-no-overflow
+paths, plus the divide-by-zero path independently. All checks passed on
+the first run. See "Eighth verification result" below.
+
 ## Why this exists
 
 NMK004 (used by mustang, bioship, vandyke, blkheart, acrobatm, strahl, tdragon,
@@ -227,8 +241,27 @@ unit one nibble left (`RLD`) or right (`RRD`), reusing the existing `szp8()`
 helper for the flag formula (`F = (F&(IF|CF)) | SZP[new A]`, exactly
 mirroring the reference). See "Seventh verification result" below.
 
+**Phase 6 (MUL/DIV, done):** same `0xf8-0xfe` group as Phase 3/4/5, selector
+byte `0x12`/`0x13`, valid for **any** `b0` — unlike Phase 4's block-transfer
+family and Phase 3's second `RET cc` encoding, there's no `gg==R16_SP` gate
+here, since `gg` is used as the actual second operand register rather than
+a validity check. `mode1` is always `R16(HL)` (constant, matching the
+reference's own hardcoded `m_hl` access, never `gg`-derived); `mode2` is
+`R8(g)` where `g==gg`, filled automatically by the same `PFX_G8` r2←gg fill
+logic the `ADD`-family arms already rely on (`d2_mem_slot=2` with no
+`d2_r2e` set). Pure register-register ops, no memory access at all. `MUL`
+computes `HL = L(old HL) * g` (a genuine 16-bit product, not an 8-bit
+truncation) and touches **no flags whatsoever** (confirmed by reading the
+reference directly — there is no `F=...` line for this op, not an
+oversight). `DIV` computes `H=HL%g, L=HL/g` (quotient truncated to 8 bits
+if it overflows) and only ever touches the overflow flag (`F |= VF` /
+`F &= ~VF`, never a full reassignment) — including the reference's exact
+divide-by-zero special case, where no division is attempted at all: `HL`
+becomes `{old L, ~old H}` and the overflow flag is forced set
+unconditionally. See "Eighth verification result" below.
+
 **Deferred (not yet needed to make further verified progress — add once the oracle
-trace shows where):** `MUL`/`DIV`, `LDAR`, `CALLR`, `SWI`. `LDA` and
+trace shows where):** `LDAR`, `CALLR`, `SWI`. `LDA` and
 `TSET` are **dead opcode space in MAME
 itself** — decode() recognizes them but the reference model's own execute-switch
 has no handler (commented out, would `fatalerror` if ever actually reached),
@@ -406,6 +439,10 @@ against a real MAME oracle trace before trusting anything downstream):
   (`make run-rldtest`) — standalone CPU-core-only Verilator testbench with
   a synthetic 2-part program proving `RLD`/`RRD` end-to-end through two
   different addressing forms — see "Seventh verification result" below.
+- `sim/rtl/tlcs90/tb_muldivtest.cpp` + `gen_muldivtest_rom.py` + `Makefile`
+  (`make run-muldivtest`) — standalone CPU-core-only Verilator testbench
+  with a synthetic 4-part program proving `MUL`/`DIV` end-to-end, including
+  the divide-by-zero special case — see "Eighth verification result" below.
 
 ### First verification result (base table only)
 
@@ -775,8 +812,48 @@ All checks passed on the first run. Re-confirmed all five existing
 regressions (175-checkpoint oracle match, 211-fire interrupt self-test, the
 bank-extension test, and the block-transfer test) unchanged afterward.
 
-Next step: `MUL`/`DIV`, `LDAR`, `CALLR`, `SWI`, and the memory-operand forms
-of `EX` are the remaining CPU-core gaps; getting NMK004 actually driving
-real YM2203/OKI hardware needs system-level integration (a real 68000 +
-shared RAM + `jt12`/`jt6295` cores) to get past the host-handshake boundary
-this tier's CPU-only testbench can't cross on its own.
+### Eighth verification result (MUL/DIV)
+
+Implemented `MUL`/`DIV` (see "Phase 6" above). Same situation as the prior
+three milestones — no currently-known game's boot trace reaches these
+opcodes — so a fifth dedicated standalone test, `tb_muldivtest.cpp`
+(generated from `gen_muldivtest_rom.py`), was needed:
+
+```
+OK:   MUL 200*3: HL after = 0x0258
+OK:   MUL: F after (unchanged from SCF) = 0x09
+OK:   DIV 4000/10: HL after = 0x0090
+OK:   DIV 4000/10: F after (VF set, quotient>255) = 0x0D
+OK:   DIV 100/7: HL after = 0x020E
+OK:   DIV 100/7: F after (VF cleared, quotient<=255) = 0x09
+OK:   DIV by zero: HL after ({old L, ~old H}) = 0x34ED
+OK:   DIV by zero: F after (VF forced set) = 0x04
+tb_muldivtest: PASS (all checks)
+```
+
+`MUL` (200×3=600, `0x0258`) checks the result is a genuine 16-bit product
+(not an 8-bit truncation that happened to work for a smaller test case),
+that the old `H` byte (deliberately primed with a `0xFF` sentinel first) is
+fully replaced rather than left alone, and — checked against an
+`SCF`-primed `F` — that the op really does leave every flag bit untouched,
+not just the ones a smaller check might have happened to look at. The two
+`DIV` tests are run back-to-back **without re-priming `F` in between**: the
+first (4000÷10, quotient 400>255) sets the overflow flag, and the second
+(100÷7, quotient 14≤255) immediately clears it — since the second test's
+`F` starts from whatever the first one left, a passing check here can only
+mean the clear-on-no-overflow path is real, not that the flag happened to
+already be 0. The divide-by-zero test uses a fresh `RCF`-primed `F=0`
+baseline and checks the reference's specific `{old L, ~old H}` formula
+(not just "some non-division fallback value") plus the overflow flag being
+forced set unconditionally, independent of any quotient computation.
+
+All checks passed on the first run. Re-confirmed all six existing
+regressions (175-checkpoint oracle match, 211-fire interrupt self-test, the
+bank-extension test, the block-transfer test, and the RLD/RRD test)
+unchanged afterward.
+
+Next step: `LDAR`, `CALLR`, `SWI`, and the memory-operand forms of `EX` are
+the remaining CPU-core gaps; getting NMK004 actually driving real
+YM2203/OKI hardware needs system-level integration (a real 68000 + shared
+RAM + `jt12`/`jt6295` cores) to get past the host-handshake boundary this
+tier's CPU-only testbench can't cross on its own.

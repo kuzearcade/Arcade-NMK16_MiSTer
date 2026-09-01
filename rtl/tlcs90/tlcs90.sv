@@ -40,7 +40,7 @@
 // byte only the real 68000 host would ever write (see
 // docs/tier2-tlcs90.md's "Third verification result").
 //
-// Still deferred: LDAR, CALLR, MUL/DIV, SWI,
+// Still deferred: LDAR, CALLR, SWI,
 // `EX (gg)/(mn)/($FF00+n)/(ix+d)/(iy+d)/(HL+A),rr` (the memory-operand
 // forms of EX — register-only EX is implemented), and the TSET/LDA dead
 // opcode space MAME's own reference model can't execute either.
@@ -62,6 +62,17 @@
 // nibble left (RLD) or right (RRD); A isn't a decoded operand slot in
 // this group's own encoding, so EXECUTE reads/writes it directly, the
 // same reasoning LDI*/CPI* already established for DE.
+//
+// MUL/DIV ARE implemented too — 0xf8-0xfe group, selector byte 0x12/0x13,
+// valid for any b0 (unlike block-transfer/RET-cc-2, no gg==R16_SP gate).
+// mode1 is always R16(HL) (constant, never gg-derived — matching the
+// reference's own hardcoded m_hl access); mode2 is R8(g) where g==gg,
+// filled automatically by the same PFX_G8 r2<-gg logic the ADD-family
+// arms already rely on. Pure register-register ops, no memory access at
+// all. MUL touches no flags whatsoever (confirmed by direct reading, not
+// an oversight); DIV only ever touches PF/VF (`F |= VF`/`F &= ~VF`, never
+// a full reassignment) — see the OP_MUL/OP_DIV execute blocks for the
+// divide-by-zero special case.
 //
 // IX/IY bank extension via BX/BY (`ix_bank`/`iy_bank` inputs, driven from a
 // peripheral module's BX/BY registers) IS implemented — see `bank1`/`bank2`
@@ -247,6 +258,11 @@ module tlcs90 (
 		// byte 0x10/0x11 (not the base table) — see the pfx_is_src level-2
 		// decode branch below.
 		OP_RLD=54, OP_RRD=55,
+		// MUL/DIV: 0xf8-0xfe group, selector byte 0x12/0x13, any b0 (unlike
+		// block-transfer/RET-cc-2, not gated to b0==0xfe) — mode1 is always
+		// R16(HL), mode2 is R8(g) where g = the base opcode's own embedded
+		// register code (gg). See the PFX_G8 decode branch below.
+		OP_MUL=56, OP_DIV=57,
 		OP_UNKNOWN=63;
 
 	// ------------------------------------------------------------------
@@ -484,6 +500,16 @@ module tlcs90 (
 			// S_PFX_SEL logic the other prefix groups already use (see the
 			// PFX_G8 addition to that fill condition).
 			casez (din)
+				// MUL/DIV — mode1 is always R16(HL) (constant, not
+				// gg-derived), mode2 is R8(g) where g==gg (the base
+				// opcode's own embedded register code), filled in
+				// automatically by the same PFX_G8 r2<-gg fill logic
+				// mem_slot=2 already triggers for the ADD-family/LD
+				// arms below (no d2_r2e needed). Valid for any b0
+				// (unlike the block-transfer/RET-cc-2 arms further
+				// down, which require b0==0xfe specifically).
+				8'h12: begin d2_op = OP_MUL; d2_mode1 = M_R16; d2_r1e = R16_HL; d2_mode2 = M_R8; d2_mem_slot = 2'd2; end
+				8'h13: begin d2_op = OP_DIV; d2_mode1 = M_R16; d2_r1e = R16_HL; d2_mode2 = M_R8; d2_mem_slot = 2'd2; end
 				8'h30,8'h31,8'h32,8'h33,8'h34,8'h35,8'h36: begin
 					d2_op = OP_LD; d2_mode1 = M_R8; d2_r1e = 4'(din - 8'h30); d2_mode2 = M_R8; d2_mem_slot = 2'd2; end
 				8'h38,8'h39,8'h3a,8'h3c,8'h3d,8'h3e: begin
@@ -1369,6 +1395,39 @@ module tlcs90 (
 							addr <= eff1; addr_bank <= bank1; dout <= {a[3:0], m8[7:4]}; mem_wr <= 1'b1;
 							a <= newa;
 							f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | szp8(newa);
+						end
+
+						// MUL: HL = L(old HL) * g (unsigned 8x8->16), no
+						// flags touched at all (reference has no F=...
+						// line for this op — confirmed by direct reading,
+						// not an oversight). val1[7:0] already IS L, since
+						// val1 = r16_read(HL) via mode1=M_R16's normal
+						// register-read path (see S_PRE_READ1).
+						OP_MUL: hl <= {8'h00,val1[7:0]} * {8'h00,val2[7:0]};
+
+						// DIV: HL/g -> H=remainder, L=quotient (truncated
+						// to 8 bits if it overflows); only PF/VF is
+						// touched (set when the quotient doesn't fit in 8
+						// bits, or unconditionally on divide-by-zero) —
+						// every other flag bit is left exactly as it was,
+						// matching the reference's `F |= VF`/`F &= ~VF`
+						// (never a full `F = ...` reassignment here).
+						// Divide-by-zero doesn't divide at all: HL becomes
+						// {old L, ~old H} per the reference's literal
+						// `(a16<<8) | ((a16>>8)^0xff)` formula.
+						OP_DIV: begin : div_blk
+							reg [15:0] hlv, divisor, quot, rem;
+							hlv = val1;
+							divisor = {8'h00, val2[7:0]};
+							if (divisor == 16'd0) begin
+								f[PF] <= 1'b1;
+								hl <= {hlv[7:0], ~hlv[15:8]};
+							end else begin
+								quot = hlv / divisor;
+								rem  = hlv % divisor;
+								hl <= {rem[7:0], quot[7:0]};
+								f[PF] <= (quot > 16'd255);
+							end
 						end
 
 						default: ; // OP_UNKNOWN: no-op, treated as a bug marker for the testbench to catch via dbg_pc stall
