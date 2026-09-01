@@ -1,14 +1,18 @@
 # Tier 2 — TLCS-90 CPU core (NMK004 sound MCU)
 
-Status: **RTL in progress, real verified execution.** Register file, flags, condition
-codes, and a two-level fetch/decode/execute FSM are built and cover the full base
-opcode table plus all six prefixed opcode groups (register-indirect "(gg)" and
-full-16-bit-direct/short-address "(mn)"/"($FF00+n)" addressing for every register).
-Verified against a real MAME oracle: **86 real instructions match MAME's own CPU core
-exactly**, running the actual NMK004 boot ROM chained into `mustang`'s real firmware —
-covering both RAM-clear loops and the full YM2203 register-table init loop — before
-diverging at the first not-yet-implemented addressing mode (`(HL+A)`-indexed, a
-documented deferred case, not a surprise). See "Second verification result" below.
+Status: **RTL in progress, real verified execution.** Register file (now including
+IX/IY), flags, condition codes, and a two-level fetch/decode/execute FSM cover the
+full base opcode table, all six "(gg)"/"(mn)"/"($FF00+n)" prefixed opcode groups, and
+the `(ix+d)`/`(iy+d)`/`(sp+d)`/`(HL+A)` indexed-addressing groups plus the
+register-to-register `0xf8-0xfe` group (which turned out to be where plain `ADD A,r`-
+style forms and a second `RET cc` encoding actually live — not covered by anything
+implemented earlier). Verified against a real MAME oracle: **175 real instructions
+match MAME's own CPU core exactly**, running the actual NMK004 boot ROM chained into
+`mustang`'s real firmware, reaching all the way to the point where the firmware
+legitimately blocks polling `($FB00)` for a byte only the real 68000 host would ever
+write — the natural boundary for a CPU-only oracle comparison, not a bug (confirmed:
+the RTL's own polling loop content matches the oracle's exactly, both looping
+forever for the same reason). See "Third verification result" below.
 
 ## Why this exists
 
@@ -121,24 +125,44 @@ seen in the boot trace's RAM-clear loops), `ADD`/`SUB`/`CP`/`AND`/`OR`/`XOR`/`AD
 `PUSH`/`POP`, `DI`/`EI` (with the delayed-EI one-instruction latency), `HALT`,
 `RCF`/`SCF`/`CCF`/`CPL`/`NEG`/`DAA`, `BIT`/`SET`/`RES`, `INCX`/`DECX`.
 
-**Phase 2 (all six prefixed opcode groups, done):** register-indirect `(gg)` and
-full-16-bit-direct/short-address `(mn)`/`($FF00+n)` addressing extended to *every*
-register (not just the A/HL-only short forms Phase 1 covers) for `LD`/`ADD`-family/
-`INC`/`DEC`/`INCW`/`DECW`/rotate-shift/`BIT`/`SET`/`RES`, plus register-indirect and
-direct-address `JP`/`CALL`. Implemented as a second decode level: once the base
-opcode byte identifies one of `0xe0-0xe6`/`0xe3`/`0xe7`/`0xe8-0xee`/`0xeb`/`0xef`,
-the FSM fetches whatever the group needs (a register code is already embedded in
-the opcode byte for the `(gg)` groups; the `(mn)`/`($FF00+n)` groups fetch an
-address first) then the operation-selector byte, and a second combinational table
-(mirroring the first) resolves the same op/mode/register fields the base table
-produces directly — the rest of the FSM doesn't know or care which table an
-instruction came from. `EX (gg)/(mn)/($FF00+n),rr` (the memory-operand forms of
-`EX` — register-only `EX` is implemented) is the one op in this opcode space still
+**Phase 2 (all six "(gg)"/"(mn)"/"($FF00+n)" prefixed opcode groups, done):**
+register-indirect `(gg)` and full-16-bit-direct/short-address `(mn)`/`($FF00+n)`
+addressing extended to *every* register (not just the A/HL-only short forms Phase 1
+covers) for `LD`/`ADD`-family/`INC`/`DEC`/`INCW`/`DECW`/rotate-shift/`BIT`/`SET`/
+`RES`, plus register-indirect and direct-address `JP`/`CALL`. Implemented as a
+second decode level: once the base opcode byte identifies one of
+`0xe0-0xe6`/`0xe3`/`0xe7`/`0xe8-0xee`/`0xeb`/`0xef`, the FSM fetches whatever the
+group needs (a register code is already embedded in the opcode byte for the `(gg)`
+groups; the `(mn)`/`($FF00+n)` groups fetch an address first) then the
+operation-selector byte, and a second combinational table (mirroring the first)
+resolves the same op/mode/register fields the base table produces directly — the
+rest of the FSM doesn't know or care which table an instruction came from.
+
+**Phase 3 (indexed and register-to-register groups, done):** `(ix+d)`/`(iy+d)`/
+`(sp+d)`/`(HL+A)` addressing (opcode groups `0xf0-0xf7`) for the same operation set
+as Phase 2, plus the `0xf8-0xfe` register-to-register group — which turned out to be
+where plain `ADD A,r`-style 8-bit register-register forms and 16-bit `ADD HL,gg`
+actually live (nowhere in the base table has a bare register-register ALU form at
+all), along with register-register `LD r,g`/`LD rr,gg` and a *second* `RET cc`
+encoding (only valid when the group's own opcode byte is exactly `0xfe`). Both
+extensions reuse the same two-level decode architecture Phase 2 established: the
+indexed groups resolve their effective address once, up front (base register value
++ sign-extended displacement, or `HL + sign_extend(A)`), storing it exactly like the
+`(mn)`/`($FF00+n)` groups already do (no new addressing-mode enum needed); the
+register-to-register group needs no memory access at all, so its "external operand"
+(embedded in the base opcode byte, same mechanism as `(gg)`'s register code) is
+just a second register-select code, reusing the same fill logic once more. New
+IX/IY registers were added to the register file for this (previously reachable
+in principle via the base table's `LD rr,nn`/`PUSH`/`POP` — which never distinguished
+IX/IY from any other register code — but silently a no-op, since those registers
+didn't exist yet; not something the verification trace happened to exercise before
+now, so not a regression, but worth naming as a latent gap this closed incidentally).
+`EX (gg)/(mn)/($FF00+n)/(ix+d)/(iy+d)/(HL+A),rr` (the memory-operand forms of `EX` —
+register-only `EX` is implemented) is the one op across all these groups still
 deferred, alongside everything below.
 
 **Deferred (not yet needed to make further verified progress — add once the oracle
-trace shows where):** `MUL`/`DIV`, `RLD`/`RRD`, `MR16D8`/`MR16R8` addressing (the
-`(ix+d)`/`(iy+d)`/`(HL+A)` forms, opcode groups `0xf0-0xf7`), block transfer
+trace shows where):** `MUL`/`DIV`, `RLD`/`RRD`, block transfer
 `LDI`/`LDIR`/`LDD`/`LDDR`/`CPI`/`CPIR`/`CPD`/`CPDR`, `LDAR`, `CALLR`, `SWI`, IX/IY
 bank extension via `BX`/`BY`. `LDA` and `TSET` are **dead opcode space in MAME
 itself** — decode() recognizes them but the reference model's own execute-switch
@@ -316,9 +340,12 @@ collapsed iterations in the oracle, all correctly traversed), using `LD A,
 (HL)`, `LD ($F800/$F801),A` (16-bit direct address), and `CP (HL),n`
 (register-indirect) — real exercise of every one of the six new prefix
 groups' addressing paths, not just the ones the divergence point happened to
-land on. The divergence at PC=0x17B is `XOR A,(HL+A)` — a `MR16R8`-indexed
-form from the still-deferred `0xf0-0xf7` opcode group, exactly matching the
-documented scope, not a new gap discovered by surprise.
+land on. The divergence at PC=0x17B was initially (and, per the next section,
+**incorrectly**) attributed to `XOR A,(HL+A)`; tracing the actual opcode
+bytes (`0xFE 0x65`) against the reference source during the next milestone
+revealed it's really `XOR A,A` via an entirely different, previously
+unidentified opcode group — see "Third verification result" below for the
+correction and what that group turned out to be.
 
 **A real, reproducible Verilator bug was found and fixed along the way,
 not just a project bug**: a `resolve_direct(mode, rsel)` helper function —
@@ -341,6 +368,55 @@ a real MAME oracle, not just clean compilation" methodology exists to catch
 — a register that silently reads back the wrong value has no reason to show
 up as a lint warning or a compile error.
 
-Next step: `MR16D8`/`MR16R8` addressing (`(ix+d)`/`(iy+d)`/`(HL+A)`, opcode
-groups `0xf0-0xf7`) to get past this divergence point; block transfer and a
-real peripheral/timer/interrupt module are the next tier of work after that.
+### Third verification result (indexed and register-to-register groups added)
+
+Implemented `MR16D8`/`MR16R8` addressing (`0xf0-0xf7`) to get past the PC=0x17B
+divergence — but the actual opcode bytes there (`0xFE 0x65`) turned out **not**
+to belong to that group at all. Tracing them against the reference source
+directly: `0xf0-0xf7`'s own case list is `case 0xf0: case 0xf1: case 0xf2:` /
+`0xf3` / `0xf4-0xf6` / `0xf7` — `0xFE` isn't in it. `0xFE` is the **register-
+to-register** group (`0xf8-0xfe`, previously unidentified and unimplemented,
+not mentioned anywhere in the original addressing-mode inventory), which
+interprets `b0-0xf8` as an *8-bit or 16-bit register code* (not a memory
+base) — so `0xFE 0x65` is `XOR A,g` with `g = 0xFE-0xF8 = 6 = A`, i.e.
+`XOR A,A`, matching the oracle's own disassembly exactly (it really does say
+"xor a,a", not an abbreviated "(HL+A)" as first assumed). This is also where
+plain `ADD A,r`-style 8-bit and `ADD HL,rr`-style 16-bit **register-to-
+register** ALU forms live — nowhere in the base table or any of the other
+prefix groups has a bare register-register ALU operand, which had gone
+unnoticed until this specific divergence forced tracing the real opcode bytes
+instead of assuming which documented-but-unverified group they'd fall into.
+Implemented both this group and the real `(ix+d)`/`(iy+d)`/`(HL+A)` indexed
+groups together (see "Instruction set" above), plus the `ADD HL,rr`
+register-to-register flag special-case this group's `ADD HL,gg` form finally
+made reachable (previously implemented as inapplicable dead code, since
+nothing before this could reach it — now real and covered).
+
+Re-diffed against the same oracle capture used for the second result:
+
+```
+matched 175 oracle checkpoints as an exact ordered subsequence
+stopped at oracle checkpoint 176 (PC=0x0EB3), not found in the remaining trace
+last matched checkpoint: PC=0x0EB1
+```
+
+**175 real instructions match MAME's own CPU core exactly** — up from 86,
+covering everything through `mustang`'s OKI/port initialization and into a
+host-handshake wait loop (`LD D,($FB00)` / `CP A,D` / `JR NZ,$0EAB`, polling
+the read latch from the 68000 host for a value only the real host would ever
+write). Checked directly that this is a real, expected boundary and not a
+bug: the RTL's own trace shows the *identical* three-instruction loop
+content at the *identical* addresses, looping indefinitely for the same
+reason MAME's own oracle capture does (the trace tool's loop-collapse count
+even matches structurally) — a standalone CPU-only testbench has no 68000
+counterpart to satisfy this handshake, so this is the natural verification
+boundary for "TLCS-90 core validated first in isolation" per the project's
+own stated methodology, not a CPU defect. Going further needs either a
+fuller system simulation (68000 + shared RAM + real cross-CPU
+synchronization) or a testbench that deliberately fakes the handshake
+response — both are system-integration-level work, not CPU-core work.
+
+Next step: a real peripheral/timer/interrupt module (ports, INTEL/INTEH,
+timers) is the natural next slice of CPU-adjacent work remaining; getting
+NMK004 actually driving YM2203/OKI hardware needs that plus the
+system-level integration described above.

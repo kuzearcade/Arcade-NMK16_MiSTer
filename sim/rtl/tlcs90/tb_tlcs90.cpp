@@ -22,7 +22,7 @@
 #include "Vtlcs90.h"
 #include "verilated.h"
 
-static constexpr uint64_t RUN_CYCLES = 1000000;
+static constexpr uint64_t RUN_CYCLES = 500000;
 
 static uint8_t boot_rom[0x2000];
 static uint8_t ext_rom[0x10000];
