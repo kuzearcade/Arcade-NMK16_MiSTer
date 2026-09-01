@@ -1,23 +1,66 @@
 // bjtwin-family video pipeline: single COL-scan 8x8 tilemap + nmk16spr
-// sprite compositor, driven by a per-frame procedural render (NOT yet a
-// real-time scanline-synchronized hardware pipeline — see the "Known
-// simplification" note below). Built and verified against MAME's exact
-// algorithms per docs/tier1-bjtwin.md:
+// sprite compositor. Built and verified against MAME's exact algorithms
+// per docs/tier1-bjtwin.md:
 //   - tile decode: nmk16_v.cpp bjtwin_get_bg_tile_info + gfx_8x8x4_packed_msb
 //   - sprite decode: nmk16spr.cpp draw_sprites() + gfx_8x8x4_col_2x2_group_packed_msb
 //   - palette: palette_device::RRRRGGGGBBBBRGBx_decoder (emupal.cpp:811)
 //
-// Known simplification: this module computes an entire frame procedurally
-// (a multi-cycle FSM walking every tile then every sprite into a full
-// 384x224 framebuffer, using generously-wide scratch registers rather
-// than hand-fitted bit widths) rather than rendering in real time
-// synchronized to video_timing's hcount/vcount. That's the right order
-// of operations for this milestone — prove the decode/compositing
-// algorithms bit-exact against the MAME oracle first — but it is NOT
-// synthesizable as final hardware: a real core needs a line-buffered
-// raster renderer respecting actual tile/sprite ROM read bandwidth per
-// scanline, and tightened bit widths throughout. Re-architecting for
-// real-time output is follow-up work once this algorithm is verified.
+// Real-time, scanline-synchronized architecture (replaces the earlier
+// per-frame procedural-FSM draft — see git history / docs/tier1-bjtwin.md
+// for that version's role in first proving the decode algorithms bit-exact
+// before this rework):
+//
+//   - Tilemap: MAME never models tile-fetch bandwidth limits for this
+//     family (no clock-budget/drop-out logic in the source, unlike
+//     sprites), so there's nothing to synchronize to a raster clock —
+//     tile decode is instead a pure, stateless per-pixel combinational
+//     function of (x, y, scroll_y_reg, tilebank_reg), addressing bgvram
+//     and the tile-palette tap directly. Real hardware would drive this
+//     from a live hcount/vcount at one pixel per pixel-clock; in
+//     simulation it's driven by the rd_x/rd_y readback ports the same
+//     way, since both are the same combinational chain.
+//
+//     This rewrite also fixes a real wraparound bug in the old sweep: the
+//     tilemap is a 64x32-tile (512x256px) toroidal surface (confirmed via
+//     nmk16_v.cpp's tilemap_create(..., 8, 8, 64, 32) + bjtwin_scroll_w's
+//     set_scrolly(0, -data), which MAME's tilemap system always wraps).
+//     The old code derived screen position from tile position and only
+//     kept results landing in the visible window without ever wrapping
+//     the *source* row — for scroll_y_reg values past roughly 32, most of
+//     the screen got zero tile coverage per frame (stale/undefined
+//     pixels) instead of wrapped tile content. Inverting the direction —
+//     deriving source tile position from screen position via mod-256 (Y)
+//     / mod-512 (X) wraparound — gives full coverage for any scroll value
+//     and is also the natural formulation for a live per-pixel raster
+//     fetch. Never exercised by the captured verification trace (which
+//     stayed near scroll_y_reg==0), so this doesn't invalidate anything
+//     already verified — it closes a gap that verification never reached.
+//
+//   - Sprites: nmk16spr *does* model a real per-frame clock budget
+//     (m_max_sprite_clock / MAX_SPRITE_CLOCK below) that silently drops
+//     late sprites — that's the part that actually needs to behave like
+//     real hardware's bandwidth-limited draw engine, decoupled from
+//     display so a redraw in progress never tears the frame currently
+//     being shown. Implemented as a double-buffered sprite plane: one
+//     buffer (disp_buf) is read for display/readback while the other is
+//     being rebuilt by the budget-walked draw FSM below, triggered by
+//     sprite_dma_trigger (same mainram->sprite_snap DMA snapshot as
+//     before); the buffers swap atomically the instant a draw pass
+//     finishes. The draw FSM's per-sprite/per-pixel cost accounting is
+//     unchanged from the already MAME-oracle-verified version — only the
+//     destination (a plane slot instead of a shared framebuffer) and the
+//     removal of a mid-draw palette dependency (see below) changed.
+//
+//     Sprite pixels store a 10-bit raw palette index (colour<<4|pen),
+//     not pre-decoded RGB, and are decoded from the *live* palette tap at
+//     read time — matching MAME's own model, where draw_sprites() reads
+//     whatever palette content currently exists at screen_update() time,
+//     which is unrelated to when the sprite position/tile data was
+//     DMA'd. This also means the draw FSM itself never needs to touch
+//     the palette at all (the pen==15 transparency test only needs the
+//     sprite ROM's own pixel value, confirmed via nmk16spr.cpp's
+//     drawgfx(...,15) transpen call) — one less external RAM port to
+//     arbitrate during drawing.
 //
 // bjtwin-specific compositing facts (verified from nmk16_v.cpp, not
 // assumed): m_bg_tilemap->draw(..., 0, 1) writes priority value 1 for
@@ -32,6 +75,15 @@
 // modulo 512 via a plain 9-bit truncation — verified equivalent to
 // nmk16spr.cpp's scattered +=/-= xpos_max checks for the range of values
 // this hardware can produce (see docs/tier1-bjtwin.md derivation).
+//
+// Known simplification carried forward: storage bit widths are still
+// generously sized rather than hand-fit for BRAM inference/area budgeting
+// on real Cyclone V hardware (e.g. the two 86016-entry sprite planes,
+// ~1.9Mbit total, are plain reg arrays with combinational read ports).
+// Getting the timing MODEL right (this rework) comes before that tuning
+// pass, per docs/PLAN.md's verification-first methodology. There is also
+// still no live hsync/vsync/RGB output pin — that's the separate
+// MiSTer sys/ integration milestone, not implied by this rework.
 module video_bjtwin #(
 	parameter FGTILE_FILE  = "",
 	parameter BGTILE_FILE  = "",
@@ -44,10 +96,12 @@ module video_bjtwin #(
 
 	// register/RAM read ports into bjtwin_core's storage (dual-tap reads,
 	// bjtwin_core.sv owns the arrays; see its header for why)
-	output reg [10:0] bgvram_addr,
-	input      [15:0] bgvram_data,
-	output reg [9:0]  palette_addr,
-	input      [15:0] palette_data,
+	output [10:0] bgvram_addr,
+	input  [15:0] bgvram_data,
+	output [9:0]  palette_addr,   // tile-plane palette tap (live, per-pixel)
+	input  [15:0] palette_data,
+	output [9:0]  spr_palette_addr, // sprite-plane palette tap (read-time only, see header)
+	input  [15:0] spr_palette_data,
 	output reg [14:0] mainram_addr,
 	input      [15:0] mainram_data,
 
@@ -60,14 +114,12 @@ module video_bjtwin #(
 	output [23:0] rd_rgb,
 
 	// sprite_snap readback for the testbench, to verify against MAME's
-	// m_spriteram_old (see docs/tier1-bjtwin.md "Sprite rendering
+	// m_spriteram_old (see docs/tier1-bjtwin.md "sprite_dma() buffer
 	// verification" — that buffer is a host-memory copy in MAME, never a
 	// CPU bus transaction, so it needs this kind of direct internal-state
 	// comparison rather than a bus trace)
 	input  [10:0] dbg_snap_addr,
-	output [15:0] dbg_snap_data,
-
-	output reg frame_done // pulses for one clk_sys cycle when a new frame is ready to read
+	output [15:0] dbg_snap_data
 );
 
 	localparam integer SCREEN_W = 384;
@@ -139,14 +191,28 @@ module video_bjtwin #(
 	endfunction
 
 	// ------------------------------------------------------------------
-	// Framebuffer (simulation-only storage, see header note)
+	// Tilemap: pure per-pixel combinational function of (rd_x, rd_y),
+	// see module header. No FSM, no framebuffer — real hardware would
+	// drive the same chain from a live hcount/vcount instead.
 	// ------------------------------------------------------------------
-	reg [23:0] framebuf [0:SCREEN_W*SCREEN_H-1];
+	wire [8:0] tile_line_x = (rd_x + (512 - VIDEOSHIFT)) % 512; // toroidal, 64 cols x 8px
+	wire [7:0] tile_line_y = (rd_y + scroll_y_reg) % 256;       // toroidal, 32 rows x 8px
+	wire [5:0] t_col = tile_line_x[8:3];
+	wire [2:0] t_px  = tile_line_x[2:0];
+	wire [4:0] t_row = tile_line_y[7:3];
+	wire [2:0] t_py  = tile_line_y[2:0];
 
-	assign rd_rgb = (rd_x < SCREEN_W && rd_y < SCREEN_H) ? framebuf[rd_y * SCREEN_W + rd_x] : 24'h0;
+	assign bgvram_addr = {t_col, t_row}; // COL-scan: index = col*32+row
+
+	wire [3:0] t_pix_nib = bgvram_data[11]
+		? bgtile_pixel(int'(bgvram_data[10:0]) + (int'(tilebank_reg) << 11), int'(t_py), int'(t_px))
+		: fgtile_pixel(int'(bgvram_data[10:0]), int'(t_py), int'(t_px));
+
+	assign palette_addr = {bgvram_data[15:12], t_pix_nib};
+	wire [23:0] tile_rgb = decode_rgb(palette_data);
 
 	// ------------------------------------------------------------------
-	// Sprite RAM snapshot (single-buffered, per docs/tier1-bjtwin.md)
+	// Sprite RAM snapshot (per docs/tier1-bjtwin.md sprite_dma() writeup)
 	// ------------------------------------------------------------------
 	reg [15:0] sprite_snap [0:2047]; // 256 sprites x 8 words
 	assign dbg_snap_data = sprite_snap[dbg_snap_addr];
@@ -154,49 +220,79 @@ module video_bjtwin #(
 	reg [11:0] snap_idx;
 
 	// ------------------------------------------------------------------
-	// Render FSM
+	// Sprite plane: double-buffered, see module header. Bit[10]=valid
+	// (opaque sprite pixel drawn this pass), bits[9:0]=raw palette index
+	// (colour<<4|pen), decoded from the live palette tap at read time.
+	// ------------------------------------------------------------------
+	reg [10:0] sprite_plane [0:1][0:SCREEN_W*SCREEN_H-1];
+	reg        disp_buf; // which buffer is currently valid for display/readback
+
+	wire [16:0] rd_addr = rd_y * SCREEN_W + rd_x;
+	wire        rd_in_range = (rd_x < SCREEN_W) && (rd_y < SCREEN_H);
+	wire [10:0] spr_entry = rd_in_range ? sprite_plane[disp_buf][rd_addr] : 11'd0;
+	wire        spr_valid = spr_entry[10];
+
+	assign spr_palette_addr = 10'h100 + {6'd0, spr_entry[9:0]}; // truncates to 10 bits, same wraparound as the original single-tap formula it replaces
+	wire [23:0] spr_rgb = decode_rgb(spr_palette_data);
+
+	assign rd_rgb = !rd_in_range ? 24'h0 : (spr_valid ? spr_rgb : tile_rgb);
+
+	// ------------------------------------------------------------------
+	// Sprite draw FSM: snapshot -> clear the non-displayed plane -> walk
+	// sprite_snap in slot order under the same MAME-verified clock
+	// budget as before -> swap buffers. Fully decoupled from frame_done
+	// (now generated directly off the raster counter in bjtwin_core.sv)
+	// and from the tilemap path above (no shared state).
 	// ------------------------------------------------------------------
 	localparam
-		S_IDLE        = 0,
-		S_SNAP_REQ    = 1,
-		S_SNAP_LATCH  = 2,
-		S_TILE_REQ    = 3,
-		S_TILE_LATCH  = 4,
-		S_TILE_PALREQ = 5,
-		S_TILE_PLOT   = 6,
-		S_TILE_NEXT   = 7,
-		S_SPR_HEAD    = 8,
-		S_SPR_UNIT    = 9,
-		S_SPR_PALREQ  = 10,
-		S_SPR_PLOT    = 11,
-		S_SPR_NEXT    = 12,
-		S_DONE        = 13;
+		S_RESET_CLR0 = 0, // power-on: clear buffer 0 (the initial disp_buf)
+		S_RESET_CLR1 = 1, // power-on: clear buffer 1
+		S_IDLE        = 2,
+		S_SNAP_REQ    = 3,
+		S_SNAP_LATCH  = 4,
+		S_CLEAR       = 5, // per-pass: clear the buffer about to be (re)drawn
+		S_SPR_HEAD    = 6,
+		S_SPR_UNIT    = 7,
+		S_SPR_CHECK   = 8,
+		S_SPR_PLOT    = 9,
+		S_SPR_NEXT    = 10,
+		S_DONE        = 11;
 
-	reg [3:0] state;
-
-	// tilemap walk
-	integer t_col, t_row, t_px, t_py;
-	reg [15:0] t_word;
-	integer t_pix_nib;
+	reg [3:0]  state;
+	reg [16:0] clr_idx;
+	reg        draw_buf; // = ~disp_buf for the duration of one draw pass
 
 	// sprite walk
 	integer s_slot;
 	integer clk_budget;
 	integer s_w, s_h, s_code, s_colour, s_sx, s_sy;
 	integer s_tx, s_ty, s_px, s_py;
-	integer s_unit_code, s_pixel_x_base, s_pixel_y_base, s_screen_x, s_screen_y;
+	integer s_unit_code, s_pixel_x_base, s_pixel_y_base;
 	integer s_pix_nib;
 
 	always @(posedge clk_sys) begin
-		frame_done <= 1'b0;
-
 		if (reset) begin
-			state <= S_IDLE;
+			state    <= S_RESET_CLR0;
+			clr_idx  <= 17'd0;
+			disp_buf <= 1'b0;
 			snap_pending <= 1'b0;
 		end else begin
 			if (sprite_dma_trigger) snap_pending <= 1'b1;
 
 			case (state)
+				S_RESET_CLR0: begin
+					sprite_plane[0][clr_idx] <= 11'd0;
+					if (clr_idx == SCREEN_W*SCREEN_H-1) begin
+						clr_idx <= 17'd0;
+						state <= S_RESET_CLR1;
+					end else clr_idx <= clr_idx + 17'd1;
+				end
+				S_RESET_CLR1: begin
+					sprite_plane[1][clr_idx] <= 11'd0;
+					if (clr_idx == SCREEN_W*SCREEN_H-1) state <= S_IDLE;
+					else clr_idx <= clr_idx + 17'd1;
+				end
+
 				S_IDLE: begin
 					if (snap_pending) begin
 						snap_pending <= 1'b0;
@@ -213,78 +309,28 @@ module video_bjtwin #(
 				S_SNAP_LATCH: begin
 					sprite_snap[snap_idx] <= mainram_data;
 					if (snap_idx == 12'd2047) begin
-						t_col <= 0; t_row <= 0; t_px <= 0; t_py <= 0;
-						state <= S_TILE_REQ;
+						draw_buf <= ~disp_buf;
+						clr_idx <= 17'd0;
+						state <= S_CLEAR;
 					end else begin
 						snap_idx <= snap_idx + 12'd1;
 						state <= S_SNAP_REQ;
 					end
 				end
 
-				// one tile-code fetch per tile (COL-scan: index = col*32+row)
-				S_TILE_REQ: begin
-					bgvram_addr <= t_col * 32 + t_row;
-					state <= S_TILE_LATCH;
-				end
-				S_TILE_LATCH: begin
-					t_word <= bgvram_data;
-					state <= S_TILE_PALREQ;
-				end
-				S_TILE_PALREQ: begin
-					if (t_word[11]) begin
-						t_pix_nib = bgtile_pixel(int'(t_word[10:0]) + (int'(tilebank_reg) << 11), t_py, t_px);
-					end else begin
-						t_pix_nib = fgtile_pixel(int'(t_word[10:0]), t_py, t_px);
-					end
-					palette_addr <= {t_word[15:12], t_pix_nib[3:0]};
-					state <= S_TILE_PLOT;
-				end
-				S_TILE_PLOT: begin
-					begin : tile_plot_blk
-						integer sx, sy;
-						sx = t_col * 8 + VIDEOSHIFT + t_px;
-						sy = t_row * 8 + t_py - int'(scroll_y_reg);
-						sx = sx % 512;
-						sy = sy % 512;
-						if (sx >= 0 && sx < SCREEN_W && sy >= 0 && sy < SCREEN_H)
-							framebuf[sy * SCREEN_W + sx] <= decode_rgb(palette_data);
-					end
-					state <= S_TILE_NEXT;
-				end
-				S_TILE_NEXT: begin
-					if (t_px == 7) begin
-						t_px <= 0;
-						if (t_py == 7) begin
-							t_py <= 0;
-							if (t_row == 31) begin
-								t_row <= 0;
-								if (t_col == 63) begin
-									s_slot <= 0;
-									clk_budget <= 0;
-									state <= S_SPR_HEAD;
-								end else begin
-									t_col <= t_col + 1;
-									state <= S_TILE_REQ;
-								end
-							end else begin
-								t_row <= t_row + 1;
-								state <= S_TILE_REQ;
-							end
-						end else begin
-							t_py <= t_py + 1;
-							state <= S_TILE_REQ;
-						end
-					end else begin
-						t_px <= t_px + 1;
-						state <= S_TILE_REQ;
-					end
+				S_CLEAR: begin
+					sprite_plane[draw_buf][clr_idx] <= 11'd0;
+					if (clr_idx == SCREEN_W*SCREEN_H-1) begin
+						s_slot <= 0;
+						clk_budget <= 0;
+						state <= S_SPR_HEAD;
+					end else clr_idx <= clr_idx + 17'd1;
 				end
 
 				// ---------------- sprites ----------------
 				// One slot examined per cycle (matching MAME's "clk += 16
 				// per sprite examined" cost at the granularity of one
-				// state per slot, not one state per host clock — see
-				// module header re: this being a simulation-only FSM).
+				// state per slot, not one state per host clock).
 				S_SPR_HEAD: begin
 					begin : spr_head_blk
 						integer offs;
@@ -333,17 +379,13 @@ module video_bjtwin #(
 					s_pixel_x_base <= (s_sx + s_tx * 16) % 512;
 					s_pixel_y_base <= (s_sy + s_ty * 16) % 512;
 					s_px <= 0; s_py <= 0;
-					state <= S_SPR_PALREQ;
+					state <= S_SPR_CHECK;
 				end
 
-				S_SPR_PALREQ: begin
+				S_SPR_CHECK: begin
 					s_pix_nib = sprite_pixel(s_unit_code, s_py, s_px);
-					if (s_pix_nib != 15) begin
-						palette_addr <= 10'h100 + (s_colour << 4) + s_pix_nib[3:0];
-						state <= S_SPR_PLOT;
-					end else begin
-						state <= S_SPR_NEXT; // pen15 = transparent, skip plot
-					end
+					if (s_pix_nib != 15) state <= S_SPR_PLOT;
+					else state <= S_SPR_NEXT; // pen15 = transparent, skip plot
 				end
 
 				S_SPR_PLOT: begin
@@ -352,7 +394,7 @@ module video_bjtwin #(
 						sx = s_pixel_x_base + s_px;
 						sy = s_pixel_y_base + s_py;
 						if (sx < SCREEN_W && sy < SCREEN_H)
-							framebuf[sy * SCREEN_W + sx] <= decode_rgb(palette_data);
+							sprite_plane[draw_buf][sy * SCREEN_W + sx] <= {1'b1, s_colour[5:0], s_pix_nib[3:0]};
 					end
 					state <= S_SPR_NEXT;
 				end
@@ -378,16 +420,16 @@ module video_bjtwin #(
 							end
 						end else begin
 							s_py <= s_py + 1;
-							state <= S_SPR_PALREQ;
+							state <= S_SPR_CHECK;
 						end
 					end else begin
 						s_px <= s_px + 1;
-						state <= S_SPR_PALREQ;
+						state <= S_SPR_CHECK;
 					end
 				end
 
 				S_DONE: begin
-					frame_done <= 1'b1;
+					disp_buf <= draw_buf; // atomic swap: draw_buf is now ready for display
 					state <= S_IDLE;
 				end
 

@@ -98,12 +98,15 @@ module bjtwin_core #(
 	wire enPhi1 = (cpu_div == 2'd3);
 	wire enPhi2 = (cpu_div == 2'd1);
 
-	// pixel/sprite: /5 -> 8MHz from 40MHz. Not consumed by anything yet in
-	// this milestone (video isn't implemented), kept here so the clock
-	// tree is established once and reused by rtl/bjtwin video modules later.
+	// pixel/sprite: /5 -> 8MHz from 40MHz. Reset-gated (not just free-
+	// running) so it stays in lockstep with video_timing's hcount, which
+	// IS held at 0 through reset — otherwise the first ce_pix pulse after
+	// reset lifts can catch a stale hcount==0 and fire a spurious extra
+	// frame_done pulse right at boot (found via the frame_done rework,
+	// see video_bjtwin.sv's header).
 	reg [2:0] pix_div = 3'd0;
 	wire ce_pix = (pix_div == 3'd4);
-	always @(posedge clk_sys) pix_div <= ce_pix ? 3'd0 : pix_div + 3'd1;
+	always @(posedge clk_sys) pix_div <= reset ? 3'd0 : (ce_pix ? 3'd0 : pix_div + 3'd1);
 
 	// ------------------------------------------------------------------
 	// fx68k
@@ -221,10 +224,17 @@ module bjtwin_core #(
 	end
 	always @(*) palette_dout = palette[palette_addr];
 
-	// second, video-side read tap
+	// second, video-side read tap (tile-plane reads, see video_bjtwin.sv)
 	wire [9:0] vid_palette_addr;
 	reg  [15:0] vid_palette_dout;
 	always @(*) vid_palette_dout = palette[vid_palette_addr];
+
+	// third read tap, dedicated to the sprite plane's read-time palette
+	// decode (see video_bjtwin.sv header re: why sprites need their own
+	// independent palette port rather than sharing the tile-plane one)
+	wire [9:0] vid_spr_palette_addr;
+	reg  [15:0] vid_spr_palette_dout;
+	always @(*) vid_spr_palette_dout = palette[vid_spr_palette_addr];
 
 	// ------------------------------------------------------------------
 	// BG tilemap VRAM (2048 x 16, mirrored)
@@ -335,13 +345,23 @@ module bjtwin_core #(
 		.sprite_dma_trigger(sprite_dma_trigger),
 		.bgvram_addr(vid_bgvram_addr), .bgvram_data(vid_bgvram_dout),
 		.palette_addr(vid_palette_addr), .palette_data(vid_palette_dout),
+		.spr_palette_addr(vid_spr_palette_addr), .spr_palette_data(vid_spr_palette_dout),
 		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout),
 		.tilebank_reg(tilebank_reg),
 		.scroll_y_reg(scroll_y_reg),
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
-		.dbg_snap_addr(dbg_snap_addr), .dbg_snap_data(dbg_snap_data),
-		.frame_done(frame_done)
+		.dbg_snap_addr(dbg_snap_addr), .dbg_snap_data(dbg_snap_data)
 	);
+
+	// frame_done now marks a real raster frame boundary (vcount wrap),
+	// generated directly off the shared vtiming counter rather than
+	// waiting on a procedural render sweep to finish — see
+	// video_bjtwin.sv's header for why that FSM no longer exists.
+	reg frame_done_r;
+	always @(posedge clk_sys) begin
+		frame_done_r <= vt_line_start && (vt_vcount == 10'd0);
+	end
+	assign frame_done = frame_done_r;
 
 	// ------------------------------------------------------------------
 	// Debug/trace outputs
