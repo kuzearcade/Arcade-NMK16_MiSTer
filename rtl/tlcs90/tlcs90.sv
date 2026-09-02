@@ -189,7 +189,9 @@ module tlcs90 (
 	// state symbols of the same name).
 	output      [7:0]  dbg_a,
 	output      [7:0]  dbg_f,
-	output      [15:0] dbg_hl
+	output      [15:0] dbg_hl,
+	output      [15:0] dbg_de,
+	output      [15:0] dbg_iy
 );
 
 	// ------------------------------------------------------------------
@@ -209,6 +211,8 @@ module tlcs90 (
 	assign dbg_a  = a;
 	assign dbg_f  = f;
 	assign dbg_hl = hl;
+	assign dbg_de = de;
+	assign dbg_iy = iy;
 
 	// ------------------------------------------------------------------
 	// Register-pair / register select codes (match the reference exactly)
@@ -381,6 +385,36 @@ module tlcs90 (
 			8'h10: d_op = OP_CPL;
 			8'h11: d_op = OP_NEG;
 
+			// MUL/DIV HL,n (8-bit immediate). Same OP_MUL/OP_DIV the
+			// PFX_G8 register-operand form already uses (reference:
+			// tlcs90.cpp:367-370, "case 0x12: case 0x13: OP(MUL+b0-0x12,16)
+			// R16(1,HL) I8(2,READ8())") — missing here entirely, same
+			// silent-OP_NOP-fallthrough class as the ADD ix,mn gap above.
+			8'h12: begin d_op = OP_MUL; d_mode1 = M_R16; d_r1e = R16_HL; d_mode2 = M_I8; d_m2bytes = 2'd1; end
+			8'h13: begin d_op = OP_DIV; d_mode1 = M_R16; d_r1e = R16_HL; d_mode2 = M_I8; d_m2bytes = 2'd1; end
+
+			// ADD ix,mn (ix = IX/IY/SP, register selected by the opcode
+			// byte itself — R16_IX + (opcode-0x14), landing on R16_IX(4)/
+			// R16_IY(5)/R16_SP(6) for 0x14/0x15/0x16 respectively, same
+			// arithmetic already documented above for the (gg)-indexed
+			// groups). Confirmed directly against the reference
+			// (cpu/tlcs90/tlcs90.cpp:372-373, "case 0x14: case 0x15: case
+			// 0x16: OP16(ADD,6) R16(1,IX+b0-0x14) I16(2,READ16())") — this
+			// specific base (unprefixed) form was missing from this table
+			// entirely (the cycle-cost table above already had an entry
+			// for it, "8'h14, 8'h15, 8'h16: cyc = 6'd12" under PFX_NONE,
+			// but nothing here ever produced a non-default d_op for these
+			// three opcodes, so they silently executed as OP_NOP — found
+			// via tdragon1's own protection-MCU firmware, the first ROM
+			// in this project to ever execute "ADD IY,#imm16": IY never
+			// advanced through a 16-entry table-scan loop, causing every
+			// iteration to re-read the same table entry).
+			8'h14, 8'h15, 8'h16: begin
+				d_op = OP_ADD; d_wide = 1'b1;
+				d_mode1 = M_R16; d_r1e = R16_IX + 4'(din - 8'h14);
+				d_mode2 = M_I16; d_m2bytes = 2'd2;
+			end
+
 			// LDAR HL,+cd: HL = PC + (raw D16 value - 1). No memory
 			// access, no flags touched (confirmed by the reference — no
 			// F=... line for this op either) — see the OP_LDAR execute
@@ -416,6 +450,13 @@ module tlcs90 (
 			8'h30,8'h31,8'h32,8'h33,8'h34,8'h35,8'h36: begin d_op = OP_LD; d_mode1 = M_R8; d_r1e = 4'(din - 8'h30); d_mode2 = M_I8; d_m2bytes = 2'd1; end
 			8'h37: begin d_op = OP_LD; d_mode1 = M_MI16; d_m1bytes = 2'd1; d_mode2 = M_I8; d_m2bytes = 2'd1; end
 			8'h38,8'h39,8'h3a,8'h3c,8'h3d,8'h3e: begin d_op = OP_LD; d_wide = 1'b1; d_mode1 = M_R16; d_r1e = 4'(din - 8'h38); d_mode2 = M_I16; d_m2bytes = 2'd2; end
+			// LDW ($FF00+w),mn — reuses OP_LD (MAME's own execute() merges
+			// "case LDW:" and "case LD|OP_16:" into the identical
+			// Write1_16(Read2_16()) path, tlcs90.cpp:1497-1499, so no new
+			// opcode is needed). mode1 mirrors DECX/0x0f's own ($FF00+n)
+			// M_MI16/m1bytes=1 encoding. Missing here entirely (reference:
+			// tlcs90.cpp:419-420) — same silent-fallthrough class as above.
+			8'h3f: begin d_op = OP_LD; d_wide = 1'b1; d_mode1 = M_MI16; d_m1bytes = 2'd1; d_mode2 = M_I16; d_m2bytes = 2'd2; end
 
 			8'h40,8'h41,8'h42,8'h44,8'h45,8'h46: begin d_op = OP_LD; d_wide = 1'b1; d_mode1 = M_R16; d_r1e = R16_HL; d_mode2 = M_R16; d_r2e = 4'(din - 8'h40); end
 			8'h47: begin d_op = OP_LD; d_wide = 1'b1; d_mode1 = M_R16; d_r1e = R16_HL; d_mode2 = M_MI16; d_m2bytes = 2'd1; end
@@ -806,6 +847,7 @@ module tlcs90 (
 	reg [3:0] d2_r1e, d2_r2e;
 	reg [1:0] d2_mem_slot;  // 1 or 2: which slot (mode1/mode2) holds the external (gg/mn/ff) operand
 	reg       d2_needs_i8;  // one more immediate byte follows the selector (DST-side ADD-family/LD-immediate/CP)
+	reg       d2_needs_i16; // two more immediate bytes follow the selector (DST-side LDW (mem),mn)
 
 	reg [3:0] pfx;
 	reg [3:0] gg;
@@ -832,7 +874,7 @@ module tlcs90 (
 		d2_op = OP_UNKNOWN; d2_wide = 1'b0;
 		d2_mode1 = M_NONE; d2_mode2 = M_NONE;
 		d2_r1e = 4'd0; d2_r2e = 4'd0;
-		d2_mem_slot = 2'd2; d2_needs_i8 = 1'b0;
+		d2_mem_slot = 2'd2; d2_needs_i8 = 1'b0; d2_needs_i16 = 1'b0;
 
 		if (pfx == PFX_G8) begin
 			// Register-to-register forms: `gg` (from the b0 embedding, see
@@ -852,6 +894,16 @@ module tlcs90 (
 				// down, which require b0==0xfe specifically).
 				8'h12: begin d2_op = OP_MUL; d2_mode1 = M_R16; d2_r1e = R16_HL; d2_mode2 = M_R8; d2_mem_slot = 2'd2; end
 				8'h13: begin d2_op = OP_DIV; d2_mode1 = M_R16; d2_r1e = R16_HL; d2_mode2 = M_R8; d2_mem_slot = 2'd2; end
+				// ADD ix,gg — register-register form (mode2=R16(gg) filled
+				// automatically by the same mem_slot=2 fill logic MUL/DIV
+				// above already rely on). Confirmed used directly by
+				// tdragon1's own protection-MCU firmware (found via a ROM
+				// byte-pattern scan after the base-level ADD ix,mn fix).
+				8'h14, 8'h15, 8'h16: begin
+					d2_op = OP_ADD; d2_wide = 1'b1;
+					d2_mode1 = M_R16; d2_r1e = R16_IX + 4'(din - 8'h14);
+					d2_mode2 = M_R16; d2_mem_slot = 2'd2;
+				end
 				8'h30,8'h31,8'h32,8'h33,8'h34,8'h35,8'h36: begin
 					d2_op = OP_LD; d2_mode1 = M_R8; d2_r1e = 4'(din - 8'h30); d2_mode2 = M_R8; d2_mem_slot = 2'd2; end
 				8'h38,8'h39,8'h3a,8'h3c,8'h3d,8'h3e: begin
@@ -906,6 +958,20 @@ module tlcs90 (
 				// reasoning as LDI*/CPI*'s DE).
 				8'h10: begin d2_op = OP_RLD; d2_mode1 = mem_mode; d2_mem_slot = 2'd1; end
 				8'h11: begin d2_op = OP_RRD; d2_mode1 = mem_mode; d2_mem_slot = 2'd1; end
+				// MUL/DIV HL,(mem) and ADD ix,(mem) — the memory-operand
+				// forms of the PFX_G8 register cases above, reachable via
+				// every SRC prefix group ((gg),(mn),($FF00+n),(ix+d)/(iy+d),
+				// (HL+A)). Confirmed used directly by tdragon1's own
+				// protection-MCU firmware and the shared NMK004 boot ROM
+				// (found via a ROM byte-pattern scan after the base-level
+				// ADD ix,mn fix).
+				8'h12: begin d2_op = OP_MUL; d2_mode1 = M_R16; d2_r1e = R16_HL; d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
+				8'h13: begin d2_op = OP_DIV; d2_mode1 = M_R16; d2_r1e = R16_HL; d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
+				8'h14, 8'h15, 8'h16: begin
+					d2_op = OP_ADD; d2_wide = 1'b1;
+					d2_mode1 = M_R16; d2_r1e = R16_IX + 4'(din - 8'h14);
+					d2_mode2 = mem_mode; d2_mem_slot = 2'd2;
+				end
 				8'h28,8'h29,8'h2a,8'h2b,8'h2c,8'h2d,8'h2e: begin
 					d2_op = OP_LD; d2_mode1 = M_R8; d2_r1e = 4'(din - 8'h28); d2_mode2 = mem_mode; d2_mem_slot = 2'd2; end
 				8'h48,8'h49,8'h4a,8'h4c,8'h4d,8'h4e: begin
@@ -943,6 +1009,16 @@ module tlcs90 (
 				8'h20,8'h21,8'h22,8'h23,8'h24,8'h25,8'h26: begin
 					d2_op = OP_LD; d2_mode1 = mem_mode; d2_mode2 = M_R8; d2_r2e = din[3:0]; d2_mem_slot = 2'd1; end
 				8'h37: begin d2_op = OP_LD; d2_mode1 = mem_mode; d2_mode2 = M_I8; d2_mem_slot = 2'd1; d2_needs_i8 = 1'b1; end
+				// LDW (mem),mn — reuses OP_LD same as the base-level 0x3f
+				// form above (MAME merges LDW into LD|OP_16's own execute
+				// case). Needs a genuine 16-bit immediate fetch after the
+				// selector byte, which no other DST-group entry has needed
+				// before now — see d2_needs_i16 and its S_PFX_SEL handling
+				// (reuses the existing base-level S_M2_BYTE1/2 states).
+				8'h3f: begin
+					d2_op = OP_LD; d2_wide = 1'b1; d2_mode1 = mem_mode; d2_mode2 = M_I16;
+					d2_mem_slot = 2'd1; d2_needs_i16 = 1'b1;
+				end
 				8'h40,8'h41,8'h42,8'h44,8'h45,8'h46: begin
 					d2_op = OP_LD; d2_wide = 1'b1; d2_mode1 = mem_mode; d2_mode2 = M_R16; d2_r2e = din[3:0]; d2_mem_slot = 2'd1; end
 				8'h68,8'h69,8'h6a,8'h6b,8'h6c,8'h6d,8'h6e: begin
@@ -1348,6 +1424,15 @@ module tlcs90 (
 					if (d2_needs_i8) begin
 						addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
 						state <= S_PFX_I8;
+					end else if (d2_needs_i16) begin
+						// LDW (mem),mn's trailing 16-bit immediate — reuses
+						// the base-level S_M2_BYTE1/S_M2_BYTE2 states
+						// verbatim (they already write the fetched value
+						// into r2 generically, exactly what mode2==M_I16
+						// needs here too).
+						addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
+						m2bytes_left <= 2'd2;
+						state <= S_M2_BYTE1;
 					end else begin
 						state <= S_PRE_READ1;
 					end

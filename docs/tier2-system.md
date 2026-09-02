@@ -2069,3 +2069,135 @@ yet fully root-caused). Family D's tdragon1/hachamf remain not
 playable; the video_timing.sv fix is real, verified, and worth keeping
 regardless, since it's demonstrably a closer match to real MAME
 behavior project-wide.
+
+## tdragon1/hachamf — the real root cause: `tlcs90.sv`'s opcode table was incomplete
+
+Continuing the trampoline-patch divergence, chased further this
+session. The eventual finding: `tlcs90.sv`'s decode tables — shared by
+*every* port in this project, both in the NMK004 sound-MCU role and the
+tdragon1/hachamf protection-MCU role — were missing six distinct
+opcode forms entirely. tdragon1's protection-MCU firmware is the first
+ROM in the project's history to execute any of them, which is why nine
+prior Tier 1/2 ports never surfaced the gap.
+
+### `ADD ix,mn` — the trampoline-patch divergence, finally explained
+
+The protection MCU builds the trampoline's jump target by scanning a
+16-entry ROM table, advancing an index register via `ADD IY,#imm16`
+(base opcode `0x14`-`0x16`, unprefixed). `tlcs90.sv`'s base decode
+table (the `casez (din)` block driving `d_op`) had **no entry at all**
+for these three opcode bytes — confirmed directly against the
+reference (`cpu/tlcs90/tlcs90.cpp:372-373`,
+`case 0x14: case 0x15: case 0x16: OP16(ADD,6) R16(1,IX+b0-0x14)
+I16(2,READ16())`). The cycle-cost table already had a correct entry
+for these opcodes (`8'h14, 8'h15, 8'h16: cyc = 6'd12`), which is why
+this had never been caught by a byte-count/cycle-count mismatch — the
+instruction just silently executed as `OP_NOP`. `IY` never advanced;
+every loop iteration re-read the same table entry, and the wrong
+payload word got OR'd into the trampoline's target address.
+
+Fix: added the missing `casez` entry (`rtl/tlcs90/tlcs90.sv`, base
+decode block). Verified precisely: the trampoline now gets patched
+with `HL=$92F4`, exactly matching the oracle's own known-correct value
+(previously `$0200`) — the divergence chased across the prior session
+and much of this one is resolved at the mechanism level.
+
+### A second, deeper Address Error surfaces — and a full opcode audit
+
+Fixing the trampoline let the 68000 run much further than ever before:
+it completes a legitimate 65,536-iteration delay loop, reaches real
+interrupt-driven code, and then trips a genuine **Address Error**
+exception (vector 3, `$9674` — distinct from the earlier illegal-
+instruction trap) inside the level-1 interrupt handler at `$955A`
+(`jsr $406.L`, a RAM-resident routine doing
+`movea.l $BE000.L,A0` / `move.w (A0),...`). MAME's own debugger
+(`save` command dumping live memory at a breakpoint) showed the
+oracle's own pointer at `$BE000` is `$0008E3F6` — a valid, even ROM
+address; the candidate's own value at the same point was odd,
+faulting on the word dereference.
+
+Given the same "silently executed as NOP" pattern had just been found
+once, the natural next step was a byte-pattern scan of both TLCS-90
+ROMs (`nmk004.bin`, `nmk-110-tdragon.bin`) for the prefix/sub-opcode
+byte sequences of every instruction MAME implements — not just a
+targeted look at the one already-found gap. This surfaced genuine,
+repeated usage (dozens of occurrences each) of five more forms MAME
+implements that `tlcs90.sv` did not decode, spanning three instruction
+families, none previously exercised by any of the ten prior ports:
+
+| Opcode(s) | Mnemonic | MAME reference |
+|---|---|---|
+| base `0x12`/`0x13` | `MUL/DIV HL,n` (8-bit imm) | `tlcs90.cpp:367-370` |
+| base `0x3f` | `LDW ($FF00+w),mn` | `tlcs90.cpp:419-420` |
+| `PFX_G8` (`0xf8`-`0xfe`) sub `0x14`-`0x16` | `ADD ix,gg` (reg-reg) | `tlcs90.cpp:994-997` |
+| every SRC prefix, sub `0x12`/`0x13`, `0x14`-`0x16` | `MUL/DIV HL,(mem)`, `ADD ix,(mem)` | `tlcs90.cpp:519-918` |
+| every DST prefix, sub `0x3f` | `LDW (mem),mn` | `tlcs90.cpp:699-993` |
+
+All five reuse the *existing* `OP_MUL`/`OP_DIV`/`OP_ADD`/`OP_LD`
+opcodes rather than adding new ones — confirmed by reading MAME's own
+`execute()`, which merges `case LDW:` and `case LD | OP_16:` into the
+identical `Write1_16(Read2_16())` path (`tlcs90.cpp:1494-1501`), so
+`LDW` genuinely is just a 16-bit `LD` under a different mnemonic. The
+one new piece of machinery needed was a 16-bit immediate fetch for the
+DST-group `LDW (mem),mn` form (no prior DST-group entry had ever
+needed more than one trailing immediate byte) — implemented as a new
+`d2_needs_i16` flag that reuses the existing base-level
+`S_M2_BYTE1`/`S_M2_BYTE2` states verbatim rather than adding new FSM
+states.
+
+Two independent, fresh audits (each a from-scratch, exhaustive
+byte-by-byte cross-reference of every base and prefixed opcode against
+MAME's `decode()`/`execute()`) confirm the table is now complete: the
+only forms MAME's own decoder produces that the RTL still leaves
+unimplemented are `TSET` and `LDA`, both genuinely dead in MAME's own
+`execute()` too (`case TSET:` commented out at `tlcs90.cpp:1730`,
+`case LDA:` at `tlcs90.cpp:1504`) — correct, oracle-matching behavior,
+not a gap.
+
+### Result: tdragon1 renders
+
+Full 300M-cycle verification run, before vs. after this session's
+fixes:
+
+| | Before | After |
+|---|---|---|
+| Address Error (`$9674`) | fatal, halts forever on first occurrence | 0 occurrences across 917 interrupt-loop iterations |
+| Non-blank palette | 0/1024 | 609/1024 |
+| BG VRAM written | 8192/8192 (never cleared — crashed before its own init ran) | 256/8192 |
+| TX VRAM written | 1024/1024 (same) | 832/1024 |
+| Rendered pixels nonzero | 0/86016 | 52,358/86,016 (61%) |
+
+tdragon1 is confirmed rendering real content, not just avoiding a
+crash — the `$BE000`-family pointer sampled repeatedly across the run
+is always even/valid, and the 68000 cycles cleanly through the
+`$955A` interrupt handler in the same repeating pattern the oracle
+itself uses.
+
+### hachamf: crash resolved, but render result is inconclusive
+
+Re-running hachamf (Family D's second protection-MCU game) with the
+same fixes: no crash (previously hit the identical known limitation),
+but the VRAM dump shows `bgvram=8192/8192 txvram=1024/1024` — the same
+"never actually cleared" signature tdragon1 showed *before* its own
+fix — alongside `86016/86016` (100%) nonzero pixels and a populated
+palette (478/1024). That combination looks like a full-screen fill
+from VRAM left at its Verilator power-on-zero state (never reached by
+the game's own clear routine) composited against real palette colors,
+not genuinely correct rendering — consistent with the protection MCU
+only reaching PC `$00A3` by the end of the run, far short of
+tdragon1's own progress. Treated as still open, not resolved; worth a
+dedicated follow-up trace rather than assuming the same fix carries
+over identically.
+
+### Regression sweep
+
+Rebuilt and ran all nine ports that share `tlcs90.sv` with either
+tdragon1 or hachamf (mustang, bioship, blkheart, strahl, acrobatm,
+tdragon, vandyke, hachamfb, hachamf) against the full set of this
+session's fixes. All nine completed cleanly — no crashes, no hangs,
+normal instruction/frame/sound-write counts in line with each port's
+own established baseline. None of the five newly-added opcode forms
+are exercised by any of these other ports' own firmware, so this is
+confirming "no side effects," not "no regressions in behavior these
+ports depend on" — expected, given the additions are pure `casez`
+extensions into previously-unreachable (`OP_UNKNOWN`) decode space.

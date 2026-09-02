@@ -125,12 +125,15 @@ module nmk_prot_core #(
 	output [15:0] dbg_pc,
 	output        dbg_valid,
 
-	// debug: live HL, for root-causing shared-RAM-content divergences
+	// debug: live HL/A, for root-causing shared-RAM-content divergences
 	// against MAME's own debugger register readout (same technique
 	// nmk004_core.sv's own dbg_a/dbg_f/dbg_hl already use). IX/IY
 	// aren't exposed by tlcs90.sv itself; bus_addr already shows the
 	// effective (ix+n)/(iy+n) address during those accesses.
-	output [15:0] dbg_hl
+	output [15:0] dbg_hl,
+	output  [7:0] dbg_a,
+	output [15:0] dbg_de,
+	output [15:0] dbg_iy
 );
 
 	// ------------------------------------------------------------------
@@ -161,7 +164,7 @@ module nmk_prot_core #(
 		// at bank 0 regardless of what firmware writes to BX/BY.
 		.ix_bank(cpu_bx), .iy_bank(cpu_by),
 		.dbg_pc(dbg_pc), .dbg_valid(dbg_valid), .dbg_halt(),
-		.dbg_a(), .dbg_f(), .dbg_hl(dbg_hl)
+		.dbg_a(dbg_a), .dbg_f(), .dbg_hl(dbg_hl), .dbg_de(dbg_de), .dbg_iy(dbg_iy)
 	);
 
 	// ------------------------------------------------------------------

@@ -106,7 +106,7 @@ module nmk004_core #(
 		.nmi(nmi), .irq_req(irq_req_to_cpu), .irq_mask(irq_mask),
 		.ix_bank(bx), .iy_bank(by),
 		.dbg_pc(dbg_pc), .dbg_valid(dbg_valid), .dbg_halt(),
-		.dbg_a(dbg_a), .dbg_f(dbg_f), .dbg_hl(dbg_hl)
+		.dbg_a(dbg_a), .dbg_f(dbg_f), .dbg_hl(dbg_hl), .dbg_de(), .dbg_iy()
 	);
 
 	// ------------------------------------------------------------------

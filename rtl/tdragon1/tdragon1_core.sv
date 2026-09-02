@@ -93,6 +93,10 @@ module tdragon1_core #(
 	output        dbg_prot_valid,
 	output        dbg_halt_68k,
 	output [15:0] dbg_prot_hl,
+	output  [7:0] dbg_prot_a,
+	output [15:0] dbg_prot_de,
+	output [15:0] dbg_prot_iy,
+	output [19:0] dbg_prot_addr,
 	output [9:0]  dbg_vt_vcount,
 
 	output        dbg_ym_we,
@@ -226,6 +230,7 @@ module tdragon1_core #(
 	// same constants apply numerically unchanged).
 	// ------------------------------------------------------------------
 	wire [19:0] prot_addr;
+	assign dbg_prot_addr = prot_addr;
 	wire        prot_rd, prot_wr;
 	wire [7:0]  prot_wdata;
 	wire [7:0]  prot_rdata;
@@ -552,7 +557,7 @@ module tdragon1_core #(
 		.vpos_div4(vt_vcount[9:2]),
 		.halt_68k(halt_68k),
 		.dbg_pc(dbg_prot_pc), .dbg_valid(dbg_prot_valid),
-		.dbg_hl(dbg_prot_hl)
+		.dbg_hl(dbg_prot_hl), .dbg_a(dbg_prot_a), .dbg_de(dbg_prot_de), .dbg_iy(dbg_prot_iy)
 	);
 
 	wire [15:0] prot_rom_dout     = rom[prot_addr[18:1]];
