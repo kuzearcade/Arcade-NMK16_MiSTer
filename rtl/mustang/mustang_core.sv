@@ -9,15 +9,16 @@
 // shared-latch host handshake, to answer the specific question the
 // CPU-only TLCS-90 testbench (sim/rtl/tlcs90/tb_nmk004.cpp) could not:
 // does NMK004 actually get *past* the host-handshake wait loop once a
-// real 68000 is on the other end of it? Video (tilemap/sprite rendering)
-// is explicitly NOT in scope here — see "Known simplifications" below —
-// and is a natural, separate next increment. Audio is now real for
-// YM2203 (jt03, jotego's clone, replacing the earlier register-latch
-// stub — see "Real jt03 (YM2203) integration" below); OKIM6295 x2 remain
-// stubs (real jt6295 integration needs actual ADPCM sample ROM data
-// extracted and wired, genuinely more work than jt03's pure
-// register-interface integration — a separate follow-up, not bundled in
-// here).
+// real 68000 is on the other end of it? Audio is real for both YM2203
+// (jt03, jotego's clone — see "Real jt03 (YM2203) integration" below)
+// and OKIM6295 x2 (jt6295, jotego's clone — see "Real jt6295 (OKIM6295
+// x2) integration" below, including the actual ADPCM sample ROM data
+// extracted from the real romset and the RET Z @0x0E5F oracle divergence
+// this directly resolves — see docs/tier2-system.md). Video (tilemap +
+// sprite rendering) is now real too — see rtl/mustang/video_mustang.sv's
+// own header for the full derivation of that pipeline; this file just
+// owns the VRAM/palette storage and the register decode video_mustang
+// reads from (bg_xscroll_reg, sel_bgvram/txvram/palette).
 //
 // Memory map (see mustang_map in mame/src/mame/nmk/nmk16.cpp):
 //   000000-03FFFF  ROM (maincpu, 2 x 0x20000-byte chips, ROM_LOAD16_BYTE)
@@ -33,11 +34,12 @@
 //                  handshake itself to resolve, but wired for real since
 //                  nmk004_core.sv already has a real nmi input)
 //   08001F         NMK004 host-write latch (W, byte — nmk004_device::write)
-//   088000-0887FF  palette RAM, 1024 x 16 (write-captured, not rendered)
-//   08C000-08C001  mustang_scroll_w (W, word, write-captured)
+//   088000-0887FF  palette RAM, 1024 x 16 (real — rendered by video_mustang)
+//   08C000-08C001  mustang_scroll_w (W, word — real BG X-scroll, see
+//                  "I/O registers" below)
 //   08C002-08C087  nopw
-//   090000-093FFF  bg tilemap VRAM, 8192 x 16 (write-captured, not rendered)
-//   09C000-09C7FF  tx tilemap VRAM, 1024 x 16 (write-captured, not rendered)
+//   090000-093FFF  bg tilemap VRAM, 8192 x 16 (real — rendered by video_mustang)
+//   09C000-09C7FF  tx tilemap VRAM, 1024 x 16 (real — rendered by video_mustang)
 //   0F0000-0FFFFF  main work RAM, 32768 x 16 — mainram_strange_w: the
 //                  reference writes the FULL 16-bit `data` unconditionally,
 //                  ignoring UDS/LDS byte-lane strobes entirely (confirmed
@@ -53,54 +55,60 @@
 //
 // Known simplifications (documented, not hidden — see bjtwin_core.sv's own
 // header for the precedent this follows):
-//   - OKIM6295 x2 are still plain register-latch stubs (accept writes,
-//     return a fixed idle byte on reads), NOT the real jt6295 core already
-//     vendored in rtl/third_party/ — wiring it needs real ADPCM sample ROM
-//     data extracted and wired through a ROM interface jt03 doesn't have
-//     (jt03/YM2203 is pure register-interface, no sample memory), enough
-//     extra work to be a deliberate, separate follow-up rather than
-//     bundled into this milestone. nmk004_core.sv's own oki_* ports are
-//     real external ports specifically so a later wrapper can swap in the
-//     real core without touching NMK004's own RTL again.
-//   - Real jt03 (YM2203) audio timing/mixing is not consumed anywhere in
+//   - Real jt03/jt6295 audio timing/mixing is not consumed anywhere in
 //     this simulation harness (no DAC/mixer exists here) — this
-//     integration is specifically about the chip's bus/register-level
-//     behavior (busy/status bits, IRQ) being real, not about audio
-//     fidelity or even necessarily cycle-exact FM synthesis timing.
-//   - jt03's own bus writes are "stretched" (see the write-stretch logic
-//     near its instantiation below) rather than passed through as the
-//     raw single-nmk004_clk_r-cycle pulse nmk004_core.sv's ym_we/ym_dout/
-//     ym_addr_sel naturally are: jt03 has no bus-ready/ack output (real
-//     YM2203 hardware doesn't either — it just expects WR held for its
-//     own minimum pulse width) and only samples its bus inputs on its own
-//     ~1.5MHz cen pulses, which could otherwise land entirely between two
-//     cen edges and miss a narrow write outright. This is a real,
+//     integration is specifically about each chip's bus/register-level
+//     behavior (busy/status bits, IRQ, ROM sample fetch) being real, not
+//     about audio fidelity or even necessarily cycle-exact synthesis
+//     timing.
+//   - jt03's and jt6295's own bus writes are "stretched" (see the
+//     write-stretch logic near each instantiation below) rather than
+//     passed through as the raw single-nmk004_clk_r-cycle pulse
+//     nmk004_core.sv's ym_we/oki0_we/oki1_we naturally are: neither chip
+//     has a bus-ready/ack output (real YM2203/OKIM6295 hardware doesn't
+//     either — they just expect WR held for their own minimum pulse
+//     width) and each only samples its bus inputs on its own cen pulses
+//     (jt03) or every clk_sys cycle but still needs a stable pulse width
+//     (jt6295), either of which could otherwise land entirely between
+//     two cen edges and miss a narrow write outright. This is a real,
 //     necessary integration detail for any bus-driven peripheral running
 //     on a slower clock-enable than the CPU issuing the write, not
-//     jt03-specific.
-//   - Interrupt generation to the 68000 now uses `nmk_irq_hacky` (Tier
-//     1's own synthetic-first fixed-scanline IRQ generator, reused
-//     unchanged from rtl/bjtwin/) rather than the reference's *real* IRQ
-//     source for this family, `set_interrupt_timing`/`NMK_IRQ` — a
-//     PROM-driven scanline state machine (per-game V-PROM dump), which
-//     is genuinely separate, substantial video-timing work (see
-//     docs/PLAN.md's "nmk_irq timing generator" component) not yet built
-//     for this family. This is a deliberate, documented substitution, not
-//     an accident: the fixed-scanline table `nmk_irq_hacky` encodes is
-//     copied directly from the reference's own
-//     `nmk16_hacky_scanline`/`set_hacky_interrupt_timing` — MAME's own
-//     documented fallback for exactly this situation (real PROM-driven
-//     games with an undumped PROM) — and mustang uses the same "lowres"
-//     screen class (`set_screen_lowres`) as Tier 1's bjtwin/cactus, with
-//     an *independently confirmed* matching frame geometry (278 total
-//     scanlines, VBlank-in at line 16, VBlank-out at line 240 — both the
-//     hacky scanline constants and the reference's own frame-timing
-//     comment block agree, and both match `video_timing.sv`'s existing
-//     bjtwin-family constants exactly), so reusing both modules unchanged
-//     is a real methodology match, not a coincidence of convenience. See
-//     docs/tier2-system.md for what this unblocks and the oracle-match
-//     result. The real per-game PROM timing (and non-lowres games) remain
-//     future work.
+//     specific to either chip.
+//   - jt6295's own `rom_ok` is tied constant high and its ROM reads are a
+//     single-clk_sys-cycle-latency registered array lookup (a standard
+//     FPGA-BRAM-style simplification, matching jt6295_rom.v's own
+//     built-in latency tolerance — see its header comment) rather than
+//     modeling real SDRAM arbitration latency, since there's no SDRAM
+//     controller in this simulation harness at all.
+//   - Bank 3 of each OKI ROM's banked window (`0x20000-0x3FFFF` on the
+//     chip's own 18-bit address space) is architecturally out of range
+//     for the dumped 512KB sample ROMs — the reference's own bank
+//     arithmetic (`(bank+1)*0x20000 + offset`) computes an address one
+//     full bank past the end of the ROM region for bank 3, a latent
+//     quirk in the original hardware/MAME driver, not something this
+//     integration introduces (see "Real jt6295" below for the derivation
+//     and no evidence mustang's own firmware ever selects it). Wrapped
+//     (masked) into the ROM's own size here rather than read out of
+//     bounds, so an unexpected bank 3 selection reads deterministic data
+//     instead of X in simulation.
+//   - Interrupt generation to the 68000 now uses the real
+//     `rtl/nmk_irq/nmk_irq.sv` — the actual dual-PROM-driven scanline
+//     state machine (`set_interrupt_timing`/`NMK_IRQ` in the reference),
+//     ported directly from `nmk_irq_device::scanline_callback` and driven
+//     by mustang's own real, dumped V-PROM (`10.bpr`), replacing the
+//     earlier `nmk_irq_hacky` fixed-scanline substitution (Tier 1's own
+//     synthetic-first generator, still used unchanged for cactus, whose
+//     real PROM is undumped). Building the real module surfaced a
+//     genuine phase-calibration constant between MAME's own
+//     `screen.vpos()` and this project's own `vcount` (both 0..277 over
+//     the same 278-line frame, but with a different zero reference) —
+//     empirically found and verified via a live MAME debugger capture
+//     against real ISR-entry scanlines, not assumed — see
+//     `rtl/nmk_irq/nmk_irq.sv`'s own header and docs/tier2-system.md's
+//     "Milestone 5" for the full derivation. The real per-game H-timing
+//     PROM is still not consumed (MAME's own reference device doesn't
+//     consume it either — see that module's header), and non-lowres
+//     screen classes remain future work for other families.
 //   - NMK004's own `clk` is fed a genuine divided-down clock (clk_sys/4,
 //     matching the 68000's own bus-cycle divider, since both CPUs are
 //     nominally 8MHz per the reference's machine config) rather than a
@@ -118,7 +126,13 @@
 module mustang_core #(
 	parameter ROM_FILE      = "",
 	parameter NMK004_BOOT_FILE = "",
-	parameter NMK004_EXT_FILE  = ""
+	parameter NMK004_EXT_FILE  = "",
+	parameter OKI1_ROM_FILE = "",
+	parameter OKI2_ROM_FILE = "",
+	parameter VTIMING_FILE  = "",
+	parameter FGTILE_FILE   = "",
+	parameter BGTILE_FILE   = "",
+	parameter SPRITES_FILE  = ""
 ) (
 	input clk_sys,       // 32 MHz (68000 effective bus and pixel/raster clock both clk_sys/4 = 8MHz)
 	input reset,          // async, active high
@@ -142,7 +156,39 @@ module mustang_core #(
 	output        dbg_ym_we,
 	output        dbg_ym_cs,
 	output  [7:0] dbg_ym_chip_dout,
-	output        dbg_ym_chip_irq_n
+	output        dbg_ym_chip_irq_n,
+
+	// OKIM6295 x2 (jt6295) bus debug — same tier as dbg_ym_* above; see
+	// docs/tier2-system.md's "Real jt6295 (OKIM6295 x2) integration" for
+	// what these found (the RET Z @0x0E5F root cause).
+	output        dbg_oki0_we,
+	output        dbg_oki0_cs,
+	output  [7:0] dbg_oki0_chip_dout,
+	output        dbg_oki1_we,
+	output        dbg_oki1_cs,
+	output  [7:0] dbg_oki1_chip_dout,
+
+	// NMK004 live register/RAM-peek debug — for root-causing the RET Z at
+	// 0x0E5F oracle divergence (see docs/tier2-system.md, "RET Z at
+	// 0x0E5F"); same tier as dbg_ym_* above, not throwaway scaffolding.
+	output [7:0]  dbg_nmk004_a,
+	output [7:0]  dbg_nmk004_f,
+	output [15:0] dbg_nmk004_hl,
+	output [7:0]  dbg_nmk004_ram_hl,
+
+	// pixel readback for the testbench (mirrors MAME's screen:pixel(x,y))
+	// — see rtl/mustang/video_mustang.sv's own header for the pipeline
+	// this drives.
+	input  [8:0]  rd_x,
+	input  [7:0]  rd_y,
+	output [23:0] rd_rgb,
+	input  [9:0]  dbg_pal_addr,
+	output [15:0] dbg_pal_data,
+	input  [12:0] dbg_bgvram_addr,
+	output [15:0] dbg_bgvram_data,
+	input  [9:0]  dbg_txvram_addr,
+	output [15:0] dbg_txvram_data,
+	output        frame_done
 );
 
 	// ------------------------------------------------------------------
@@ -164,7 +210,7 @@ module mustang_core #(
 	always @(posedge clk_sys) nmk004_div <= reset ? 2'd0 : nmk004_div + 2'd1;
 	wire nmk004_clk_r = nmk004_div[1];
 
-	// Pixel/raster-timing clock enable for video_timing/nmk_irq_hacky: 8MHz
+	// Pixel/raster-timing clock enable for video_timing/nmk_irq: 8MHz
 	// from 32MHz clk_sys (clk_sys/4 — the same ratio the 68000 bus divider
 	// above uses, and matching bjtwin's own 8MHz pixel clock; see the
 	// header for why the same "lowres" family constants apply here too).
@@ -197,10 +243,20 @@ module mustang_core #(
 	wire VPAn = ~iack_cycle;
 	wire DTACKn = ASn | iack_cycle;
 
+	// NMK004's own P4 bit0 drives the 68000's reset line in the reference
+	// (nmk004_device::port4_w -> reset_cb().set_inputline(m_maincpu,
+	// INPUT_LINE_RESET)) — a REAL hold-then-release handshake (NMK004's
+	// own boot firmware can hold the 68000 in reset while it finishes its
+	// own init, then release it), not "future work" any more. `pwrUp`
+	// stays tied to the system-wide `reset` alone (true cold power-on
+	// only, not re-triggered by this runtime hold/release).
+	wire [7:0] nmk004_p4;
+	wire m68k_extReset = reset | nmk004_p4[0];
+
 	fx68k fx68k_inst (
 		.clk(clk_sys),
 		.HALTn(1'b1),
-		.extReset(reset),
+		.extReset(m68k_extReset),
 		.pwrUp(reset),
 		.enPhi1(enPhi1),
 		.enPhi2(enPhi2),
@@ -313,20 +369,54 @@ module mustang_core #(
 	wire [15:0] txvram_dout = txvram[txvram_addr];
 
 	// ------------------------------------------------------------------
+	// Dual-port video read taps — video_mustang.sv's own live, per-pixel
+	// reads into the same arrays above, on a separate address bus from
+	// the CPU's own (mustang_core.sv owns the storage, matching
+	// bjtwin_core.sv/video_bjtwin.sv's own established split).
+	// ------------------------------------------------------------------
+	wire [12:0] vid_bgvram_addr;
+	wire [15:0] vid_bgvram_dout = bgvram[vid_bgvram_addr];
+	wire [9:0]  vid_txvram_addr;
+	wire [15:0] vid_txvram_dout = txvram[vid_txvram_addr];
+	wire [9:0]  vid_palette_addr;
+	wire [15:0] vid_palette_dout = palette[vid_palette_addr];
+	wire [9:0]  vid_spr_palette_addr;
+	wire [15:0] vid_spr_palette_dout = palette[vid_spr_palette_addr];
+	wire [14:0] vid_mainram_addr;
+	wire [15:0] vid_mainram_dout = mainram[vid_mainram_addr];
+
+	// Palette/BG/TX VRAM debug taps — same tier as dbg_ym_*/dbg_oki_*
+	// above, kept permanently (see tb_mustang.cpp's TB_DUMP_VRAM).
+	assign dbg_pal_data = palette[dbg_pal_addr];
+	assign dbg_bgvram_data = bgvram[dbg_bgvram_addr];
+	assign dbg_txvram_data = txvram[dbg_txvram_addr];
+
+	// ------------------------------------------------------------------
 	// I/O registers (write-captured only, see header)
 	// ------------------------------------------------------------------
 	reg [7:0]  flip_screen_reg;
-	reg [15:0] scroll_reg;
+	// mustang_scroll_w: a single 16-bit port sequenced as two byte-writes
+	// by the upper byte of `data` (0x00=set X-scroll high byte, 0x01=set
+	// low byte, 0x02/0x03=dead per the reference's own switch — see
+	// nmk16_v.cpp). Replicated directly rather than storing the raw last
+	// write (see rtl/mustang/video_mustang.sv's own header).
+	reg [15:0] bg_xscroll_reg;
 	reg        nmi_level;
 
 	always @(posedge clk_sys) begin
 		if (reset) begin
 			flip_screen_reg <= 8'h00;
-			scroll_reg      <= 16'h0000;
+			bg_xscroll_reg  <= 16'h0000;
 			nmi_level       <= 1'b0;
 		end else if (cpu_write) begin
 			if (sel_flip & ~LDSn)  flip_screen_reg <= oEdb[7:0];
-			if (sel_scroll)        scroll_reg      <= oEdb;
+			if (sel_scroll) begin
+				case (oEdb[15:8])
+					8'h00: bg_xscroll_reg[15:8] <= oEdb[7:0];
+					8'h01: bg_xscroll_reg[7:0]  <= oEdb[7:0];
+					default: ;
+				endcase
+			end
 			if (sel_nmi)           nmi_level       <= oEdb[0];
 		end
 	end
@@ -348,11 +438,6 @@ module mustang_core #(
 	reg  [7:0] nmk004_host_to_mcu = 8'hFF;
 	always @(posedge clk_sys) if (cpu_write & sel_nmk004_w & ~LDSn) nmk004_host_to_mcu <= oEdb[7:0];
 
-	// OKI register-latch stubs (see header) — accept writes, return a
-	// fixed idle byte on reads. Real enough to let boot-time
-	// register-table-init loops run to completion without hanging on a
-	// busy/status-bit poll (nothing here ever reports "busy"). YM2203 is
-	// now the real jt03 core (see below).
 	wire       ym_cs, ym_we, ym_addr_sel;
 	wire [7:0] ym_dout;
 	wire       oki0_cs, oki0_we, oki1_cs, oki1_we;
@@ -424,6 +509,128 @@ module mustang_core #(
 		.debug_view()
 	);
 
+	// ------------------------------------------------------------------
+	// OKIM6295 x2 — real jt6295 (jotego's clone), replacing the earlier
+	// register-latch stub. See header's "Real jt6295 (OKIM6295 x2)
+	// integration" notes for the write-stretch/rom_ok/bank-3 rationale.
+	// ------------------------------------------------------------------
+	// The reference's own mustang() config uses 16000000/4 = 4MHz for
+	// both OKIM6295 chips, PIN7_LOW. jt6295_timing.v's own header says its
+	// `cen` input "should be 1,000 kHz" regardless of the ss/PIN7 setting
+	// (ss only changes the *internal* sample-rate divider, not the cen
+	// rate jt6295 itself expects) — 1MHz from 32MHz clk_sys is an exact
+	// /32, so a plain free-running 5-bit counter suffices (no fractional
+	// accumulator needed, unlike jt03's 3/64 case).
+	reg [4:0] oki_cen_cnt = 5'd0;
+	wire      oki_cen = (oki_cen_cnt == 5'd31);
+	always @(posedge clk_sys) oki_cen_cnt <= oki_cen ? 5'd0 : oki_cen_cnt + 5'd1;
+
+	// PIN7_LOW (the reference's okim6295_device::PIN7_LOW) is jt6295's
+	// ss=0 — jt6295_timing.v's own header comment ("SS low = divides by
+	// 164") is the same "slow"/"low" sample-rate mode PIN7_LOW selects on
+	// real silicon.
+	localparam OKI_SS = 1'b0;
+
+	// Sample ROMs (90058-5/90058-6 in the real romset — see
+	// tools/mkgfxrom.py's --mode concat, used to extract these). Each is
+	// 512KB (0x80000), matching ROM_REGION(0x080000,"oki1"/"oki2") in the
+	// reference exactly.
+	reg [7:0] oki1_rom [0:524287];
+	reg [7:0] oki2_rom [0:524287];
+	initial if (OKI1_ROM_FILE != "") $readmemh(OKI1_ROM_FILE, oki1_rom);
+	initial if (OKI2_ROM_FILE != "") $readmemh(OKI2_ROM_FILE, oki2_rom);
+
+	// Bank registers — nmk004_core.sv's own oki0_bank/oki1_bank outputs
+	// are the raw, unmasked latch value (see that module's header: bank
+	// storage is deliberately left to the system wrapper, matching how
+	// the reference's own m_okibank memory_bank objects live outside
+	// nmk004_device too). Reference masks to 2 bits (`data & 3`,
+	// nmk004_device::oki_bankswitch_w) before using it as a bank index;
+	// replicated here. Sampling on clk_sys is safe even though
+	// oki0_bank_we is generated on the nmk004_clk_r domain — it's a
+	// genuinely divided-down clk_sys, not an independent clock, so its
+	// own edges already meet clk_sys's setup/hold and the value is stable
+	// for multiple clk_sys cycles either side of the update.
+	reg [1:0] oki1_bank_r = 2'd0, oki2_bank_r = 2'd0;
+	always @(posedge clk_sys) begin
+		if (oki0_bank_we) oki1_bank_r <= oki0_bank[1:0];
+		if (oki1_bank_we) oki2_bank_r <= oki1_bank[1:0];
+	end
+
+	// Address mapping — matches the reference's oki1_map/oki2_map exactly
+	// (mame/src/mame/nmk/nmk16.cpp): jt6295's own 18-bit rom_addr is the
+	// chip's own address space (bit17=0: fixed 0x00000-0x1FFFF; bit17=1:
+	// banked 0x20000-0x3FFFF window), and the *reference's* bank
+	// arithmetic is `(bank+1)*0x20000 + rom_addr[16:0]` (bank 0 maps to
+	// physical 0x20000-0x3FFFF, ..., bank 3 to 0x80000-0x9FFFF — one full
+	// bank past the dumped ROM's own 512KB end, see the header's "Known
+	// simplifications" note on bank 3). Wrapped into the ROM's own 19-bit
+	// size (masked, not clamped) so an actual bank-3 selection is
+	// deterministic in simulation rather than X.
+	function automatic [18:0] oki_phys_addr(input [17:0] rom_addr, input [1:0] bank);
+		reg [2:0] bank_p1;
+		reg [19:0] full;
+		begin
+			bank_p1 = {1'b0, bank} + 3'd1;
+			full = rom_addr[17] ? ({bank_p1, 17'd0} + {3'd0, rom_addr[16:0]}) : {3'd0, rom_addr[16:0]};
+			oki_phys_addr = full[18:0];
+		end
+	endfunction
+
+	wire [17:0] oki1_rom_addr, oki2_rom_addr;
+	wire [18:0] oki1_phys = oki_phys_addr(oki1_rom_addr, oki1_bank_r);
+	wire [18:0] oki2_phys = oki_phys_addr(oki2_rom_addr, oki2_bank_r);
+
+	// Registered (1-clk_sys-cycle-latency) ROM reads, matching
+	// jt6295_rom.v's own built-in latency tolerance — see the header's
+	// "Known simplifications" note. rom_ok tied high: no wait states to
+	// model with an internal $readmemh array (no SDRAM controller exists
+	// in this simulation harness at all).
+	reg [7:0] oki1_rom_data, oki2_rom_data;
+	always @(posedge clk_sys) oki1_rom_data <= oki1_rom[oki1_phys];
+	always @(posedge clk_sys) oki2_rom_data <= oki2_rom[oki2_phys];
+
+	// Write-stretch — same rationale as jt03's ym_wr_n above, duplicated
+	// per chip (oki0_we/oki1_we are each a single nmk004_clk_r-cycle-wide
+	// pulse, same source clock domain as ym_we).
+	reg [7:0] oki0_din_latch, oki1_din_latch;
+	reg [5:0] oki0_wr_hold = 6'd0, oki1_wr_hold = 6'd0;
+	reg       oki0_we_prev = 1'b0, oki1_we_prev = 1'b0;
+	always @(posedge clk_sys) begin
+		oki0_we_prev <= oki0_we;
+		if (oki0_we && !oki0_we_prev) begin
+			oki0_din_latch <= oki0_dout;
+			oki0_wr_hold   <= 6'd40;
+		end else if (oki0_wr_hold != 6'd0) begin
+			oki0_wr_hold <= oki0_wr_hold - 6'd1;
+		end
+	end
+	always @(posedge clk_sys) begin
+		oki1_we_prev <= oki1_we;
+		if (oki1_we && !oki1_we_prev) begin
+			oki1_din_latch <= oki1_dout;
+			oki1_wr_hold   <= 6'd40;
+		end else if (oki1_wr_hold != 6'd0) begin
+			oki1_wr_hold <= oki1_wr_hold - 6'd1;
+		end
+	end
+	wire oki0_wr_n = ~(oki0_wr_hold != 6'd0);
+	wire oki1_wr_n = ~(oki1_wr_hold != 6'd0);
+
+	wire [7:0] oki1_chip_dout, oki2_chip_dout;
+	jt6295 oki1_chip (
+		.rst(reset), .clk(clk_sys), .cen(oki_cen), .ss(OKI_SS),
+		.wrn(oki0_wr_n), .din(oki0_din_latch), .dout(oki1_chip_dout),
+		.rom_addr(oki1_rom_addr), .rom_data(oki1_rom_data), .rom_ok(1'b1),
+		.sound(), .sample()
+	);
+	jt6295 oki2_chip (
+		.rst(reset), .clk(clk_sys), .cen(oki_cen), .ss(OKI_SS),
+		.wrn(oki1_wr_n), .din(oki1_din_latch), .dout(oki2_chip_dout),
+		.rom_addr(oki2_rom_addr), .rom_data(oki2_rom_data), .rom_ok(1'b1),
+		.sound(), .sample()
+	);
+
 	nmk004_core #(
 		.BOOT_ROM_FILE(NMK004_BOOT_FILE),
 		.EXT_ROM_FILE(NMK004_EXT_FILE)
@@ -432,14 +639,16 @@ module mustang_core #(
 		.nmi(nmi_level),
 		.ym_cs(ym_cs), .ym_we(ym_we), .ym_addr_sel(ym_addr_sel),
 		.ym_dout(ym_dout), .ym_din(ym_chip_dout), .ym_irq_n(ym_chip_irq_n),
-		.oki0_cs(oki0_cs), .oki0_we(oki0_we), .oki0_dout(oki0_dout), .oki0_din(8'hFF),
-		.oki1_cs(oki1_cs), .oki1_we(oki1_we), .oki1_dout(oki1_dout), .oki1_din(8'hFF),
+		.oki0_cs(oki0_cs), .oki0_we(oki0_we), .oki0_dout(oki0_dout), .oki0_din(oki1_chip_dout),
+		.oki1_cs(oki1_cs), .oki1_we(oki1_we), .oki1_dout(oki1_dout), .oki1_din(oki2_chip_dout),
 		.oki0_bank_we(oki0_bank_we), .oki0_bank(oki0_bank),
 		.oki1_bank_we(oki1_bank_we), .oki1_bank(oki1_bank),
 		.host_to_mcu(nmk004_host_to_mcu),
 		.mcu_to_host(nmk004_mcu_to_host), .mcu_to_host_we(nmk004_mcu_to_host_we),
 		.dbg_pc(dbg_nmk004_pc), .dbg_valid(dbg_nmk004_valid),
-		.p4(), .bx(), .by()
+		.dbg_a(dbg_nmk004_a), .dbg_f(dbg_nmk004_f), .dbg_hl(dbg_nmk004_hl),
+		.dbg_ram_hl(dbg_nmk004_ram_hl),
+		.p4(nmk004_p4), .bx(), .by()
 	);
 
 	reg [7:0] nmk004_to_host_latch = 8'hFF; // reference default: to_main(0xff)
@@ -464,8 +673,10 @@ module mustang_core #(
 	assign iEdb = rdata;
 
 	// ------------------------------------------------------------------
-	// Raster timing + interrupt generation — see header for why these
-	// two modules (both from rtl/bjtwin/, reused unchanged) apply here.
+	// Raster timing (rtl/bjtwin/video_timing.sv, reused unchanged) + real
+	// interrupt generation (rtl/nmk_irq/nmk_irq.sv, replacing the earlier
+	// nmk_irq_hacky.sv fixed-scanline substitution — see header's "Real
+	// nmk_irq" note and docs/tier2-system.md's "Milestone 5").
 	// ------------------------------------------------------------------
 	wire [9:0] vt_hcount, vt_vcount;
 	wire vt_line_start, vt_hblank, vt_vblank;
@@ -475,8 +686,10 @@ module mustang_core #(
 		.line_start(vt_line_start), .hblank(vt_hblank), .vblank(vt_vblank)
 	);
 
-	wire sprite_dma_trigger; // not consumed yet — no sprite engine in this milestone
-	nmk_irq_hacky irq_gen (
+	wire sprite_dma_trigger; // consumed by video_mustang below
+	nmk_irq #(
+		.VTIMING_FILE(VTIMING_FILE)
+	) irq_gen (
 		.clk_sys(clk_sys),
 		.reset(reset),
 		.line_start(vt_line_start),
@@ -488,6 +701,35 @@ module mustang_core #(
 	);
 
 	// ------------------------------------------------------------------
+	// Video pipeline — real tilemap + sprite rendering. See
+	// rtl/mustang/video_mustang.sv's own header for the full derivation.
+	// ------------------------------------------------------------------
+	video_mustang #(
+		.FGTILE_FILE(FGTILE_FILE),
+		.BGTILE_FILE(BGTILE_FILE),
+		.SPRITES_FILE(SPRITES_FILE)
+	) video (
+		.clk_sys(clk_sys), .reset(reset),
+		.sprite_dma_trigger(sprite_dma_trigger),
+		.bgvram_addr(vid_bgvram_addr), .bgvram_data(vid_bgvram_dout),
+		.txvram_addr(vid_txvram_addr), .txvram_data(vid_txvram_dout),
+		.palette_addr(vid_palette_addr), .palette_data(vid_palette_dout),
+		.spr_palette_addr(vid_spr_palette_addr), .spr_palette_data(vid_spr_palette_dout),
+		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout),
+		.bg_xscroll_reg(bg_xscroll_reg),
+		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb)
+	);
+
+	// frame_done marks a real raster frame boundary (vcount wrap),
+	// generated directly off the shared vtiming counter — same
+	// convention as bjtwin_core.sv's own (see its header for why).
+	reg frame_done_r;
+	always @(posedge clk_sys) begin
+		frame_done_r <= vt_line_start && (vt_vcount == 10'd0);
+	end
+	assign frame_done = frame_done_r;
+
+	// ------------------------------------------------------------------
 	// Debug/trace outputs
 	// ------------------------------------------------------------------
 	assign dbg_eab   = eab;
@@ -497,6 +739,12 @@ module mustang_core #(
 	assign dbg_ym_cs = ym_cs;
 	assign dbg_ym_chip_dout = ym_chip_dout;
 	assign dbg_ym_chip_irq_n = ym_chip_irq_n;
+	assign dbg_oki0_we = oki0_we;
+	assign dbg_oki0_cs = oki0_cs;
+	assign dbg_oki0_chip_dout = oki1_chip_dout;
+	assign dbg_oki1_we = oki1_we;
+	assign dbg_oki1_cs = oki1_cs;
+	assign dbg_oki1_chip_dout = oki2_chip_dout;
 	assign dbg_as_n  = ASn;
 	assign dbg_fc0   = FC0;
 	assign dbg_fc1   = FC1;

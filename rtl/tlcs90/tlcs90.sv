@@ -181,7 +181,15 @@ module tlcs90 (
 	// against a captured disassembly oracle trace.
 	output reg [15:0] dbg_pc,
 	output reg        dbg_valid,
-	output             dbg_halt
+	output             dbg_halt,
+
+	// debug: live register state, sampled alongside dbg_pc/dbg_valid —
+	// purely additive, for root-causing oracle divergences against MAME's
+	// own debugger register readout (A/HL/F match MAME's TLCS-90 debug
+	// state symbols of the same name).
+	output      [7:0]  dbg_a,
+	output      [7:0]  dbg_f,
+	output      [15:0] dbg_hl
 );
 
 	// ------------------------------------------------------------------
@@ -198,6 +206,9 @@ module tlcs90 (
 	reg halt_r;
 	reg after_ei;
 	assign dbg_halt = halt_r;
+	assign dbg_a  = a;
+	assign dbg_f  = f;
+	assign dbg_hl = hl;
 
 	// ------------------------------------------------------------------
 	// Register-pair / register select codes (match the reference exactly)
@@ -503,6 +514,248 @@ module tlcs90 (
 	endfunction
 
 	// ------------------------------------------------------------------
+	// Real per-instruction cycle cost — see docs/tier2-tlcs90.md's
+	// "TLCS-90 cycle-timing fix" for the full derivation. Table
+	// extracted directly from mame/src/devices/cpu/tlcs90/tlcs90.cpp's
+	// own OP()/OPCC()/OP16()/OPCC16() macro table (CT*2 = real clock
+	// cycles; conditional entries use the branch-taken result via the
+	// same test_cc() the EXECUTE stage itself uses).
+	// ------------------------------------------------------------------
+	function automatic [5:0] instr_cycles(input [3:0] p, input [7:0] s, input taken);
+		reg [5:0] cyc;
+		begin
+			cyc = 6'd4; // fallback for any (pfx,selector) combination not in the table below
+			case (p)
+				PFX_NONE: casez (s)
+				8'h00: cyc = 6'd4;
+				8'h01: cyc = 6'd8;
+				8'h02: cyc = 6'd4;
+				8'h03: cyc = 6'd4;
+				8'h07: cyc = taken ? 6'd20 : 6'd12;
+				8'h08: cyc = 6'd4;
+				8'h09: cyc = 6'd4;
+				8'h0a: cyc = 6'd4;
+				8'h0b: cyc = 6'd4;
+				8'h0c: cyc = 6'd4;
+				8'h0d: cyc = 6'd4;
+				8'h0e: cyc = 6'd4;
+				8'h0f: cyc = taken ? 6'd20 : 6'd12;
+				8'h10: cyc = 6'd4;
+				8'h11: cyc = 6'd4;
+				8'h12, 8'h13: cyc = 6'd32;
+				8'h14, 8'h15, 8'h16: cyc = 6'd12;
+				8'h17: cyc = 6'd16;
+				8'h18: cyc = 6'd20;
+				8'h19: cyc = 6'd20;
+				8'h1a: cyc = 6'd16;
+				8'h1b: cyc = 6'd20;
+				8'h1c: cyc = 6'd28;
+				8'h1d: cyc = 6'd32;
+				8'h1e: cyc = 6'd20;
+				8'h1f: cyc = 6'd28;
+				8'h20, 8'h21, 8'h22, 8'h23, 8'h24, 8'h25, 8'h26: cyc = 6'd4;
+				8'h27: cyc = 6'd16;
+				8'h28, 8'h29, 8'h2a, 8'h2b, 8'h2c, 8'h2d, 8'h2e: cyc = 6'd4;
+				8'h2f: cyc = 6'd16;
+				8'h30, 8'h31, 8'h32, 8'h33, 8'h34, 8'h35, 8'h36: cyc = 6'd8;
+				8'h37: cyc = 6'd20;
+				8'h38, 8'h39, 8'h3a, 8'h3c, 8'h3d, 8'h3e: cyc = 6'd12;
+				8'h3f: cyc = 6'd28;
+				8'h40, 8'h41, 8'h42, 8'h43, 8'h44, 8'h45, 8'h46: cyc = 6'd8;
+				8'h47: cyc = 6'd20;
+				8'h48, 8'h49, 8'h4a, 8'h4c, 8'h4d, 8'h4e: cyc = 6'd8;
+				8'h4f: cyc = 6'd20;
+				8'h50, 8'h51, 8'h52, 8'h54, 8'h55, 8'h56: cyc = 6'd16;
+				8'h58, 8'h59, 8'h5a, 8'h5c, 8'h5d, 8'h5e: cyc = 6'd20;
+				8'h60, 8'h61, 8'h62, 8'h63, 8'h64, 8'h65, 8'h66, 8'h67: cyc = 6'd16;
+				8'h68, 8'h69, 8'h6a, 8'h6b, 8'h6c, 8'h6d, 8'h6e, 8'h6f: cyc = 6'd8;
+				8'h70, 8'h71, 8'h72, 8'h73, 8'h74, 8'h75, 8'h76, 8'h77: cyc = 6'd20;
+				8'h78, 8'h79, 8'h7a, 8'h7b, 8'h7c, 8'h7d, 8'h7e, 8'h7f: cyc = 6'd12;
+				8'h80, 8'h81, 8'h82, 8'h83, 8'h84, 8'h85, 8'h86: cyc = 6'd4;
+				8'h87: cyc = 6'd20;
+				8'h88, 8'h89, 8'h8a, 8'h8b, 8'h8c, 8'h8d, 8'h8e: cyc = 6'd4;
+				8'h8f: cyc = 6'd20;
+				8'h90, 8'h91, 8'h92, 8'h93, 8'h94, 8'h95, 8'h96: cyc = 6'd8;
+				8'h97: cyc = 6'd28;
+				8'h98, 8'h99, 8'h9a, 8'h9b, 8'h9c, 8'h9d, 8'h9e: cyc = 6'd8;
+				8'h9f: cyc = 6'd28;
+				8'ha0, 8'ha1, 8'ha2, 8'ha3, 8'ha4, 8'ha5, 8'ha6, 8'ha7: cyc = 6'd4;
+				8'ha8, 8'ha9, 8'haa, 8'hab, 8'hac, 8'had, 8'hae, 8'haf: cyc = 6'd16;
+				8'hb0, 8'hb1, 8'hb2, 8'hb3, 8'hb4, 8'hb5, 8'hb6, 8'hb7: cyc = 6'd24;
+				8'hb8, 8'hb9, 8'hba, 8'hbb, 8'hbc, 8'hbd, 8'hbe, 8'hbf: cyc = 6'd24;
+				8'hc0, 8'hc1, 8'hc2, 8'hc3, 8'hc4, 8'hc5, 8'hc6, 8'hc7, 8'hc8, 8'hc9, 8'hca, 8'hcb, 8'hcc, 8'hcd, 8'hce, 8'hcf: cyc = taken ? 6'd16 : 6'd8;
+				8'hd0, 8'hd1, 8'hd2, 8'hd3, 8'hd4, 8'hd5, 8'hd6, 8'hd7, 8'hd8, 8'hd9, 8'hda, 8'hdb, 8'hdc, 8'hdd, 8'hde, 8'hdf: cyc = taken ? 6'd28 : 6'd12;
+				8'hff: cyc = 6'd40;
+					default: ;
+				endcase
+				PFX_GG_SRC: casez (s)
+				8'h10, 8'h11: cyc = 6'd24;
+				8'h12, 8'h13: cyc = 6'd36;
+				8'h14, 8'h15, 8'h16: cyc = 6'd16;
+				8'h28, 8'h29, 8'h2a, 8'h2b, 8'h2c, 8'h2d, 8'h2e: cyc = 6'd12;
+				8'h48, 8'h49, 8'h4a, 8'h4c, 8'h4d, 8'h4e: cyc = 6'd16;
+				8'h50, 8'h51, 8'h52, 8'h54, 8'h55, 8'h56: cyc = 6'd28;
+				8'h60, 8'h61, 8'h62, 8'h63, 8'h64, 8'h65, 8'h66, 8'h67: cyc = 6'd12;
+				8'h70, 8'h71, 8'h72, 8'h73, 8'h74, 8'h75, 8'h76, 8'h77: cyc = 6'd16;
+				8'h87: cyc = 6'd16;
+				8'h8f: cyc = 6'd16;
+				8'h97: cyc = 6'd24;
+				8'h9f: cyc = 6'd24;
+				8'ha0, 8'ha1, 8'ha2, 8'ha3, 8'ha4, 8'ha5, 8'ha6, 8'ha7: cyc = 6'd16;
+				8'h18, 8'h19, 8'h1a, 8'h1b, 8'h1c, 8'h1d, 8'h1e, 8'h1f: cyc = 6'd24;
+				8'ha8, 8'ha9, 8'haa, 8'hab, 8'hac, 8'had, 8'hae, 8'haf: cyc = 6'd12;
+				8'hb0, 8'hb1, 8'hb2, 8'hb3, 8'hb4, 8'hb5, 8'hb6, 8'hb7: cyc = 6'd20;
+				8'hb8, 8'hb9, 8'hba, 8'hbb, 8'hbc, 8'hbd, 8'hbe, 8'hbf: cyc = 6'd20;
+					default: ;
+				endcase
+				PFX_MN_SRC: casez (s)
+				8'h10, 8'h11: cyc = 6'd32;
+				8'h12, 8'h13: cyc = 6'd44;
+				8'h14, 8'h15, 8'h16: cyc = 6'd24;
+				8'h28, 8'h29, 8'h2a, 8'h2b, 8'h2c, 8'h2d, 8'h2e: cyc = 6'd20;
+				8'h48, 8'h49, 8'h4a, 8'h4c, 8'h4d, 8'h4e: cyc = 6'd24;
+				8'h50, 8'h51, 8'h52, 8'h54, 8'h55, 8'h56: cyc = 6'd36;
+				8'h60, 8'h61, 8'h62, 8'h63, 8'h64, 8'h65, 8'h66, 8'h67: cyc = 6'd20;
+				8'h70, 8'h71, 8'h72, 8'h73, 8'h74, 8'h75, 8'h76, 8'h77: cyc = 6'd24;
+				8'h87: cyc = 6'd24;
+				8'h8f: cyc = 6'd24;
+				8'h97: cyc = 6'd32;
+				8'h9f: cyc = 6'd32;
+				8'ha0, 8'ha1, 8'ha2, 8'ha3, 8'ha4, 8'ha5, 8'ha6, 8'ha7: cyc = 6'd24;
+				8'h18, 8'h19, 8'h1a, 8'h1b, 8'h1c, 8'h1d, 8'h1e, 8'h1f: cyc = 6'd32;
+				8'ha8, 8'ha9, 8'haa, 8'hab, 8'hac, 8'had, 8'hae, 8'haf: cyc = 6'd20;
+				8'hb0, 8'hb1, 8'hb2, 8'hb3, 8'hb4, 8'hb5, 8'hb6, 8'hb7: cyc = 6'd28;
+				8'hb8, 8'hb9, 8'hba, 8'hbb, 8'hbc, 8'hbd, 8'hbe, 8'hbf: cyc = 6'd28;
+					default: ;
+				endcase
+				PFX_FF_SRC: casez (s)
+				8'h10, 8'h11: cyc = 6'd28;
+				8'h12, 8'h13: cyc = 6'd40;
+				8'h14, 8'h15, 8'h16: cyc = 6'd20;
+				8'h18, 8'h19, 8'h1a, 8'h1b, 8'h1c, 8'h1d, 8'h1e, 8'h1f: cyc = 6'd28;
+				8'h28, 8'h29, 8'h2a, 8'h2b, 8'h2c, 8'h2d, 8'h2e: cyc = 6'd16;
+				8'h48, 8'h49, 8'h4a, 8'h4c, 8'h4d, 8'h4e: cyc = 6'd20;
+				8'h50, 8'h51, 8'h52, 8'h54, 8'h55, 8'h56: cyc = 6'd32;
+				8'ha0, 8'ha1, 8'ha2, 8'ha3, 8'ha4, 8'ha5, 8'ha6, 8'ha7: cyc = 6'd20;
+					default: ;
+				endcase
+				PFX_GG_DST: casez (s)
+				8'h20, 8'h21, 8'h22, 8'h23, 8'h24, 8'h25, 8'h26: cyc = 6'd12;
+				8'h37: cyc = 6'd16;
+				8'h3f: cyc = 6'd24;
+				8'h40, 8'h41, 8'h42, 8'h43, 8'h44, 8'h45, 8'h46: cyc = 6'd16;
+				8'h68, 8'h69, 8'h6a, 8'h6b, 8'h6c, 8'h6d, 8'h6e: cyc = 6'd20;
+				8'h6f: cyc = 6'd16;
+				8'hc0, 8'hc1, 8'hc2, 8'hc3, 8'hc4, 8'hc5, 8'hc6, 8'hc7, 8'hc8, 8'hc9, 8'hca, 8'hcb, 8'hcc, 8'hcd, 8'hce, 8'hcf: cyc = taken ? 6'd16 : 6'd12;
+				8'hd0, 8'hd1, 8'hd2, 8'hd3, 8'hd4, 8'hd5, 8'hd6, 8'hd7, 8'hd8, 8'hd9, 8'hda, 8'hdb, 8'hdc, 8'hdd, 8'hde, 8'hdf: cyc = taken ? 6'd28 : 6'd12;
+					default: ;
+				endcase
+				PFX_MN_DST: casez (s)
+				8'h20, 8'h21, 8'h22, 8'h23, 8'h24, 8'h25, 8'h26: cyc = 6'd20;
+				8'h37: cyc = 6'd24;
+				8'h3f: cyc = 6'd32;
+				8'h40, 8'h41, 8'h42, 8'h43, 8'h44, 8'h45, 8'h46: cyc = 6'd24;
+				8'h68, 8'h69, 8'h6a, 8'h6b, 8'h6c, 8'h6d, 8'h6e: cyc = 6'd28;
+				8'h6f: cyc = 6'd24;
+				8'hc0, 8'hc1, 8'hc2, 8'hc3, 8'hc4, 8'hc5, 8'hc6, 8'hc7, 8'hc8, 8'hc9, 8'hca, 8'hcb, 8'hcc, 8'hcd, 8'hce, 8'hcf: cyc = taken ? 6'd24 : 6'd20;
+				8'hd0, 8'hd1, 8'hd2, 8'hd3, 8'hd4, 8'hd5, 8'hd6, 8'hd7, 8'hd8, 8'hd9, 8'hda, 8'hdb, 8'hdc, 8'hdd, 8'hde, 8'hdf: cyc = taken ? 6'd36 : 6'd20;
+					default: ;
+				endcase
+				PFX_FF_DST: casez (s)
+				8'h20, 8'h21, 8'h22, 8'h23, 8'h24, 8'h25, 8'h26: cyc = 6'd16;
+				8'h40, 8'h41, 8'h42, 8'h43, 8'h44, 8'h45, 8'h46: cyc = 6'd20;
+				8'h68, 8'h69, 8'h6a, 8'h6b, 8'h6c, 8'h6d, 8'h6e: cyc = 6'd24;
+				8'h6f: cyc = 6'd20;
+					default: ;
+				endcase
+				PFX_IXD_SRC: casez (s)
+				8'h10, 8'h11: cyc = 6'd32;
+				8'h12, 8'h13: cyc = 6'd44;
+				8'h14, 8'h15, 8'h16: cyc = 6'd24;
+				8'h28, 8'h29, 8'h2a, 8'h2b, 8'h2c, 8'h2d, 8'h2e: cyc = 6'd20;
+				8'h48, 8'h49, 8'h4a, 8'h4c, 8'h4d, 8'h4e: cyc = 6'd24;
+				8'h50, 8'h51, 8'h52, 8'h54, 8'h55, 8'h56: cyc = 6'd36;
+				8'h60, 8'h61, 8'h62, 8'h63, 8'h64, 8'h65, 8'h66, 8'h67: cyc = 6'd20;
+				8'h70, 8'h71, 8'h72, 8'h73, 8'h74, 8'h75, 8'h76, 8'h77: cyc = 6'd24;
+				8'h87: cyc = 6'd24;
+				8'h8f: cyc = 6'd24;
+				8'h97: cyc = 6'd32;
+				8'h9f: cyc = 6'd32;
+				8'ha0, 8'ha1, 8'ha2, 8'ha3, 8'ha4, 8'ha5, 8'ha6, 8'ha7: cyc = 6'd24;
+				8'h18, 8'h19, 8'h1a, 8'h1b, 8'h1c, 8'h1d, 8'h1e, 8'h1f: cyc = 6'd32;
+				8'ha8, 8'ha9, 8'haa, 8'hab, 8'hac, 8'had, 8'hae, 8'haf: cyc = 6'd20;
+				8'hb0, 8'hb1, 8'hb2, 8'hb3, 8'hb4, 8'hb5, 8'hb6, 8'hb7: cyc = 6'd28;
+				8'hb8, 8'hb9, 8'hba, 8'hbb, 8'hbc, 8'hbd, 8'hbe, 8'hbf: cyc = 6'd28;
+					default: ;
+				endcase
+				PFX_HLA_SRC: casez (s)
+				8'h10, 8'h11: cyc = 6'd40;
+				8'h12, 8'h13: cyc = 6'd52;
+				8'h14, 8'h15, 8'h16: cyc = 6'd32;
+				8'h28, 8'h29, 8'h2a, 8'h2b, 8'h2c, 8'h2d, 8'h2e: cyc = 6'd28;
+				8'h48, 8'h49, 8'h4a, 8'h4c, 8'h4d, 8'h4e: cyc = 6'd32;
+				8'h50, 8'h51, 8'h52, 8'h54, 8'h55, 8'h56: cyc = 6'd44;
+				8'h60, 8'h61, 8'h62, 8'h63, 8'h64, 8'h65, 8'h66, 8'h67: cyc = 6'd28;
+				8'h70, 8'h71, 8'h72, 8'h73, 8'h74, 8'h75, 8'h76, 8'h77: cyc = 6'd32;
+				8'h87: cyc = 6'd32;
+				8'h8f: cyc = 6'd32;
+				8'h97: cyc = 6'd40;
+				8'h9f: cyc = 6'd40;
+				8'ha0, 8'ha1, 8'ha2, 8'ha3, 8'ha4, 8'ha5, 8'ha6, 8'ha7: cyc = 6'd32;
+				8'h18, 8'h19, 8'h1a, 8'h1b, 8'h1c, 8'h1d, 8'h1e, 8'h1f: cyc = 6'd40;
+				8'ha8, 8'ha9, 8'haa, 8'hab, 8'hac, 8'had, 8'hae, 8'haf: cyc = 6'd28;
+				8'hb0, 8'hb1, 8'hb2, 8'hb3, 8'hb4, 8'hb5, 8'hb6, 8'hb7: cyc = 6'd36;
+				8'hb8, 8'hb9, 8'hba, 8'hbb, 8'hbc, 8'hbd, 8'hbe, 8'hbf: cyc = 6'd36;
+					default: ;
+				endcase
+				PFX_IXD_DST: casez (s)
+				8'h20, 8'h21, 8'h22, 8'h23, 8'h24, 8'h25, 8'h26: cyc = 6'd20;
+				8'h37: cyc = 6'd24;
+				8'h38, 8'h39, 8'h3a, 8'h3b, 8'h3c, 8'h3d, 8'h3e: cyc = 6'd20;
+				8'h3f: cyc = 6'd32;
+				8'h40, 8'h41, 8'h42, 8'h43, 8'h44, 8'h45, 8'h46: cyc = 6'd24;
+				8'h68, 8'h69, 8'h6a, 8'h6b, 8'h6c, 8'h6d, 8'h6e: cyc = 6'd28;
+				8'h6f: cyc = 6'd24;
+				8'hc0, 8'hc1, 8'hc2, 8'hc3, 8'hc4, 8'hc5, 8'hc6, 8'hc7, 8'hc8, 8'hc9, 8'hca, 8'hcb, 8'hcc, 8'hcd, 8'hce, 8'hcf: cyc = taken ? 6'd24 : 6'd20;
+				8'hd0, 8'hd1, 8'hd2, 8'hd3, 8'hd4, 8'hd5, 8'hd6, 8'hd7, 8'hd8, 8'hd9, 8'hda, 8'hdb, 8'hdc, 8'hdd, 8'hde, 8'hdf: cyc = taken ? 6'd36 : 6'd20;
+					default: ;
+				endcase
+				PFX_HLA_DST: casez (s)
+				8'h20, 8'h21, 8'h22, 8'h23, 8'h24, 8'h25, 8'h26: cyc = 6'd28;
+				8'h37: cyc = 6'd32;
+				8'h38, 8'h39, 8'h3a, 8'h3b, 8'h3c, 8'h3d, 8'h3e: cyc = 6'd28;
+				8'h3f: cyc = 6'd40;
+				8'h40, 8'h41, 8'h42, 8'h43, 8'h44, 8'h45, 8'h46: cyc = 6'd32;
+				8'h68, 8'h69, 8'h6a, 8'h6b, 8'h6c, 8'h6d, 8'h6e: cyc = 6'd36;
+				8'h6f: cyc = 6'd32;
+				8'hc0, 8'hc1, 8'hc2, 8'hc3, 8'hc4, 8'hc5, 8'hc6, 8'hc7, 8'hc8, 8'hc9, 8'hca, 8'hcb, 8'hcc, 8'hcd, 8'hce, 8'hcf: cyc = taken ? 6'd32 : 6'd28;
+				8'hd0, 8'hd1, 8'hd2, 8'hd3, 8'hd4, 8'hd5, 8'hd6, 8'hd7, 8'hd8, 8'hd9, 8'hda, 8'hdb, 8'hdc, 8'hdd, 8'hde, 8'hdf: cyc = taken ? 6'd44 : 6'd28;
+					default: ;
+				endcase
+				PFX_G8: casez (s)
+				8'h12, 8'h13: cyc = 6'd36;
+				8'h14, 8'h15, 8'h16: cyc = 6'd16;
+				8'h30, 8'h31, 8'h32, 8'h33, 8'h34, 8'h35, 8'h36: cyc = 6'd8;
+				8'h38, 8'h39, 8'h3a, 8'h3c, 8'h3d, 8'h3e: cyc = 6'd12;
+				8'h58, 8'h59, 8'h5a, 8'h5b, 8'h5c, 8'h5d, 8'h5e, 8'h5f: cyc = taken ? 6'd36 : 6'd28;
+				8'h60, 8'h61, 8'h62, 8'h63, 8'h64, 8'h65, 8'h66, 8'h67: cyc = 6'd8;
+				8'h68, 8'h69, 8'h6a, 8'h6b, 8'h6c, 8'h6d, 8'h6e, 8'h6f: cyc = 6'd12;
+				8'h70, 8'h71, 8'h72, 8'h73, 8'h74, 8'h75, 8'h76, 8'h77: cyc = 6'd16;
+				8'ha0, 8'ha1, 8'ha2, 8'ha3, 8'ha4, 8'ha5, 8'ha6, 8'ha7: cyc = 6'd8;
+				8'h18, 8'h19, 8'h1a, 8'h1b, 8'h1c, 8'h1d, 8'h1e, 8'h1f: cyc = 6'd16;
+				8'ha8, 8'ha9, 8'haa, 8'hab, 8'hac, 8'had, 8'hae, 8'haf: cyc = 6'd8;
+				8'hb0, 8'hb1, 8'hb2, 8'hb3, 8'hb4, 8'hb5, 8'hb6, 8'hb7: cyc = 6'd8;
+				8'hb8, 8'hb9, 8'hba, 8'hbb, 8'hbc, 8'hbd, 8'hbe, 8'hbf: cyc = 6'd8;
+				8'hd0, 8'hd1, 8'hd2, 8'hd3, 8'hd4, 8'hd5, 8'hd6, 8'hd7, 8'hd8, 8'hd9, 8'hda, 8'hdb, 8'hdc, 8'hdd, 8'hde, 8'hdf: cyc = taken ? 6'd28 : 6'd12;
+					default: ;
+				endcase
+				default: ;
+			endcase
+			instr_cycles = cyc;
+		end
+	endfunction
+
+	// ------------------------------------------------------------------
 	// Flag-formula helper functions, exact copies of the reference's
 	// SZ/SZP/SZ_BIT/SZHV_inc/SZHV_dec table-init formulas, computed
 	// on-demand instead of precomputed.
@@ -760,6 +1013,22 @@ module tlcs90 (
 	reg        irq_taking;  // this S_PUSH_HI visit is interrupt entry (push PC then AF), not a plain PUSH/CALL
 
 	// ------------------------------------------------------------------
+	// Real per-instruction cycle-timing — see instr_cycles()'s own header
+	// below for the full derivation. `sel_byte` mirrors the reference's
+	// own "b0" (base-table opcode byte) or "b1"/"b2"/"b3" (prefixed
+	// groups' operation-selector byte) — whichever one determines cost,
+	// latched at the exact same point op/mode1/mode2 already are.
+	// `target_cyc` is the real clock-cycle count this instruction should
+	// take (instr_cycles()'s own output, latched once at that same
+	// point); `cyc_elapsed` counts cycles since this instruction's own
+	// real S_FETCH_OP fetch, checked back against target_cyc there to
+	// pad the difference before the next real fetch.
+	// ------------------------------------------------------------------
+	reg [7:0] sel_byte;
+	reg [5:0] target_cyc;
+	reg [5:0] cyc_elapsed;
+
+	// ------------------------------------------------------------------
 	// Interrupt state: NMI edge-latch and the 11 maskable sources'
 	// pending-request latches (see take_interrupt()/check_interrupts() in
 	// the reference — clear_irq() on take, except INT0 in level mode,
@@ -878,6 +1147,12 @@ module tlcs90 (
 		addr_bank <= 4'h0;
 		dbg_valid <= 1'b0;
 
+		// Free-running cycle counter for the padding check in S_FETCH_OP
+		// below — overridden there (to 6'd1) on the one cycle a real
+		// fetch actually happens, so this default increment only ever
+		// takes effect on every *other* cycle.
+		cyc_elapsed <= cyc_elapsed + 6'd1;
+
 		// Interrupt request latching: level-sensitive but internally held
 		// pending until dispatched (matches raise_irq()'s m_irq_state bit
 		// staying set until clear_irq() — see the S_FETCH_OP dispatch
@@ -897,10 +1172,27 @@ module tlcs90 (
 			nmi_pending <= 1'b0;
 			irq_pending <= 11'd0;
 			irq_taking <= 1'b0;
+			cyc_elapsed <= 6'd0;
+			target_cyc <= 6'd0;
 		end else begin
 			case (state)
 				// ------------------------------------------------------
 				S_FETCH_OP: begin
+					// Real per-instruction cycle-timing pad: hold here
+					// (doing nothing else — dbg_valid stays 0, no bus
+					// activity, no interrupt/halt check) until the
+					// *previous* instruction has consumed its own real
+					// target_cyc cycle count, matching the reference's
+					// per-opcode timing (see instr_cycles()'s own header).
+					// cyc_elapsed's default free-running increment (top of
+					// this always block) already advances it every cycle
+					// spent here; only the real-work branch below needs to
+					// reset it, for the instruction about to begin.
+					if (cyc_elapsed < target_cyc) begin
+						// padding — cyc_elapsed's generic increment above
+						// already applies this cycle, nothing else to do.
+					end else begin
+					cyc_elapsed <= 6'd1; // this cycle is the new instruction's own cycle 1
 					if (op != OP_EI && after_ei) begin
 						f[IFB] <= 1'b1;
 						after_ei <= 1'b0;
@@ -935,6 +1227,7 @@ module tlcs90 (
 						pc <= pc + 16'd1;
 						state <= S_DECODE;
 					end
+					end
 				end
 
 				// din == the opcode byte just fetched; d_* (combinational,
@@ -958,6 +1251,8 @@ module tlcs90 (
 						// IXD-prefix-resolved one, and both are stored in
 						// the same mode1/mode2 tag.
 						pfx <= PFX_NONE;
+						sel_byte <= din;
+						target_cyc <= instr_cycles(PFX_NONE, din, test_cc(d_r1e[3:0], f));
 						if (d_m1bytes == 2'd1) begin
 							addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
 							state <= S_M1_BYTE;
@@ -1037,6 +1332,12 @@ module tlcs90 (
 				S_PFX_SEL: begin // din == the operation-selector byte; d2_* valid now
 					op <= d2_op; wide <= d2_wide;
 					mode1 <= d2_mode1; mode2 <= d2_mode2;
+					// d2_r1e always holds the raw condition-code nibble
+					// whenever d2_mode1==M_CC (true for every JP/JR/CALL/RET
+					// cc form, regardless of which slot it ends up in below)
+					// — safe to test unconditionally here.
+					sel_byte <= din;
+					target_cyc <= instr_cycles(pfx, din, test_cc(d2_r1e[3:0], f));
 					if (d2_mem_slot == 2'd1) begin
 						r1 <= (pfx == PFX_GG_SRC || pfx == PFX_GG_DST || pfx == PFX_G8) ? {12'h0, gg} : pfx_addr;
 						r2 <= {12'h0, d2_r2e};

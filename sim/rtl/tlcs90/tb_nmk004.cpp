@@ -26,7 +26,7 @@
 #include "Vnmk004_core.h"
 #include "verilated.h"
 
-static constexpr uint64_t RUN_CYCLES = 100000;
+static constexpr uint64_t RUN_CYCLES = 300000;
 static constexpr uint16_t IRQTEST_VECTOR = 0x0030; // INTT0, see roms/irqtest_boot.hex
 
 int main(int argc, char **argv) {

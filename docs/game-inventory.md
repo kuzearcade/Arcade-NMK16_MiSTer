@@ -34,7 +34,6 @@ Screen resolution class (low/mid/hi) is at the **family** level per prior resear
 | tdragon | Thunder Dragon (unprotected) | 1991 | NMK (Tecmo license) | — | `tdragon` | nmk16_state | vertical | Unprotected board revision |
 | hachamfb | Hacha Mecha Fighter (unprotected bootleg) | 1991 | bootleg | hachamf | `hachamfb` | nmk16_state | horizontal | "Appears to be a Thunder Dragon conversion" |
 | hachamfp | Hacha Mecha Fighter (location test proto) | 1991 | NMK | hachamf | `hachamfp` | nmk16_state | horizontal | Hand-written date labels |
-| manybloc | Many Block | 1991 | Bee-Oh | — | `manybloc` | nmk16_state | vertical | MACHINE_IMPERFECT_SOUND; MCU-patched-to-noop |
 
 ## Family C — Z80-direct sound, hi/mid-res
 
@@ -111,6 +110,7 @@ Screen resolution class (low/mid/hi) is at the **family** level per prior resear
 | tharrieru | Task Force Harrier (US) | 1989 | UPL (American Sammy) | tharrier | `tharrier` | nmk16_state | vertical | MACHINE_NO_COCKTAIL |
 | tharrierb | Task Force Harrier (Lettering bootleg) | 1989 | bootleg (Lettering) | tharrier | `tharrierb` | **tharrierb_state** | vertical | Real M68705R3 MCU protection (simulated in MAME) |
 | vandykeb | Vandyke (bootleg with PIC16c57) | 1990 | bootleg | vandyke | `vandykeb` | nmk16_state | vertical | MACHINE_NO_SOUND; PIC protection patched/disabled in MAME |
+| manybloc | Many Block | 1991 | Bee-Oh | — | `manybloc` | nmk16_state | vertical | **Reclassified from family B during Tier 2 bring-up** (this survey's own original "NMK004" listing was wrong — confirmed by reading `nmk16.cpp:5884` directly: real Z80 audio CPU + YM2203 via `tharrier_sound_map`, `gfx_tharrier` GFXDECODE, `set_periodic_int`+scanline-callback IRQs, 256x256 screen — no NMK004 device instantiated at all). MACHINE_IMPERFECT_SOUND |
 
 ## Family H — Afega derivative hardware (own screen/scroll scheme)
 

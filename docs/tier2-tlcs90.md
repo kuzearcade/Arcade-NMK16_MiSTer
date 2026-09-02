@@ -1103,6 +1103,113 @@ opcodes MAME's own reference model can never execute (`LDA`/`TSET`, a
 permanent verification blind spot — see "Deferred" above, not a bug to
 chase).
 
+### Twelfth verification result (real per-opcode cycle timing)
+
+Every verification pass above (and every Tier 2 system-level milestone
+in `docs/tier2-system.md`) checked instruction *sequence* only — the
+CPU-only oracle (`/tmp/oracle_pc2.txt`) carries no cycle timestamps at
+all, so `tlcs90.sv`'s own per-opcode *cycle cost* had never actually been
+checked against real hardware, only its FSM's own ad hoc pipeline depth.
+`docs/tier2-system.md`'s "Frame-CRC timing-drift investigation" built
+the tooling to check this directly (`sim/oracle/capture_cyc_trace.py` +
+`sim/compare/cyc_diff.py`) and measured **99.2% of instructions with the
+wrong cycle cost** — this pass fixes it.
+
+**The table**: extracted programmatically from
+`mame/src/devices/cpu/tlcs90/tlcs90.cpp`'s own `OP()`/`OPCC()`/`OP16()`/
+`OPCC16()` macro invocations (191 total, `CT` arg × 2 = real clock
+cycles), cross-verified entry-by-entry against the reference source
+(not just parsed blind) before being transcribed into a new
+`instr_cycles(pfx, sel_byte, taken)` combinational function — one big
+`case(pfx)` / `casez(sel_byte)` table mirroring the reference's own
+`switch(b0){switch(b1/b2/b3){...}}` structure exactly, keyed the same
+way this project's own decode already organizes itself (`pfx` is the
+existing prefix-group register; `sel_byte` is a new register capturing
+whichever byte determines cost — the base opcode byte for base-table
+instructions, or the operation-selector byte for prefixed ones, latched
+at the exact same point `op`/`mode1`/`mode2` already are). Conditional
+entries (`JP`/`JR`/`CALL`/`RET cc`) reuse `test_cc()` — the same function
+`EXECUTE` itself calls — so there's no duplicated, potentially-diverging
+condition logic.
+
+**Mechanism**: a free-running `cyc_elapsed` counter plus a latched
+`target_cyc` (the table's own output, computed the same cycle `sel_byte`
+is captured). `S_FETCH_OP` — previously entered directly, doing its real
+work (interrupt dispatch check, halt check, or the real opcode fetch)
+every time — now first checks `cyc_elapsed < target_cyc`: if so, it just
+waits (the state's existing default self-loop, `dbg_valid` staying low,
+no bus activity), padding the FSM's own natural cycle count up to the
+reference's real one; once satisfied, it does its existing work
+unchanged and resets `cyc_elapsed` for the new instruction. This is a
+*padding*-only mechanism — it can only add cycles, never remove them —
+matching the observed direction of every pre-fix mismatch (the FSM was
+always faster than real hardware, never slower). Two conditional-cost
+cases don't map onto a clean `test_cc()`-style condition (`INCX`/`DECX`'s
+own increment-result test, and the `LDI`/`LDIR`/.../`CPDR` family's own
+repeat-continues test) — both default to the higher (`CT`) cost, a safe
+upper bound given padding can't go the other way, and both are
+documented, narrow simplifications rather than silently wrong.
+
+**Result**, `sim/compare/cyc_diff.py` against a fresh
+`sim/oracle/capture_cyc_trace.py` capture over a 7,779-instruction
+matched span:
+```
+43/7779 instruction cycle-costs differ (tolerance=0)
+```
+Down from 222,231/223,939 (99.2%) pre-fix to 43/7,779 (0.55%) — a
+massive improvement. Every one of the 43 remaining mismatches was
+investigated individually (not just aggregated) and resolved into
+exactly two understood, bounded causes, neither a table error:
+1. **`DJNZ`/`DJNZ BC` "not-taken" cost is a genuine MAME quirk, not a
+   clean constant.** The reference's own `EXECUTE` calls `Cyc_f()`
+   (`m_cyc_f`) when the branch *isn't* taken, but `DJNZ`'s own decode-time
+   `OP(DJNZ,10)` (a plain `OP`, not `OPCC`) never sets `m_cyc_f` — it's
+   left holding whatever a *previous, unrelated* `OPCC`-using
+   instruction last set it to. Confirmed directly: two `DJNZ`-family
+   instances (`0x0147`, `0x0153`) mismatch, both showing values that
+   only make sense as leftover state from earlier in the boot sequence,
+   not a fixed per-opcode constant. Not replicated (would require
+   modeling MAME's own stateful implementation artifact, not real
+   hardware behavior).
+2. **The FSM's own minimum pipeline depth exceeds the reference's
+   4-cycle minimum for the very cheapest single-byte opcodes**
+   (`NOP`/`DI`/`EI`/`LD r,A`/`LD A,r`/etc, all `CT=2`). Padding can only
+   add cycles; `S_FETCH_OP`→`S_DECODE`→`S_PRE_READ1`→`S_EXECUTE`→back to
+   `S_FETCH_OP` is already 5 states for these, one more than the
+   reference's declared minimum — confirmed at every one of the affected
+   PCs (`0x0D58`, `0x0E27`-`0x0E2A`, etc., all base-table single-byte
+   ops), each off by exactly `+1`. A genuine, structural, permanent
+   1-cycle floor for this opcode class, not something padding-only can
+   close.
+
+Re-confirmed all existing CPU-core regressions unchanged (175-checkpoint
+oracle match — reaches the exact same boundary as before, just needing
+proportionally more simulated cycles to get there now that instructions
+take realistically longer; `sim/rtl/tlcs90/tb_nmk004.cpp`'s own
+`RUN_CYCLES` bumped 100,000→300,000 to compensate, same reasoning as
+every prior "needs more simulated time" resolution this session — and
+all nine standalone opcode self-tests: bank-extension, block-transfer,
+`RLD`/`RRD`, `MUL`/`DIV`, `LDAR`/`CALLR`/16-bit-`JR`, `SWI`, memory-EX,
+plus the interrupt self-test).
+
+**A genuine, expected, and fully explained side effect at the system
+level**: `docs/tier2-system.md`'s own Milestone-4-era 93,351-checkpoint
+system oracle match (`sim/rtl/mustang/`) drops to 21,606 within the same
+cycle budget — not a regression, but the direct consequence of NMK004
+now correctly taking longer per instruction (fewer total instructions
+execute in the same simulated window, exactly as intended). Extending
+the cycle budget doesn't recover the difference, because the new
+stopping point is a *different kind* of divergence than before: the
+oracle's own trace shows an NMI firing (jumping to `0x0010`, the fixed
+NMI vector) at the corresponding point, while this RTL's own trace
+continues normally — an async-event-timing interaction between NMK004
+(now correctly timed) and the 68000 (whose own bus-wait-state timing is
+still the *other*, not-yet-fixed half of the frame-CRC drift
+investigation's two candidate causes). Expected: fixing only one side of
+a two-CPU relative-timing problem changes *which* timing-sensitive
+interaction shows up first, not whether one exists. See
+`docs/tier2-system.md`'s own update for the full account.
+
 **System-level integration is now underway — see `docs/tier2-system.md`.**
 A real 68000 (fx68k) is wired to the completed NMK004 sound board in
 `rtl/mustang/mustang_core.sv`, verified to get past the host-handshake
@@ -1111,8 +1218,58 @@ real (synthetic-first, Tier-1-style) interrupt source so the 68000 itself
 doesn't stall, and now also given a real YM2203 (`jt03`, jotego's clone —
 genuine bus/IRQ integration, not a stub) — the oracle match has gone 175
 (CPU-only boundary) → 18,809 → 21,986 checkpoints across those milestones.
-The current divergence is now precisely identified (a `RET Z` at
-`0x0E5F` testing a memory bitmask that differs from the oracle's — not
-the YM2203/OKI status-bit poll an earlier milestone guessed, which real
-`jt03` integration has since ruled out directly) — see that document's
-"Next step".
+That divergence was root-caused (a `RET Z` at `0x0E5F` in the shared boot
+ROM polling a caller-supplied RAM bitmask against a live OKI1/OKI2
+combined status byte that was always "all ready" while `oki0_din`/
+`oki1_din` were still tied to a constant `8'hFF` — not the YM2203
+status-bit poll an earlier milestone guessed, which real `jt03`
+integration had already ruled out directly) and then **fixed directly**:
+Milestone 4 wired in the real `jt6295` core plus actual ADPCM sample ROM
+data for both OKIM6295 chips, taking the oracle match to **93,351**
+checkpoints (of 359,693 total) — over 530x the original CPU-only
+ceiling. Milestone 5 then replaced Milestone 2's own synthetic
+fixed-scanline interrupt-timing substitute with the real, dual-PROM-driven
+`nmk_irq` scanline state machine (`rtl/nmk_irq/nmk_irq.sv`, ported
+directly from the reference's `nmk_irq_device`, driven by mustang's own
+dumped V-timing PROM) — a genericization/correctness milestone rather
+than a further checkpoint-count change, since mustang's real PROM turns
+out to encode the exact scanlines the synthetic substitute already used
+(confirmed via a live MAME debugger capture, which also surfaced and
+resolved a genuine scanline phase-reference difference between MAME's
+own `screen.vpos()` and this project's own `vcount`). Milestone 6 then
+built mustang's real video/sprite pipeline (`rtl/mustang/video_mustang.sv`)
+— two tilemap layers plus a budget-walked, double-buffered sprite
+compositor, ported from the same MAME algorithms this document's own
+CPU work has relied on throughout — found and fixed a real bug (TX's
+own palette color-base offset was missing, a `0x200` vs `0x000`
+GFXDECODE mismatch that rendered a solid black frame despite genuinely
+populated VRAM/palette content) and confirmed visually via a rendered
+PPM frame dump showing clearly readable "MUSTANG" marquee text. See
+`docs/tier2-system.md`'s "Milestone 3" through "Milestone 6", and
+"Next step" for the full derivation and current status.
+
+A follow-up chase of Milestone 6's own frame-CRC timing drift verified,
+for the first time this session, the 68000's own instruction sequence
+against a live MAME capture directly (every prior Tier 2 pass checked
+NMK004's side only) and surfaced a real gap this document's own "What's
+missing" section above already anticipated honestly (see point 2's own
+"before full cycle-accurate timing is trusted" caveat): `tlcs90.sv`'s
+per-opcode *cycle counts* have never actually been checked against the
+oracle, only instruction *sequence* — `/tmp/oracle_pc2.txt` carries no
+timestamps at all. **That gap is now closed and the question answered
+directly**: new tooling (`sim/oracle/capture_cyc_trace.py` +
+`sim/compare/cyc_diff.py`, using MAME's debugger `totalcycles` symbol —
+see `docs/tier2-system.md`'s own "Cycle-timestamped NMK004 trace
+tooling" for the full mechanism) measured **99.2% of NMK004 instructions
+executing with the wrong cycle cost** against MAME's own
+`tlcs90.cpp` `OP(opcode,CT)` timing table (e.g. `LD (mn),n` costs 20
+cycles in the reference, 7 in this core — a ~2.9x mismatch, reproduced
+consistently). `tlcs90.sv`'s FSM was built and verified for instruction
+sequence/flag correctness only, exactly as documented throughout this
+file's own eleven verification passes — cycle-accurate bus timing was
+never in scope for any of them, and this is the first time that gap's
+actual real-world size has been measured. Fixing it (giving every opcode
+the reference's own declared cycle count) is a large, CPU-core-wide
+follow-up in its own right, not attempted in this chase. See
+`docs/tier2-system.md`'s "Frame-CRC timing-drift investigation" and
+"Cycle-timestamped NMK004 trace tooling" for the full derivation.

@@ -66,6 +66,17 @@ module nmk004_core #(
 	output [15:0] dbg_pc,
 	output        dbg_valid,
 
+	// debug: live register state + a direct peek at internal RAM[dbg_hl] —
+	// purely additive, for root-causing oracle divergences against MAME's
+	// own debugger register/memory readout (see docs/tier2-system.md,
+	// "RET Z at 0x0E5F"). dbg_ram_hl is only meaningful while dbg_hl falls
+	// in the internal-RAM window (0xfec0-0xffbf); that's the only range
+	// this investigation needs.
+	output [7:0]  dbg_a,
+	output [7:0]  dbg_f,
+	output [15:0] dbg_hl,
+	output [7:0]  dbg_ram_hl,
+
 	// P4 bit0 = future 68000-reset drive (nmk004_device::port4_w in the
 	// reference). BX/BY exposed for debug visibility; the same values are
 	// also wired internally into the CPU core's ix_bank/iy_bank inputs
@@ -94,7 +105,8 @@ module nmk004_core #(
 		.mem_rd(cpu_mem_rd), .mem_wr(cpu_mem_wr),
 		.nmi(nmi), .irq_req(irq_req_to_cpu), .irq_mask(irq_mask),
 		.ix_bank(bx), .iy_bank(by),
-		.dbg_pc(dbg_pc), .dbg_valid(dbg_valid), .dbg_halt()
+		.dbg_pc(dbg_pc), .dbg_valid(dbg_valid), .dbg_halt(),
+		.dbg_a(dbg_a), .dbg_f(dbg_f), .dbg_hl(dbg_hl)
 	);
 
 	// ------------------------------------------------------------------
@@ -143,6 +155,7 @@ module nmk004_core #(
 	reg [7:0] int_ram [0:255];
 	always @(posedge clk) if (cpu_mem_wr && sel_ext_ram) ext_ram[cpu_addr[10:0]] <= cpu_dout;
 	always @(posedge clk) if (cpu_mem_wr && sel_int_ram) int_ram[cpu_addr[7:0]]  <= cpu_dout;
+	assign dbg_ram_hl = int_ram[dbg_hl[7:0]];
 
 	// ------------------------------------------------------------------
 	// Host handshake / YM / OKI glue
@@ -173,7 +186,11 @@ module nmk004_core #(
 		.re(sel_periph & cpu_mem_rd),
 		.rdata(periph_rdata),
 		.irq_mask(irq_mask), .irq_req(irq_req_periph),
-		.p4_latch(p4), .bx(bx), .by(by)
+		.p4_latch(p4), .bx(bx), .by(by),
+		// P5/P6 external-read override — not this role, see nmk004_periph.sv's header.
+		.p5_ext_en(1'b0), .p5_ext_val(8'h00),
+		.p6_ext_en(1'b0), .p6_ext_val(8'h00),
+		.p6_we(), .p6_wdata()
 	);
 
 	// ------------------------------------------------------------------

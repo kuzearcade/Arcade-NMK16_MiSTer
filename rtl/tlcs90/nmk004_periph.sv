@@ -51,6 +51,29 @@
 //     bank extension itself (applying the nibble to IX/IY-based memory
 //     addressing) is the CPU core's job, implemented there (see
 //     tlcs90.sv's header and its `bank1`/`bank2` wires).
+//   - **P5/P6 external-read override** (`p5_ext_en`/`p6_ext_en` +
+//     `p5_ext_val`/`p6_ext_val`, plus `p6_we`/`p6_wdata` on the write
+//     side): added for the TLCS-90 *protection-MCU* role (Tier 2's
+//     Family D — see `rtl/tlcs90/nmk_prot_core.sv`), which installs its
+//     own `port_read<5>`/`port_read<6>`/`port_write<6>` callbacks in the
+//     reference (`tdragon_prot_state::mcu_port5_r`/`mcu_port6_r`/
+//     `mcu_port6_w`) that *replace* the plain port-latch behavior
+//     entirely — P5 reads return the current scanline (`screen.vpos()
+//     >>2`), P6 reads return a toggling bus-status flag, and P6 writes
+//     are inspected for 0x08/0x0B (68000 bus take/release) rather than
+//     latched. This peripheral register map (`tmp90840_regs` in the
+//     reference's own `cpu/tlcs90/tlcs90.cpp`) is identical between the
+//     TMP90840 (NMK004's own role) and TMP91640 (the protection-MCU
+//     role) — confirmed directly, not assumed — so one module serves
+//     both; only the owning board wrapper differs (internal ROM/RAM
+//     size, and now this override wiring). Every new input defaults to
+//     inert when tied 0/0 (nmk004_core.sv's own instantiation does
+//     exactly that), so this is purely additive: P5 still reads 0xFF
+//     and P6 still reads 0x00 (its own prior default-case fallthrough,
+//     preserved exactly rather than "fixed" to return the p6 latch,
+//     since that latch was never faithfully modeled here either and
+//     changing it now would be an unrelated, unverified behavior change
+//     to an already-verified module) for every existing caller.
 module nmk004_periph (
 	input        clk,
 	input        reset,
@@ -65,7 +88,17 @@ module nmk004_periph (
 	output [10:0] irq_req,  // to the CPU core's irq_req input (timer pulses)
 
 	output [7:0] p4_latch,  // bit0 = future 68000-reset drive, see header
-	output [3:0] bx, by
+	output [3:0] bx, by,
+
+	// P5/P6 external-read override + P6 write tap — see header. Tie
+	// p5_ext_en/p6_ext_en low (NMK004's own role) to preserve every
+	// prior behavior exactly.
+	input        p5_ext_en,
+	input  [7:0] p5_ext_val,
+	input        p6_ext_en,
+	input  [7:0] p6_ext_val,
+	output       p6_we,
+	output [7:0] p6_wdata
 );
 
 	// ------------------------------------------------------------------
@@ -300,6 +333,11 @@ module nmk004_periph (
 		irq_req_r[7] = fired5; // T5
 	end
 
+	// P6 write tap — see header. Pure combinational pulse, independent of
+	// the p6 latch itself (which still updates normally below).
+	assign p6_we = we & (reg_addr == 6'h0c);
+	assign p6_wdata = wdata;
+
 	// ------------------------------------------------------------------
 	// Register read mux
 	// ------------------------------------------------------------------
@@ -309,9 +347,9 @@ module nmk004_periph (
 			6'h04: rdata = p2;
 			6'h06: rdata = p3;
 			6'h08: rdata = p4 & 8'h0f;
-			6'h0a: rdata = 8'hff; // P5, no ADC input source modeled
+			6'h0a: rdata = p5_ext_en ? p5_ext_val : 8'hff; // P5 — see header
 			6'h0b: rdata = 8'h88 | smmod;
-			6'h0c: rdata = p6;
+			6'h0c: rdata = p6_ext_en ? p6_ext_val : 8'h00; // P6 — see header (0x00 preserves the prior default-case value)
 			6'h0d: rdata = p7;
 			6'h10: rdata = p8;
 			6'h18: rdata = tclk;
