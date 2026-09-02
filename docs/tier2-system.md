@@ -1940,3 +1940,132 @@ proven to generalize to a second, differently-shaped protection ROM);
 the game itself is not yet playable, blocked on the same documented,
 shared-infrastructure-level known limitation. No new bug in this port,
 no regressions to any of the 9 prior ports.
+
+## video_timing.sv reset-phase fix — the raster-phase half of the tdragon1/hachamf limitation, resolved
+
+At the user's own explicit direction, revisited the "known limitation"
+documented above rather than leaving it as-is. The investigation went
+through several wrong turns before landing on real, MAME-verified
+ground truth — worth recording honestly, not just the final answer,
+since the wrong turns are exactly the kind of trap a future session
+could fall back into:
+
+- **First wrong turn**: a MAME debugger `trace ...,noloop` capture
+  (the exact mechanism `capture_cyc_trace.py` uses for every oracle
+  capture this project has ever taken) showed the protection MCU's own
+  P5 register (`screen.vpos()>>2`) reading as a constant, frozen value
+  across 28,000+ consecutive polling-loop iterations spanning over
+  300ms of emulated time — a real screen device cannot behave this
+  way. Chased this down a long path (Lua `register_periodic` sampling,
+  which turned out to alias against a per-frame hook of its own) before
+  ruling both measurement methods untrustworthy for this specific
+  question rather than trusting either one.
+- **Second wrong turn**: with the debugger's own P5 reading discredited,
+  ran tdragon1 under `-video none -nothrottle` for 15 real seconds with
+  a Lua PC-sampling hook (`register_periodic`, once per frame) and
+  concluded real MAME *also* hangs forever at `$9640/$9646`. This was
+  itself a measurement artifact — **the user caught it**, reporting that
+  their own interactive `mame -rompath mame_roms tdragon1` run reached a
+  title screen. Frame-synchronized periodic sampling aliases against any
+  code with a consistent per-frame structure (exactly the trap that
+  discredited the first attempt too) — `$9640/$9646` turned out to be a
+  hot but entirely normal per-frame subroutine, not a hang.
+- **Correct methodology, found only after the correction**: a Lua
+  `install_write_tap`/`install_read_tap` memory tap (fires on every
+  genuine access, immune to frame-synchronized aliasing since it isn't
+  polling on any fixed schedule at all) confirmed real MAME writes
+  palette RAM at t≈1.317s and P5 genuinely advances continuously
+  (measured incrementing $0B→$0C→$0D over successive real reads,
+  ~252us apart — matching `scan_period()`'s own 64us/scanline times 4,
+  exactly the granularity `>>2` produces). This is the technique that
+  should be reached for first, not last, for any future "is MAME's own
+  timing state actually changing" question — periodic/frame-scheduled
+  Lua hooks and debugger `trace` actions are BOTH untrustworthy for
+  this class of measurement.
+
+With a trustworthy measurement method in hand: `screen.vpos()>>2` = $0B
+(vpos in [44,47]) at real time 5.260ms after machine start, while our
+own RTL's `vt_vcount` at the exact corresponding point (verified via a
+temporary `dbg_vt_vcount` output, cross-checked against the protection
+MCU's own cycle-accurate timing so the comparison point is genuinely
+the same moment on both sides) was 82 — not a rate mismatch (confirmed
+separately: MAME's own `scan_period()`=64us and `frame_period()`/
+`scan_period()`=278 exactly match `video_timing.sv`'s own VTOTAL=278,
+and the observed P5 real-time increment rate matches 64us/scanline
+exactly), but a pure phase offset. Solving
+`vpos(t=0) + 5260/64 ≡ [44,47] (mod 278)` for `vpos(t=0)` gives
+`[240,243]` — landing exactly on `VACTIVE_END` (240), independently
+corroborated by `time_until_vblank_start()` returning exactly
+`frame_period()` at t=0 (consistent with the beam sitting precisely at
+the vblank-start boundary already). **`video_timing.sv`'s own
+`vcount` now resets to `VACTIVE_END` (240) instead of 0**, matching
+real MAME's own screen-device convention: the beam starts at the top
+of vblank, not the top of the frame.
+
+### Regression sweep
+
+`video_timing.sv` is shared by every Tier 1/2 port (11 total). Full
+regression rebuild + oracle re-verification across all of them:
+
+- **mustang**: NMK004 side unaffected (identical instruction count,
+  1,200,859, since NMK004 never reads P5 in its own role). 68000 side
+  showed a real behavior change (different last-fetch PC, +30
+  instructions) — confirmed via a controlled A/B test (stashed the fix,
+  rebuilt, re-ran the identical `cyc_diff.py` comparison, restored the
+  fix) that the 5043/12602 68000-side cycle-cost mismatch is **byte-
+  for-byte identical** in both the pre-fix and post-fix builds — a
+  pre-existing, already-documented "68000 bus-wait-state timing" quirk,
+  not something this fix introduced.
+- **strahl**, **vandyke**: still a complete 1,096,428/1,096,428
+  checkpoint match, unchanged from their own established baselines.
+- **acrobatm**: checkpoint match improved (55,184 vs the established
+  48,274), same stopping point (`$01DA`, the shared idle loop) and same
+  benign inflated-ratio class already documented.
+- **tdragon**: exact match to established baseline (14,865 checkpoints,
+  28 mismatches, identical numbers).
+- **hachamfb**: exact match to established baseline (108,116
+  checkpoints, 19 mismatches, identical numbers).
+- **hachamf**: genuine improvement on both sides — NMK004 checkpoint
+  match 239,972 (up from 230,261), protcpu-side match 109,943 (up from
+  86,219) with fewer residual mismatches (4 vs 15) — strong positive
+  evidence the fix is directionally correct, not just harmless.
+- **blkheart**: consistent with the established pattern (stops at the
+  same shared idle loop `$0196`, same residual mismatch classes) but
+  not cross-checked against an exact saved baseline number.
+- **bioship**: consistent with the established benign pattern (small
+  mismatch fraction, inflated ratio explained by an unusually long
+  900M-cycle run against a fixed 2-second oracle capture) — no exact
+  saved baseline number to cross-check against either.
+- **bjtwin** (Tier 1 — architecturally the most exposed to this change,
+  since its own 68000 has no NMK004 reset-hold buffering it from the
+  raster phase from its very first instruction): ran cleanly (17
+  frames rendered), but its own established verification uses an older,
+  differently-formatted oracle trace (`cactus_spriteram_old.trace`)
+  that `state_diff.py` couldn't parse against in this pass (a tooling
+  mismatch, not a result either way) — not fully re-verified.
+
+**Net result: zero regressions found across the entire sweep**, one
+port (hachamf) shows a clear, measurable improvement, and the two
+ports checked byte-for-byte against saved baselines (tdragon,
+hachamfb) are unchanged.
+
+### Remaining gap — tdragon1/hachamf still don't render
+
+The phase fix was necessary but not sufficient. Direct measurement
+confirms it fixed exactly what it targeted: `vt_vcount` at tdragon1's
+own first P5 read is now 44 (previously 82), landing precisely in
+MAME's own observed [44,47] range. But both tdragon1 and hachamf still
+crash at the same illegal-instruction trap identified earlier this
+session — re-checked directly, the self-modifying trampoline at
+mainram `$BEF00` still gets patched with `HL=$0200` instead of the
+oracle's own `$92F4` at the exact same instruction (`$072D`). This is
+a **separate divergence**, not explained by raster phase (the phase
+at that specific instruction is no longer the suspect — the trampoline
+patch depends on an accumulator built from a ROM table lookup gated by
+internal RAM `$FF08`, which in turn depends on which of several
+interrupt-driven "sub-task" code paths executed by that point — a
+mechanism already partially traced in the tdragon1 section above, not
+yet fully root-caused). Family D's tdragon1/hachamf remain not
+playable; the video_timing.sv fix is real, verified, and worth keeping
+regardless, since it's demonstrably a closer match to real MAME
+behavior project-wide.

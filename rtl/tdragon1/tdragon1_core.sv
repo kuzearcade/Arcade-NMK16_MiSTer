@@ -93,6 +93,7 @@ module tdragon1_core #(
 	output        dbg_prot_valid,
 	output        dbg_halt_68k,
 	output [15:0] dbg_prot_hl,
+	output [9:0]  dbg_vt_vcount,
 
 	output        dbg_ym_we,
 	output        dbg_ym_cs,
@@ -600,6 +601,7 @@ module tdragon1_core #(
 	// tdragon_core.sv's own (same V-PROM, same nmk_irq instance).
 	// ------------------------------------------------------------------
 	wire [9:0] vt_hcount, vt_vcount;
+	assign dbg_vt_vcount = vt_vcount;
 	wire vt_line_start, vt_hblank, vt_vblank;
 	video_timing vtiming (
 		.clk_sys(clk_sys), .ce_pix(ce_pix), .reset(reset),

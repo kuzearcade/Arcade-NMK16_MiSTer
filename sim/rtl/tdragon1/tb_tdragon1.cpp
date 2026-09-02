@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
 			std::fprintf(prot_trace, "%04X\n", pc);
 			std::fprintf(prot_cyc_trace, "%llu %04X\n", (unsigned long long)(clk_sys_ticks / 8), pc);
 			if (prot_reg_trace)
-				std::fprintf(prot_reg_trace, "%llu %04X HL=%04X\n", (unsigned long long)(clk_sys_ticks / 8), pc, (unsigned)top.dbg_prot_hl);
+				std::fprintf(prot_reg_trace, "%llu %04X HL=%04X VCOUNT=%u\n", (unsigned long long)(clk_sys_ticks / 8), pc, (unsigned)top.dbg_prot_hl, (unsigned)top.dbg_vt_vcount);
 			prot_instrs++;
 			prot_last_pc = pc;
 		}
