@@ -1857,3 +1857,86 @@ exist and build cleanly; two real bugs were found and fixed along the
 way. tdragon1 itself is not yet playable (blank screen, protection
 self-test failure) — the first port this session to end in this state.
 No regressions to any of the 8 prior ports.
+
+## hachamf — Family D, second TLCS-90 protection-MCU game, same root cause confirmed
+
+The second Family D target, moving on from tdragon1 per the user's own
+next directive. Confirmed directly from the reference that
+`hachamf_prot()` calls `hachamf(config)` first (same pattern as
+`tdragon_prot()`/`tdragon()`), and that `hachamf()` is the *same*
+machine-config function the already-ported, genuinely-unprotected
+`hachamfb` uses — so `rtl/hachamf/hachamf_core.sv` is `hachamfb_core.sv`
+plus the protection MCU wired in, and `video_hachamfb.sv` is reused
+directly, unchanged.
+
+Genuinely new versus tdragon1's own wiring: hachamf's own protection
+ROM (`nmk-113.bin`, "NMK-113") is confirmed, directly from the
+reference's own comment on `hachamf_prot()`, to be a *shared* firmware
+image used by several different games, which select their own per-game
+codepath by reading a fixed, hardwired constant from port 7
+(`port_read<7>().set_constant(0x0c)` for hachamf specifically — the
+reference's own comment table names 0x0c "Hacha Mecha Fighter"). This
+is a genuinely different mechanism from tdragon1's own dedicated
+NMK-110 ROM, which never reads port 7 at all. Handled via a new,
+additive P7 external-read override on `nmk004_periph.sv` (identical in
+shape to the existing P5/P6 override, tied inert by default) and new
+`P7_EXT_EN`/`P7_EXT_VAL` parameters on `nmk_prot_core.sv` (default off
+— tdragon1's own instantiation is unaffected, confirmed by a clean
+tdragon1 regression rebuild producing byte-for-byte identical
+instruction counts to its own established baseline). `hachamf.zip` is
+fully self-contained, unlike hachamfb's/tdragon1's own split-zip
+dependency on a parent romset.
+
+### Verification results
+
+Both oracle comparisons are the strongest of any Family D port so far.
+NMK004 side: 230,261 of 1,234,990 oracle checkpoints matched (18.6% —
+the largest match percentage of any port this session), 19/230,260
+cycle-cost mismatches — the same 16 already-established TLCS-90 edge
+cases (DJNZ-quirk pair, FSM-floor triple) plus 3 large-diff entries at
+the known `$0EB1` host-handshake poll-loop region, the same
+already-documented "genuinely slow-resolving poll loop" class already
+seen for strahl/vandyke, not a new divergence. Protection-MCU side:
+86,219 of 628,019 oracle checkpoints matched, 15/86,218 mismatches, the
+exact same pattern (phase-dependent scanline-poll-loop divergence) as
+tdragon1's own protcpu-side comparison, cycle-for-cycle. The protection
+mechanism itself works: 803 real halt/bus-take/release cycles over the
+run (more than tdragon1's own 508), heavy 68000 write activity
+(2,666,989 write bus cycles) and NMK004 sound activity (24,581 YM2203
+writes) — genuinely more game logic executing than tdragon1's own
+stuck-early state, not less. Regression check: clean rebuilds of both
+mustang and tdragon1 produced instruction counts identical,
+byte-for-byte, to their own already-established baselines (mustang:
+1,200,859 NMK004 instructions; tdragon1: 6,051,804 NMK004 / 2,997,417
+protcpu instructions, 508 halts) — the new P7 override is confirmed
+inert for every caller that doesn't set it.
+
+### Same known limitation as tdragon1, confirmed rather than re-derived
+
+hachamf still renders a blank screen (palette RAM: 0/1024 nonzero
+across the full 300M-cycle run, same as tdragon1's own). Rather than
+repeat tdragon1's own from-scratch multi-hour disassembly investigation,
+checked directly for the same signature already root-caused there: the
+68000's own last-fetch trace shows it permanently stuck in a 4-PC tight
+loop (`$81 9C-$81A2`); disassembling that region via MAME's own
+debugger (not capstone, which silently mis-decodes this ROM's own
+alignment the same way it did for tdragon1's) shows exactly the same
+structure as tdragon1's own error table — `move.w #N,$9C008.l` /
+`bra $819C` entries (an error-code-reporting self-test dispatcher, this
+game's own analog of tdragon1's `$D07C4`/`$9660` table) funneling into
+`$00819C: clr.w $100.w` / `$0081A0: bra $819C`, an infinite trap. This
+confirms the root cause generalizes across Family D rather than being
+a tdragon1-specific fluke: any protection self-test sensitive to *how
+many scanline-boundary events have accumulated since reset* will hit
+this, since `rtl/bjtwin/video_timing.sv`'s own deterministic
+reset-to-`hcount=vcount=0` phase (shared, unchanged since Tier 1) most
+likely differs from MAME's own reset-relative raster phase — see
+tdragon1's own section above for the full derivation, not repeated
+here.
+
+**Status:** same as tdragon1 — protection-MCU infrastructure fully
+built, wired, and oracle-verified correct (and, per the P7 mechanism,
+proven to generalize to a second, differently-shaped protection ROM);
+the game itself is not yet playable, blocked on the same documented,
+shared-infrastructure-level known limitation. No new bug in this port,
+no regressions to any of the 9 prior ports.

@@ -74,6 +74,15 @@
 //     since that latch was never faithfully modeled here either and
 //     changing it now would be an unrelated, unverified behavior change
 //     to an already-verified module) for every existing caller.
+//   - **P7 external-read override** (`p7_ext_en`/`p7_ext_val`): added
+//     for hachamf's own NMK-113 protection ROM, which is confirmed
+//     (directly from `hachamf_prot()`) to be a *shared* firmware image
+//     used by several different games, selecting its own per-game
+//     codepath via `port_read<7>().set_constant(...)` — a fixed,
+//     per-game hardwired value (0x0c for hachamf), not a real R/W port.
+//     Same pattern as P5/P6: tied inert (0/0) for both NMK004's own
+//     role and tdragon1's own protection role, where P7 stays a plain
+//     read/write latch exactly as before.
 module nmk004_periph (
 	input        clk,
 	input        reset,
@@ -98,7 +107,12 @@ module nmk004_periph (
 	input        p6_ext_en,
 	input  [7:0] p6_ext_val,
 	output       p6_we,
-	output [7:0] p6_wdata
+	output [7:0] p6_wdata,
+
+	// P7 external-read override — see header. Tie p7_ext_en low to
+	// preserve the plain read/write latch behavior exactly.
+	input        p7_ext_en,
+	input  [7:0] p7_ext_val
 );
 
 	// ------------------------------------------------------------------
@@ -350,7 +364,7 @@ module nmk004_periph (
 			6'h0a: rdata = p5_ext_en ? p5_ext_val : 8'hff; // P5 — see header
 			6'h0b: rdata = 8'h88 | smmod;
 			6'h0c: rdata = p6_ext_en ? p6_ext_val : 8'h00; // P6 — see header (0x00 preserves the prior default-case value)
-			6'h0d: rdata = p7;
+			6'h0d: rdata = p7_ext_en ? p7_ext_val : p7; // P7 — see header
 			6'h10: rdata = p8;
 			6'h18: rdata = tclk;
 			6'h1a: rdata = tmod;

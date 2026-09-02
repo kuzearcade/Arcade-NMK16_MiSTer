@@ -92,7 +92,16 @@
 // any MAME scheduler quantum, so there's no equivalent "coarseness" to
 // correct for here.
 module nmk_prot_core #(
-	parameter BOOT_ROM_FILE = ""
+	parameter BOOT_ROM_FILE = "",
+	// Port 7 constant (`port_read<7>().set_constant(...)` in the
+	// reference) — some protection ROMs (e.g. NMK-113, shared by
+	// hachamf and others) select their own per-game codepath by
+	// reading a fixed, hardwired value here; tdragon1's own dedicated
+	// NMK-110 ROM wires nothing to port 7 at all, so P7_EXT_EN defaults
+	// off (plain read/write latch, inert) for every caller that
+	// doesn't need this.
+	parameter P7_EXT_EN  = 1'b0,
+	parameter [7:0] P7_EXT_VAL = 8'h00
 ) (
 	input clk,
 	input reset,
@@ -225,7 +234,8 @@ module nmk_prot_core #(
 		.p4_latch(), .bx(cpu_bx), .by(cpu_by),
 		.p5_ext_en(1'b1), .p5_ext_val(vpos_div4),
 		.p6_ext_en(1'b1), .p6_ext_val(p6_read_value),
-		.p6_we(p6_we), .p6_wdata(p6_wdata)
+		.p6_we(p6_we), .p6_wdata(p6_wdata),
+		.p7_ext_en(P7_EXT_EN), .p7_ext_val(P7_EXT_VAL)
 	);
 
 	// ------------------------------------------------------------------

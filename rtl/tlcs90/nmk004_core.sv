@@ -190,7 +190,8 @@ module nmk004_core #(
 		// P5/P6 external-read override — not this role, see nmk004_periph.sv's header.
 		.p5_ext_en(1'b0), .p5_ext_val(8'h00),
 		.p6_ext_en(1'b0), .p6_ext_val(8'h00),
-		.p6_we(), .p6_wdata()
+		.p6_we(), .p6_wdata(),
+		.p7_ext_en(1'b0), .p7_ext_val(8'h00)
 	);
 
 	// ------------------------------------------------------------------
