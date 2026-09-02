@@ -2173,21 +2173,30 @@ is always even/valid, and the 68000 cycles cleanly through the
 `$955A` interrupt handler in the same repeating pattern the oracle
 itself uses.
 
-### hachamf: crash resolved, but render result is inconclusive
+### hachamf: also fixed — the initial "inconclusive" read was a false alarm
 
 Re-running hachamf (Family D's second protection-MCU game) with the
 same fixes: no crash (previously hit the identical known limitation),
-but the VRAM dump shows `bgvram=8192/8192 txvram=1024/1024` — the same
-"never actually cleared" signature tdragon1 showed *before* its own
-fix — alongside `86016/86016` (100%) nonzero pixels and a populated
-palette (478/1024). That combination looks like a full-screen fill
-from VRAM left at its Verilator power-on-zero state (never reached by
-the game's own clear routine) composited against real palette colors,
-not genuinely correct rendering — consistent with the protection MCU
-only reaching PC `$00A3` by the end of the run, far short of
-tdragon1's own progress. Treated as still open, not resolved; worth a
-dedicated follow-up trace rather than assuming the same fix carries
-over identically.
+and a VRAM dump showing `bgvram=8192/8192 txvram=1024/1024`,
+`86016/86016` (100%) nonzero pixels, palette `478/1024`. First read as
+a possible red flag — that "fully non-blank VRAM" signature is what
+tdragon1 showed *before* its own fix, when its clear routine never
+got the chance to run — but that heuristic doesn't transfer here.
+Re-running `hachamfb` (Family B's unprotected sibling, sharing hachamf's
+exact video architecture, already oracle-verified correct and
+documented in `docs/PLAN.md` as reaching "86,016/86,016 pixels
+non-zero") through the identical `TB_DUMP_VRAM` check gives numbers
+that match hachamf's own **exactly**: `palette=478/1024
+bgvram=8192/8192 txvram=1024/1024`, `86016/86016` nonzero — down to
+the exact palette count. A rendered PPM frame dump of the current
+build confirms this directly and visually: a stable, correctly
+composited "HACHA MECHA FIGHTER" title screen (sky background, mascot
+character, NMK logo, copyright text) across multiple frames, the same
+screen `docs/PLAN.md` already documents for hachamfb. The "100%
+non-blank" signature is simply what this game's own full-bleed sky-art
+title screen looks like when correctly rendered, with no letterboxed
+region left at its blank-tile default — not a garbage-fill artifact.
+hachamf is confirmed fixed, not merely crash-free.
 
 ### Regression sweep
 
