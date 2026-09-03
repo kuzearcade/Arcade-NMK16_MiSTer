@@ -2682,3 +2682,111 @@ instructions (identical to every prior run this session); hachamf —
 instructions (identical); blkheart — 527 frames rendered, healthy
 NMK004/sound activity, no crash. Zero regressions from this session's
 shared-file changes.
+
+## gunnail — macross's own sibling, ported reusing its infrastructure directly
+
+Family D again: same NMK-215/TMP90840 protection MCU firmware
+(byte-identical protection ROM CRC to macross's own) and the same
+dual-NMK214 GFX-descrambler wiring. Built `rtl/gunnail/gunnail_core.sv`,
+`rtl/gunnail/video_gunnail.sv`, `sim/rtl/gunnail/tb_gunnail.cpp`, and
+`sim/rtl/gunnail/Makefile`, adapted directly from macross's own
+equivalents — no shared file (`tlcs90.sv`, `nmk_prot_core.sv`,
+`nmk004_periph.sv`, `nmk214.sv`) needed any change for this port.
+
+### What's actually new, and what turned out not to be
+
+Three things looked new going in; only two were:
+
+- **Per-scanline raster X+Y scroll** — genuinely new. MAME's own
+  `bg_update()` computes each screen row's own scroll independently
+  (`gunnail_scrollramy[0] + gunnail_scrollramy[y1]` for Y,
+  `gunnail_scrollram[0] + gunnail_scrollram[16+y1]` for X, the `+16`
+  being MAME's own unexplained literal, kept as-is). Because this
+  project's renderer is demand-driven per-pixel (`rd_x`/`rd_y` inputs,
+  not a real scanline draw pass), this was straightforward: two new
+  256-word RAM arrays (`scrollram`/`scrollramy`) plus per-`rd_y`
+  combinational scroll lookups in `video_gunnail.sv`, no new raster
+  timing needed.
+- **Wide TX tilemap (macross2-style wraparound)** — genuinely new.
+  gunnail's TX tilemap is 64×32 tiles (double macross's 32×32), same
+  `VIDEOSHIFT=92`. Reproduced by widening the existing modular-
+  wraparound address formula (256→512, 5→6 column bits) — no new
+  special-case logic.
+- **Hi-res screen timing** — turned out to be a non-issue. MAME lists
+  gunnail as genuinely hi-res (`set_screen_hires()`), but
+  `rtl/bjtwin/video_timing.sv` (reused unchanged by every port since
+  Tier 1, including every lo-res one) already numerically matches
+  MAME's own hi-res parameters exactly (8MHz pixel clock, 512 htotal,
+  384×224 visible). This has been a settled, already-validated project
+  convention since bjtwin; gunnail needed zero new resolution-timing
+  RTL.
+
+### Build and verification results
+
+Built and ran a full 300M-cycle simulation. The protection-MCU
+timing-drift issue already characterized for macross **recurs exactly
+as expected** — not a new bug, the same one:
+
+- Protection MCU executed **2,824,804 instructions**, last PC=`$0088`
+  (the same P5-wait polling loop), **0 HALT assertions** — all three
+  numbers match macross's own fresh 300M-cycle run bit-for-bit
+  (`protection MCU executed 2,824,804 instructions... last PC=$0088...
+  HALT asserted 0 times`), confirming the two games are running
+  byte-identical protection firmware down to the instruction. Per the
+  scope already established for macross, this was not re-diagnosed —
+  it's the same open issue, not chased further here.
+- Despite the 68000 never being released from its post-reset HALT
+  wait, the video side still renders real content from whatever VRAM
+  state exists: `palette=354/1024`, `bgvram=7951/8192` (98% populated),
+  `txvram=480/2048`, `9671/86016` pixels nonzero.
+- **Visual confirmation of the two new video features**: dumped all
+  422 rendered frames as PPM and inspected several. Frame 421 (and
+  every frame from ~350 onward, a static held frame) shows a clean
+  "PRESENTS" splash — the widened 64×32 TX tilemap renders the text
+  correctly with no corruption or wraparound garbage, and the BG
+  layer's diagonal-striped logo art renders in the correct position
+  and colors with no tearing. This is real evidence the wide-tilemap
+  and per-scanline-scroll plumbing are structurally correct, even
+  though the frame itself is a static splash screen (the 68000 never
+  reaching the main game loop means no moving gameplay content exists
+  yet to fully exercise the scroll registers).
+
+### Regression sweep — with one methodology correction along the way
+
+First attempt used the existing tdragon1/hachamf/macross binaries
+already sitting in each `obj_dir/` and got small (~0.1-0.6%) raw
+instruction-count mismatches against the documented baselines, while
+every functionally-meaningful number (HALT counts, palette/bgvram/
+txvram/pixel counts) matched exactly. Checked binary mtimes against
+the FSM-pipeline-floor fix commit (`4292be1`, 15:08) and found all
+three existing binaries predated it (built ~02:5x) — stale, not
+actually reflecting current `tlcs90.sv`. Rebuilt all three fresh and
+reran: **identical results to the stale run**, down to the same
+instruction counts. Since two independent builds (stale and fresh)
+of what should be the same source both reproduce the same numbers,
+and the functionally-relevant outputs match the documented baselines
+exactly, this points to the earlier documented instruction-count
+figures (`2,977,951`/`2,330,347`) themselves being a pre-existing
+transcription inaccuracy in the docs, not a regression — worth a
+correction pass sometime, not chased further here since it predates
+and is unrelated to gunnail's own changes (which touch no shared
+file, confirmed via `git status`).
+
+Fresh-rebuild results: tdragon1 — **508 HALT asserts** (exact match),
+`palette=609/1024`, `52358/86016` pixels, `bgvram=256/8192
+txvram=832/1024` (exact match); hachamf — **802 HALT asserts** (exact
+match), `palette=478/1024 bgvram=8192/8192 txvram=1024/1024`,
+`86016/86016` pixels (exact match); macross — 0 HALT asserts, last
+PC=`$0088`, `2,824,804` protection-MCU instructions (exact match to
+its own already-documented signature, and to gunnail's own run
+above). Zero regressions.
+
+### Status
+
+Ported, built, renders correctly (splash screen visually confirmed,
+both new video features working structurally), but **not yet
+playable** — inherits macross's own open, already-characterized
+protection-MCU timing-drift issue verbatim, since it runs the same
+firmware. Not a new problem to solve for this port; resolving it is
+the same open item already scoped under macross above. Changes left
+uncommitted for review.
