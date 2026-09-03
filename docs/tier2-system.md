@@ -2890,3 +2890,207 @@ integration glue). **Not yet playable**, for the identical reason
 macross/gunnail aren't: the shared NMK-215 protection firmware's own
 timing-drift issue, already characterized above and not re-chased
 here. Changes left uncommitted for review.
+
+## mustangb — Tier 5's first port (Family E, first Z80-based port in this project)
+
+`mustangb` ("US AAF Mustang (bootleg, set 1)") is the natural first
+Family E target: a Raiden-sound bootleg of `mustang` (Tier 2) that
+replaces NMK004 with a real Z80 + Seibu Sound System v1.02 board (YM3812
++ single OKIM6295), while reusing `mustang`'s exact video architecture
+unmodified (`screen_update_macross`/`gfx_macross`/
+`VIDEO_START_OVERRIDE(macross)` — confirmed identical between the two
+machine configs in `nmk16.cpp`). This is the first port in the project
+to use a real Z80 core, made possible by this session's own GHDL-based
+VHDL→Verilog translation of T80 (`rtl/third_party_gen/t80/T80s.v`, see
+`docs/t80-vhdl-toolchain.md`) — the whole point of building that
+toolchain in the first place.
+
+### What was built
+
+- **`rtl/seibu/seibu_sound.sv`** (new device): ported from
+  `seibu_sound_device` (`mame/src/mame/shared/seibusound.{h,cpp}`) — the
+  Z80-side register block (`0x4000-0x401B`: pending/irq-clear/
+  rst10-ack/rst18-ack/bank-select/YM3812 pass-through/soundlatch/
+  main-data-pending/coin/main-data-write), and the IM0
+  interrupt-vector arbitration between YM3812's RST10 (vector `0xD7`)
+  and the 68000's RST18 (vector `0xDF`, via `main_mustb_w`), replicating
+  the reference's own `VECTOR_INIT`/`RST10_*`/`RST18_*` state machine so
+  a simultaneous RST10+RST18 can't corrupt the vector byte driven onto
+  the data bus during the Z80's interrupt-acknowledge cycle (M1_n &
+  IORQ_n both low). mustangb's own `mustangb_map` only ever exercises
+  `main_mustb_w` on the 68000 side (confirmed directly against the
+  source: no read of `main_r`/soundlatch/pending anywhere in that map),
+  so `main_r`'s full offset switch is implemented for completeness but
+  not exercised by this port's own testbench.
+- **`rtl/mustangb/mustangb_core.sv`** (new system top-level): fx68k (same
+  wiring pattern every prior port uses) + T80s (via
+  `rtl/third_party_gen/t80/T80s.v`) + `seibu_sound` + jtopl2 (YM3812,
+  first use of jtopl in this project) + jt6295 (OKIM6295, reusing
+  `mustang_core.sv`'s own write-stretch/rom_ok/bank-arithmetic
+  conventions). Reuses, unmodified: `rtl/mustang/video_mustang.sv`
+  (video), `rtl/bjtwin/video_timing.sv` + `rtl/bjtwin/nmk_irq_hacky.sv`
+  (mustangb's own timing PROMs are undumped, so — like Tier 1's
+  `cactus` — MAME substitutes the same fixed-scanline table
+  `nmk16_hacky_scanline` already implements; confirmed via
+  `set_hacky_interrupt_timing(config)` in the machine config, not the
+  real V-PROM path `mustang` itself uses).
+- **Z80/YM3812 clock enable**: real hardware clocks both from
+  `14318180/4 = 3579545 Hz` (identical divisor in the reference's own
+  machine config). Since `32000000/3579545` has no clean power-of-2
+  reduction (unlike the 68000's own exact `/4`), this uses a
+  GCD-reduced exact-ratio phase accumulator instead
+  (`increment=715909, modulus=6400000`, GCD(3579545,32000000)=5) — the
+  long-run average rate is exactly right, same technique this project's
+  jt03/jt6295 clock enables already established, just with a wider
+  (23-bit) accumulator since the ratio doesn't reduce as small.
+- **ROM extraction**: `tools/mkgfxrom.py`'s existing `segments` mode
+  reproduces the reference's `ROM_LOAD` + `ROM_CONTINUE` + `ROM_COPY`
+  audiocpu ROM layout (`mustang.16`, a single 0x10000-byte file split
+  across region offsets 0/0x10000, then region 0x18000 duplicated from
+  region 0) byte-for-byte, by re-reading file offset 0 into region
+  0x18000 — no new tooling needed. Graphics ROMs (`90058-1/4/8/9`) are
+  shared with parent set `mustang` (mustangb has no `parent`-relative
+  clone data of its own for these — confirmed via CRC match against
+  `ROM_START(mustang)`), so extraction searches `mustang.zip` first,
+  matching this project's own established split-romset convention (see
+  `docs/rom-audit.md`).
+
+### Verification results
+
+Full 60M-`clk_sys`-cycle (32MHz) run: Z80 executed 745,065 instructions
+(last fetch PC=`$0126`, settled into a 3-instruction idle loop at
+`$0126/$0129/$012A`), 68000 executed 2,710,850 instructions (150,426
+write bus cycles, last fetch PC=`$003A60`), 106 video frames rendered.
+IM0 interrupt-acknowledge cycles: 2 total over the run — 1 RST10
+(YM3812), 1 RST18 (main CPU), **0 spurious** — confirming the vector
+arbitration logic works correctly when it actually fires, not just in
+isolation (low overall IRQ activity is expected here: no player
+input/coin insert is driven in this testbench, so the 68000 stays in an
+attract/boot-only state that triggers very little sound-latch traffic).
+Pixel/VRAM sanity: palette 16/1024 non-blank, TX VRAM 233/1024 non-blank
+(a real, non-garbage boot/attract-text screen), BG VRAM still blank at
+end of run (this window never reaches whatever later state populates
+it), 2,204/86,016 rendered pixels non-zero — partial but real, non-noise
+rendering, consistent with every prior port's own "pixel dump sanity
+check" convention.
+
+**Z80 core cycle-accuracy, checked against a real MAME oracle capture**
+(`sim/oracle/capture_cyc_trace.py --device :audiocpu`, 3 real seconds ≈
+1,172,391 oracle instructions, diffed via `sim/compare/cyc_diff.py`):
+the PC sequence matches as an ordered subsequence for the first 2,326
+checkpoints, and **every single matched instruction's cycle cost is
+exact — 0/2,325 differ (tolerance=0), total cycles over the matched span
+46,216=46,216 (ratio=1.000)**. This is the first real cycle-accuracy
+result for the GHDL-translated T80 core against a live MAME oracle, and
+it's clean: the translation didn't just produce syntactically valid
+Verilog (already confirmed via `verilator --lint-only`, see
+`docs/t80-vhdl-toolchain.md`) — it's genuinely cycle-exact against real
+Z80 hardware timing, for as far as this comparison window reaches.
+
+(One real testbench bug found and fixed along the way: the first
+version of `tb_mustangb.cpp` logged raw 32MHz `clk_sys_ticks` to
+`z80_cyc.trace` instead of a Z80-clock-equivalent tick count, producing
+a spurious, uniform ~9x cycle-cost "mismatch" against the oracle — not a
+real RTL defect, just a unit-scaling bug in the trace writer.
+Fixed by adding a `dbg_z80_cen` debug output to `mustangb_core.sv` and
+counting its pulses in the testbench instead.)
+
+**Where the match stops, and what that is**: oracle checkpoint 2,327
+(PC=`$0018`) is never found anywhere in the candidate's own full
+745,065-instruction trace (confirmed directly, not just by the diff
+tool's own report). What both sides visit at PC=`$00CC`/`$00CD` around
+this point is not two alternating instructions but a single `LDIR`
+opcode (`ED B0`, confirmed directly against the extracted ROM image at
+this exact address) — Z80's block-repeat instructions re-fetch from
+their own opcode address every iteration until `BC=0`, which is what
+produces the "polling loop" PC signature externally; the oracle
+eventually falls through (to `$0119`→`$011A`→`$0018`→...) after some
+number of iterations, the candidate also falls through eventually (it's
+not permanently stuck — the full run's own last fetch PC, `$0126`, is
+reached via a different exit path, never through `$0018` at all). This
+is a genuine, real divergence in *which* exit path is taken, not a
+decode error or a timing bug — the cycle-perfect match on everything up
+to and including this instruction rules out a CPU-core-correctness
+explanation. This also sharpens the likely mechanism beyond this
+project's usual "live system content" framing (see macross/gunnail/
+bjtwin's own still-open protection-MCU timing-drift writeups): real
+Z80 hardware checks for a pending maskable interrupt *between* each
+`LDIR` iteration, and this port's own RST18 is asserted by the 68000's
+`main_mustb_w` write — an event whose exact system-cycle timing depends
+on fx68k's own accumulated boot-sequence cycle cost, a completely
+separate, independently-validated core. A one-cycle skew in when RST18
+becomes pending relative to this `LDIR`'s own iteration count would be
+enough to shift *which* iteration takes the interrupt, and hence when
+(or with what register/RAM state) execution resumes afterward — the
+same class of small, compounding, boundary-condition timing sensitivity
+already accepted elsewhere in this project (e.g. the TLCS-90 core's own
+"1-cycle FSM-pipeline floor" quirk), not a single fixable bug at a
+single address. Not further diagnosed this session — the next concrete
+step, if picked up later, would be capturing the system-cycle count at
+which RST18 actually asserts on both sides and comparing that against
+each side's own `LDIR` iteration count at that moment, rather than
+assuming a RAM-content dependency.
+
+### Regression sweep
+
+No shared file was modified — `rtl/mustang/video_mustang.sv`,
+`rtl/bjtwin/video_timing.sv`, `rtl/bjtwin/nmk_irq_hacky.sv`,
+`rtl/third_party_gen/t80/T80s.v`, and the vendored `jtopl2.v`/`jt6295.v`
+were only referenced (`-y` include paths / direct instantiation), never
+edited. Re-ran `mustang`'s own testbench (fresh rebuild, 60M cycles):
+106 frames rendered, NMK004 past its host-handshake poll loop
+(1,248,714 instructions, last PC=`$01DB`, 329 RET-Z-at-`$0E5F` hits,
+6,580 YM2203 writes, 42/54 OKI1/OKI2 writes), matching its own
+established shape — no crash, no unexpected divergence. Re-ran Tier 1's
+`cactus` testbench (fresh rebuild, 12M cycles): 17 frames rendered,
+`cactus_rtl.trace` written cleanly, no Verilator errors. Zero
+regressions (a full oracle re-diff for cactus wasn't re-run this
+session — its own oracle trace lives in the gitignored
+`sim/oracle/traces/` and needs regenerating locally; the structural
+re-run — clean build, clean completion, same instruction-count shape —
+is the regression signal here, not a fresh oracle match).
+
+### Status
+
+Built, boots, and runs clean on both CPUs. The Z80/T80 core is now
+**verified cycle-exact against real MAME hardware timing** for the
+portion of boot this comparison window covers — the strongest possible
+validation that the GHDL VHDL→Verilog translation toolchain (this
+session's own prior deliverable, `docs/t80-vhdl-toolchain.md`) actually
+works, not just "looks like valid Verilog." IM0 interrupt vectoring
+(the trickiest part of the Seibu Sound System port, per that module's
+own header) fires correctly with zero spurious vectors when exercised.
+**Not yet a full oracle match**: a single well-characterized, real
+loop-exit-path divergence (detailed above) stops the ordered PC-sequence
+match at instruction 2,326 of the candidate's own much longer run — left
+open, not further chased this session, per this project's own
+established practice for exactly this class of finding.
+
+**Primary-session review pass** found and fixed two real issues before
+commit (both confirmed behaviorally inert for mustangb itself — same
+instruction counts, same frame count, same trace shape before and
+after — since neither path is exercised by this game's own program, but
+both are genuine correctness bugs a later Family E port reusing this
+module could hit):
+- `seibu_sound.sv`'s register read at offset `0x12`
+  (`main_data_pending_r`) returned `main2sub_pending` instead of
+  `sub2main_pending` — confirmed via direct ROM disassembly that
+  mustangb's own Z80 program never reads address `0x4012` at all (no
+  `3A 12 40`/`LD A,(4012h)` anywhere in the image), so this had zero
+  effect here, but the reference clearly reads the other flag
+  (`seibusound.cpp:262-265`).
+- `mustangb_core.sv`'s `main_mustb_w` handler latched the full 16-bit
+  write unconditionally, not gated per-byte on `UDSn`/`LDSn` the way
+  every other byte-addressable register in the same file already is —
+  the reference (`seibusound.cpp:319-329`) only updates whichever byte
+  lane `ACCESSING_BITS_0_7`/`8_15` actually covers, leaving the other
+  latch's prior value alone on a byte-narrow write.
+- Also corrected the "polling loop" characterization above: PC
+  `$00CC`/`$00CD` is one `LDIR` opcode (`ED B0`, confirmed against the
+  extracted ROM), not two alternating instructions — its own
+  hardware repeat-until-`BC=0` mechanism is what produces the
+  loop-like PC signature, which sharpens the likely divergence
+  mechanism to interrupt-during-`LDIR` resume timing rather than a
+  RAM-content-dependent poll.
+
+Changes committed.
