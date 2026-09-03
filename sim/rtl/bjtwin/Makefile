@@ -10,6 +10,9 @@
 #   make clean
 
 FX68K_DIR := ../../../rtl/third_party/fx68k
+TLCS90_DIR := ../../../rtl/tlcs90
+NMK_IRQ_DIR := ../../../rtl/nmk_irq
+NMK214_DIR := ../../../rtl/nmk214
 CORE_DIR := ../../../rtl/bjtwin
 ROMS_DIR := ../../../mame_roms
 TOOLS_DIR := ../../../tools
@@ -18,7 +21,16 @@ TOP := bjtwin_core
 
 SOURCES := $(CORE_DIR)/$(TOP).sv $(CORE_DIR)/nmk_irq_hacky.sv $(CORE_DIR)/video_timing.sv $(CORE_DIR)/video_bjtwin.sv
 
-.PHONY: all rom gfxrom run check clean
+# --- bjtwin_prot (Family D, NMK-215/TMP90840 + dual-NMK214, third
+# sub-group after macross/gunnail) — protected `bjtwin` romset. See
+# bjtwin_prot_core.sv's own header. ---
+PROT_TOP := bjtwin_prot_core
+Z2 := $(ROMS_DIR)/bjtwin.zip
+PROT_SOURCES := $(CORE_DIR)/$(PROT_TOP).sv $(CORE_DIR)/video_bjtwin_prot.sv $(CORE_DIR)/video_timing.sv \
+                $(NMK214_DIR)/nmk214.sv $(NMK_IRQ_DIR)/nmk_irq.sv \
+                $(TLCS90_DIR)/tlcs90.sv $(TLCS90_DIR)/nmk_prot_core.sv
+
+.PHONY: all rom gfxrom run check clean prot-rom prot-prot-rom prot-vtiming-rom prot-gfx-roms run-prot clean-prot
 
 all: run
 
@@ -50,3 +62,44 @@ check: run
 
 clean:
 	rm -rf $(OBJ_DIR) cactus_rtl.trace microrom.mem nanorom.mem
+
+# --- bjtwin_prot targets ---
+# Sound (nmk112 + 2x OKIM6295) is stubbed, same as bjtwin_core.sv's own
+# unprotected build — no oki/nmk112 ROM extraction needed here.
+
+prot-rom:
+	python3 $(TOOLS_DIR)/mkrom.py --zip $(Z2) --hi 93087-1.bin --lo 93087-2.bin --out roms/bjtwin_maincpu.hex
+
+prot-prot-rom:
+	python3 $(TOOLS_DIR)/mkgfxrom.py --zip $(Z2) --mode concat --files nmk-215.bin --out roms/bjtwin_prot.hex
+
+prot-vtiming-rom:
+	python3 $(TOOLS_DIR)/mkgfxrom.py --zip $(Z2) --mode concat --files 8.ic37 --out roms/bjtwin_vtiming.hex
+
+prot-gfx-roms:
+	python3 $(TOOLS_DIR)/mkgfxrom.py --zip $(Z2) --mode concat --files 93087-3.bin --out roms/bjtwin_fgtile.hex
+	python3 $(TOOLS_DIR)/mkgfxrom.py --zip $(Z2) --mode concat --files 93087-4.bin --out roms/bjtwin_bgtile.hex
+	python3 $(TOOLS_DIR)/mkgfxrom.py --zip $(Z2) --mode word_swap --files 93087-5.bin --out roms/bjtwin_sprites.hex
+
+$(OBJ_DIR)/V$(PROT_TOP): $(PROT_SOURCES) tb_bjtwin_prot.cpp ../common/nmktrace.h ../common/crc32.h $(FX68K_DIR)/fx68k.sv \
+                         roms/bjtwin_maincpu.hex roms/bjtwin_prot.hex roms/bjtwin_vtiming.hex \
+                         roms/bjtwin_fgtile.hex roms/bjtwin_bgtile.hex roms/bjtwin_sprites.hex
+	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT --top-module $(PROT_TOP) \
+		-y $(FX68K_DIR) -y $(TLCS90_DIR) -y $(NMK214_DIR) -y $(NMK_IRQ_DIR) -y $(CORE_DIR) \
+		-GROM_FILE=\"roms/bjtwin_maincpu.hex\" \
+		-GPROT_BOOT_FILE=\"roms/bjtwin_prot.hex\" \
+		-GVTIMING_FILE=\"roms/bjtwin_vtiming.hex\" \
+		-GFGTILE_FILE=\"roms/bjtwin_fgtile.hex\" \
+		-GBGTILE_FILE=\"roms/bjtwin_bgtile.hex\" \
+		-GSPRITES_FILE=\"roms/bjtwin_sprites.hex\" \
+		$(PROT_SOURCES) $(FX68K_DIR)/fx68k.sv $(FX68K_DIR)/fx68kAlu.sv $(FX68K_DIR)/uaddrPla.sv \
+		tb_bjtwin_prot.cpp \
+		-o V$(PROT_TOP)
+	cp $(FX68K_DIR)/microrom.mem $(FX68K_DIR)/nanorom.mem .
+
+run-prot: $(OBJ_DIR)/V$(PROT_TOP)
+	./$(OBJ_DIR)/V$(PROT_TOP)
+
+clean-prot:
+	rm -rf $(OBJ_DIR)/*$(PROT_TOP)* $(OBJ_DIR)/V$(PROT_TOP) prot_sys.trace prot_cyc.trace prot_regs.trace \
+		bjtwin_prot_68k.trace m68k_cyc.trace bjtwin_prot_video.trace microrom.mem nanorom.mem

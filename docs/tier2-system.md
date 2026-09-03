@@ -2790,3 +2790,103 @@ protection-MCU timing-drift issue verbatim, since it runs the same
 firmware. Not a new problem to solve for this port; resolving it is
 the same open item already scoped under macross above. Changes left
 uncommitted for review.
+
+## bjtwin — Family D, third sub-group, the smallest-scope port yet
+
+The third and last Family D sub-group: `bjtwin_prot()` in nmk16.cpp
+(the `bjtwin`/`bjtwina`/`bjtwinpa`/`sabotenb`/`sabotenba`/`nouryoku`
+romsets — this port targets `bjtwin` itself). Same NMK-215/TMP90840
+protection MCU + dual-`nmk214` mechanism as macross/gunnail
+(`base_nmk214_215()`), but on top of the *cactus-family* hardware
+(hi-res, single 8×8 COL-scan tilemap, no TX layer, no NMK004 — sound
+is nmk112 + 2x OKIM6295 direct) rather than macross's own BG+TX
+page-mapped architecture. Both halves of this port already existed in
+verified form before any new RTL was written: the video/CPU
+architecture from Tier 1's `bjtwin_core.sv`/`video_bjtwin.sv` (built
+for the unprotected `cactus` romset, same hardware family) and the
+protection-MCU/dual-NMK214 infrastructure from macross/gunnail — so
+this port is pure integration, no new subsystem.
+
+### What was built
+
+- `rtl/bjtwin/bjtwin_prot_core.sv` — new file (bjtwin_core.sv stays
+  unmodified, still serving cactus). Reuses bjtwin_core.sv's own
+  memory map, clock-enable structure, and fx68k instantiation almost
+  verbatim; the two real deltas are (1) `.HALTn(~halt_68k)` instead of
+  the permanently-high tie-off, and (2) the real `nmk_irq` scanline
+  interrupt generator (bjtwin's own base config uses
+  `set_interrupt_timing()`, the real V-PROM-driven mechanism — unlike
+  `cactus()`, which explicitly swaps in `nmk_irq_hacky`) plus the
+  protection MCU and its own shared-bus address decode, adapted from
+  macross_core.sv's own pattern but simplified for bjtwin's smaller
+  map (no txvram, no NMK004 — dropped `prot_sel_txvram`/nmk004 branches
+  entirely).
+- `rtl/bjtwin/video_bjtwin_prot.sv` — new file (video_bjtwin.sv stays
+  unmodified). Splices NMK214 descrambling into the BG-tile (byte
+  mode) and sprite (word mode) fetch paths, leaving fgtile untouched
+  (confirmed consistent with every other Family D game — only "bg" and
+  "sprites" GFX regions are ever wired to `base_nmk214_215()`). BG
+  addressing uses bjtwin's own simpler single 8×8-tile format (not
+  macross's 16×16 two-layer format); sprite addressing is byte-for-byte
+  identical to macross's own, so that half of the wiring — including
+  the extra `S_SPR_CHECK2` pipeline stage needed because Verilog
+  functions can't instantiate modules — was reused directly from
+  `video_macross.sv`. Both NMK214 bitswap tables are the same
+  shared/non-game-specific constants `base_nmk214_215()` uses for every
+  caller, confirmed identical to macross's own.
+- `video_timing.sv` needed **zero changes** — a genuine finding, not an
+  assumption: `bjtwin()`'s own base config also calls
+  `set_screen_hires()`, and `video_timing.sv`'s existing constants
+  (`HTOTAL=512, HACTIVE_START=28, HACTIVE_END=412, VTOTAL=278,
+  VACTIVE_START=16, VACTIVE_END=240`) already are that hi-res class —
+  the same already-settled convention gunnail's own port confirmed
+  above.
+- `sim/rtl/bjtwin/tb_bjtwin_prot.cpp` + `Makefile` targets
+  (`prot-rom`/`prot-prot-rom`/`prot-vtiming-rom`/`prot-gfx-roms`/
+  `run-prot`/`clean-prot`), added to the existing `sim/rtl/bjtwin/`
+  directory (matching that directory's own existing cactus/bjtwin_core
+  convention rather than a new top-level directory). ROMs extracted
+  from `mame_roms/bjtwin.zip`: maincpu (`93087-1.bin`/`93087-2.bin`,
+  byte-interleaved), protcpu (`nmk-215.bin`, confirmed byte-identical
+  to macross's/gunnail's own via CRC `d355a06f`), fgtile/bgtile/sprites
+  (`93087-3/4/5.bin`), vtiming (`8.ic37`, CRC `633ab1c9` — matches
+  macross's own V-PROM exactly, confirming direct `nmk_irq.sv`
+  reusability). oki1/oki2 sample ROMs were **not** extracted — sound
+  stays stubbed, same as bjtwin_core.sv's own existing cactus build.
+
+### Verification results — confirms the same known issue, not a new one
+
+Full 300M-cycle run, no crash: **protection MCU executed 2,824,804
+instructions, last PC=`$0088`, 0 HALT assertions** — bit-for-bit
+identical to macross's own and gunnail's own fresh-run signatures
+(same numbers documented above), confirming all three games run
+byte-identical NMK-215 firmware down to the instruction and hit the
+exact same open timing-drift issue. Per the scope already established
+for macross, this was not re-diagnosed here — same open item, not a
+new problem introduced by this port. 68000 executed 13,423,931
+instructions (last fetch PC=`$009702`, 785,516 write bus cycles); video
+side rendered 422 frames with real, varying content (79 distinct
+frame CRCs across the run, not a stuck/blank signature).
+
+### Regression sweep
+
+No shared file (`tlcs90.sv`, `nmk_prot_core.sv`, `nmk214.sv`,
+`nmk_irq.sv`, `video_timing.sv`, `bjtwin_core.sv`, `video_bjtwin.sv`)
+was touched — only new sibling files plus `sim/rtl/bjtwin/Makefile`
+(additive targets only). Re-ran the existing cactus/tdragon1/hachamf/
+macross/gunnail binaries directly (rebuilding would be bit-identical
+given no shared source changed) — all five matched their documented
+baselines exactly: cactus 17 frames clean; tdragon1 508 HALT asserts;
+hachamf 802 HALT asserts; macross and gunnail both 0 HALT asserts,
+last PC=`$0088`, 2,824,804 protection-MCU instructions. Zero
+regressions.
+
+### Status
+
+Ported, built, runs clean — the smallest-scope Family D port this
+session, exactly as expected going in (both halves of the
+infrastructure pre-existed and needed no changes, only new
+integration glue). **Not yet playable**, for the identical reason
+macross/gunnail aren't: the shared NMK-215 protection firmware's own
+timing-drift issue, already characterized above and not re-chased
+here. Changes left uncommitted for review.
