@@ -2496,26 +2496,71 @@ genuinely different causes:
     through the same P5-wait bottleneck every time, and that P5-wait —
     not any individual timer's own period — is what actually paces the
     observed recurrence.
-  - **Leading hypothesis, not yet confirmed**: a reset-relative *phase*
-    mismatch between the protection MCU's own effective start-of-
-    counting moment and `vt_vcount`'s own reset-relative phase — subtly
-    different from the already-fixed `vt_vcount` reset *value* bug
-    (confirmed correct above): even with the right reset value and a
-    correctly-running counter, the protection MCU's own clock-divider
-    phase (`prot_clk_r`, a `/10` non-power-of-2 divider off macross's
-    40MHz `clk_sys`, unlike tdragon1's clean `/8` power-of-2 one)
-    starting at a different clk_sys-tick offset than real hardware's
-    own TMP90840 would deterministically make every P5-wait miss its
-    target window on the first pass and converge over several frames
-    instead of one — consistent with the observed values clustering
-    near but not exactly at one frame period, and recurring
-    consistently rather than randomly. Concrete next step (not done
-    this session): the same live-MAME-debugger-capture methodology
-    already used to find and fix the original `video_timing.sv` reset-
-    phase bug, applied here — capture `screen.vpos()` at the exact
-    moment the real TMP90840 first executes its own P5-wait loop, and
-    compare against this RTL's own equivalent measurement, to directly
-    quantify (rather than infer) the phase gap.
+  - **The reset-relative clock-phase hypothesis above was investigated
+    directly and ruled out** (per explicit user direction to keep
+    digging). Used the exact methodology proposed — a live MAME
+    `-debugscript` capture with a `tracelog` action printing
+    `totalcycles`/`pc`/`beamy` (the debugger's real-vpos pseudo-symbol,
+    same technique "Milestone 5" originally used) for `:protcpu` — and
+    compared directly against the candidate's own `prot_cyc.trace`, at
+    the *exact same absolute cycle counts*, bypassing `cyc_diff.py`'s
+    own subsequence-matching entirely (see below for why that matters).
+    Findings, all pointing away from a phase/reset bug:
+    - Main-program timing from reset to the boot code's own `TRUN=$27`
+      write (which first arms timers T0/T1/T2 together) matches within
+      **23 cycles** (oracle 110,688 vs. candidate 110,711) — negligible,
+      not a meaningful reset-relative offset.
+    - T0/T1/T2's own real inter-arrival period is **~71,156-71,204**
+      cycles in the oracle, essentially identical to the candidate's
+      own already-measured ~71,129-71,249 — the timer period itself is
+      correct, not off by any meaningful amount.
+    - T1's own *first* firing after that `TRUN=$27` arm lands only
+      **41 cycles** later in the candidate than the oracle (120,461 vs.
+      120,420 absolute cycles) — i.e. at the one point this session
+      could directly, independently verify (bypassing `cyc_diff.py`),
+      oracle and candidate are in near-perfect agreement, not
+      diverging by tens of thousands of cycles as the tool's own
+      subsequence-matched report suggested.
+  - **The real cause, found directly**: comparing the two sides' raw
+    PC sequences side-by-side (not through the matcher) at this same
+    point shows a genuine *program-state* divergence, not a timing
+    one — the candidate's `djnz $01BF` (part of a `cp (hl),$20 / jr
+    nc,$01CC / inc c / add hl,4 / djnz $01BF` scan loop reading through
+    memory starting at `HL=$FFB0`, stepping by 4) falls through (`B`
+    reaches 0, loop exhausted) at a point where the oracle's own
+    `B` register hasn't yet reached 0, so oracle keeps scanning while
+    the candidate restarts the *entire* outer loop from `$01B5`. This
+    is exactly the kind of divergence that can make a single
+    `cyc_diff.py` checkpoint report a huge, misleading delta: its
+    subsequence matcher, working purely on PC-sequence, doesn't
+    distinguish "the interrupt fired 8 cycles after this specific
+    `$01C8`" from "many loop iterations, and several outer-loop
+    restarts, separate this `$01C8` from the next matched vector" —
+    both look like one `01C8→0038` transition in its own report,
+    with wildly different cycle costs. The `cyc_diff.py`-reported
+    "~4x"/"~3.9x" aggregate ratio and the specific huge-delta
+    checkpoints are therefore **not a reliable measurement of a single
+    root cause** — they're an artifact of matching a
+    content-and-timing-sensitive scan loop's own PC sequence without
+    modeling *why* it diverges.
+    Why the scan loop is content-sensitive: `HL` starts at `$FFB0`
+    (inside the TMP90840's own 256B internal RAM, `$FEC0-FFBF`) but
+    after only 4 iterations (`$FFB0,FFB4,FFB8,FFBC`) crosses into
+    `$FFC0`, the on-chip *peripheral register* window
+    (`nmk004_periph.sv`'s own `$FFC0-FFEF` map) — and if the scan
+    hasn't found a byte `>=0x20` by then, it continues reading live
+    peripheral registers and, past `$FFEF`, the shared 68000 bus
+    itself. Its own iteration count is therefore a function of
+    whatever real, timing-dependent system state (peripheral register
+    values, actual 68000 RAM content) happens to be live at scan time —
+    not a fixed, deterministic clock relationship this session can
+    "phase-align" its way out of. Concrete next step, not done this
+    session: identify *which* specific register/RAM byte the scan
+    actually first encounters that differs between oracle and
+    candidate (a live side-by-side memory dump at the scan's own start
+    address, both sides, same absolute cycle) — the real fix is
+    wherever *that* value's own generation differs, not anything in
+    the protection-MCU's own timing.
 
 ### Regression sweep
 
