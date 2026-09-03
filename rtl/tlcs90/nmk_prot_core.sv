@@ -93,6 +93,15 @@
 // correct for here.
 module nmk_prot_core #(
 	parameter BOOT_ROM_FILE = "",
+	// Internal ROM/RAM sizing — defaults match tdragon1/hachamf's own
+	// TMP91640 (NMK-110/113): 16KB ROM, 512B RAM at 0xfdc0-0xffbf.
+	// macross/gunnail/bjtwin_prot's own TMP90840 (NMK-215) uses the
+	// SAME peripheral register map but a smaller/differently-located
+	// internal ROM/RAM (8KB, 256B at 0xfec0-0xffbf) — see this file's
+	// own header. Callers for that role override all three together.
+	parameter               ROM_SIZE = 16384,
+	parameter        [15:0] RAM_BASE = 16'hfdc0,
+	parameter               RAM_SIZE = 512,
 	// Port 7 constant (`port_read<7>().set_constant(...)` in the
 	// reference) — some protection ROMs (e.g. NMK-113, shared by
 	// hachamf and others) select their own per-game codepath by
@@ -121,6 +130,16 @@ module nmk_prot_core #(
 	// Port 6 write 0x08/0x0B: assert/deassert the 68000's own HALT —
 	// see header. Active-high (1 = 68000 halted).
 	output        halt_68k,
+
+	// NMK-215's own port3(strobe)/port7(data) → dual-NMK214 config-load
+	// mechanism (macross/gunnail/bjtwin_prot only — mcu_port3_to_214_w/
+	// mcu_port7_to_214_w in the reference; see header). Pulses for one
+	// clk cycle with the byte both on-board NMK214 instances should
+	// latch (each independently accepts/ignores it based on its own
+	// hardwired MODE — see nmk214.sv). Tied unused (left floating) by
+	// tdragon1/hachamf's own instantiation, which has no NMK214s.
+	output        nmk214_cfg_we,
+	output  [7:0] nmk214_cfg_data,
 
 	output [15:0] dbg_pc,
 	output        dbg_valid,
@@ -173,19 +192,19 @@ module nmk_prot_core #(
 	// (including every nonzero bank) is shared-bus pass-through.
 	// ------------------------------------------------------------------
 	wire bank0        = (cpu_addr_bank == 4'h0);
-	wire sel_boot_rom = bank0 && (cpu_addr <= 16'h3fff);
-	wire sel_int_ram  = bank0 && (cpu_addr >= 16'hfdc0) && (cpu_addr <= 16'hffbf);
+	wire sel_boot_rom = bank0 && (cpu_addr <= (ROM_SIZE-1));
+	wire sel_int_ram  = bank0 && (cpu_addr >= RAM_BASE) && (cpu_addr <= (RAM_BASE + RAM_SIZE[15:0] - 16'd1));
 	wire sel_periph   = bank0 && (cpu_addr >= 16'hffc0) && (cpu_addr <= 16'hffef);
 	wire sel_shared   = ~(sel_boot_rom | sel_int_ram | sel_periph);
 
 	// ------------------------------------------------------------------
 	// Internal ROM/RAM
 	// ------------------------------------------------------------------
-	reg [7:0] boot_rom [0:16383];
+	reg [7:0] boot_rom [0:ROM_SIZE-1];
 	initial if (BOOT_ROM_FILE != "") $readmemh(BOOT_ROM_FILE, boot_rom);
 
-	reg [7:0] int_ram [0:511];
-	wire [8:0] int_ram_addr = cpu_addr - 16'hfdc0;
+	reg [7:0] int_ram [0:RAM_SIZE-1];
+	wire [15:0] int_ram_addr = cpu_addr - RAM_BASE;
 	always @(posedge clk) if (cpu_mem_wr && sel_int_ram) int_ram[int_ram_addr] <= cpu_dout;
 
 	// ------------------------------------------------------------------
@@ -203,6 +222,8 @@ module nmk_prot_core #(
 	wire [7:0] periph_rdata;
 	wire       p6_we;
 	wire [7:0] p6_wdata;
+	wire       p3_we, p7_we;
+	wire [7:0] p3_wdata, p7_wdata;
 
 	// Port 6 read: toggling bus-status byte, "return the new value on
 	// the same read that caused the toggle" — see header.
@@ -238,8 +259,34 @@ module nmk_prot_core #(
 		.p5_ext_en(1'b1), .p5_ext_val(vpos_div4),
 		.p6_ext_en(1'b1), .p6_ext_val(p6_read_value),
 		.p6_we(p6_we), .p6_wdata(p6_wdata),
-		.p7_ext_en(P7_EXT_EN), .p7_ext_val(P7_EXT_VAL)
+		.p7_ext_en(P7_EXT_EN), .p7_ext_val(P7_EXT_VAL),
+		.p3_we(p3_we), .p3_wdata(p3_wdata), .p7_we(p7_we), .p7_wdata(p7_wdata)
 	);
+
+	// ------------------------------------------------------------------
+	// NMK-215's own port3/port7 → dual-NMK214 config-load strobe — see
+	// header and mcu_port3_to_214_w/mcu_port7_to_214_w in the reference.
+	// P7 writes just stash the pending data byte; the P3 write whose
+	// bit 2 rises from the PREVIOUS write's bit 2 (tracked in
+	// p3_clock_prev, updated unconditionally on every P3 write — not
+	// only qualifying ones, matching `m_init_clock_nmk214 = BIT(data,2)`
+	// running outside the reference's own `if` guard) is the strobe
+	// that pulses nmk214_cfg_we with whatever's currently in
+	// nmk214_data_reg.
+	// ------------------------------------------------------------------
+	reg [7:0] nmk214_data_reg;
+	reg       p3_clock_prev;
+	always @(posedge clk) begin
+		if (reset) begin
+			nmk214_data_reg <= 8'h00;
+			p3_clock_prev   <= 1'b0;
+		end else begin
+			if (p7_we) nmk214_data_reg <= p7_wdata;
+			if (p3_we) p3_clock_prev   <= p3_wdata[2];
+		end
+	end
+	assign nmk214_cfg_we   = p3_we & ~p3_clock_prev & p3_wdata[2];
+	assign nmk214_cfg_data = nmk214_data_reg;
 
 	// ------------------------------------------------------------------
 	// Read mux

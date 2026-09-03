@@ -2210,3 +2210,324 @@ are exercised by any of these other ports' own firmware, so this is
 confirming "no side effects," not "no regressions in behavior these
 ports depend on" — expected, given the additions are pure `casez`
 extensions into previously-unreachable (`OP_UNKNOWN`) decode space.
+
+## macross — Family D, the NMK-215/TMP90840 dual-NMK214 variant
+
+The third Family D game, moving beyond tdragon1/hachamf's own NMK-110/
+NMK-113 (TMP91640) protection role into the family's other real
+sub-variant: NMK-215 (TMP90840), which adds a genuinely new mechanism
+on top of the base shared-RAM protection — a pair of NMK214 GFX
+descrambler chips whose init configuration the protection MCU itself
+loads at startup via a port3(strobe)/port7(data) handshake. Confirmed
+directly from the reference (`macross_prot()`, nmk16.cpp:5707): calls
+`macross(config)` first, then `base_nmk214_215(config)` — same
+"protection is a pure addition on top of unprotected hardware" pattern
+as `tdragon_prot()`/`hachamf_prot()`. `macross()`'s own memory map is
+address-identical to `hachamf()`'s own (same base offsets for every
+I/O register, palette, scroll, BG/TX VRAM, mainram — confirmed
+line-by-line, not assumed), and macross's own clock ratio (68000
+@10MHz, NMK004 @8MHz) is hachamf's own too, so `macross_core.sv`'s
+clock generation and address decode are hachamf_core.sv's own,
+unchanged.
+
+### What was built
+
+- **`rtl/nmk214/nmk214.sv`** — a new, from-scratch, stateless
+  table-driven descrambler, ported directly from
+  `mame/src/mame/nmk/nmk214.cpp`'s own published constant tables (8
+  hardwired configs, each with its own 3-bit-selector address-bit
+  triple and its own 16-entry word/8-entry byte output bitswap).
+  Standalone-verified before any integration: **80,102 checks across
+  all 8 configs, zero failures**, against a from-scratch C++ reference
+  reimplementation (not copy-pasted from the SV translation) —
+  `sim/rtl/nmk214/`.
+- **`rtl/tlcs90/nmk_prot_core.sv`** parameterized for the TMP90840's
+  own smaller internal ROM/RAM (`ROM_SIZE=8192`, `RAM_BASE=16'hfec0`,
+  `RAM_SIZE=256`, vs. tdragon1/hachamf's own TMP91640 defaults of
+  16384/0xfdc0/512 — confirmed from `ROM_START(macross)`'s own
+  `protcpu` region, 0x2000 bytes) and extended with new
+  `nmk214_cfg_we`/`nmk214_cfg_data` outputs implementing
+  `mcu_port3_to_214_w`/`mcu_port7_to_214_w` (nmk16.cpp:5640-5679): P7
+  writes stash a pending byte, and a P3 write whose bit 2 rises from
+  the *previous* P3 write's own bit 2 pulses the config-load strobe
+  with whatever's currently stashed — matching the reference's own
+  `m_init_clock_nmk214`-tracking exactly, including that the tracked
+  bit updates unconditionally on every P3 write, not just qualifying
+  ones. `rtl/tlcs90/nmk004_periph.sv` gained the underlying `p3_we`/
+  `p3_wdata`/`p7_we`/`p7_wdata` write-tap outputs this needed (additive,
+  tied inert in `nmk004_core.sv`'s own instantiation).
+- **`rtl/macross/video_macross.sv`** — adapted from `video_tdragon.sv`/
+  `video_hachamfb.sv`'s own tilemap architecture, with two genuine
+  differences confirmed from `ROM_START(macross)` directly: (1) a
+  14-bit BG tile code, not blkheart/tdragon/hachamf's own 13-bit —
+  macross's own bgtile ROM is 2MB (16384 tiles), double theirs, so both
+  low bits of `m_bgbank` land inside the valid code range, not just
+  bit 0 (`common_get_bg_tile_info`'s own formula,
+  `(code&0xfff)|(m_bgbank<<12)`, nmk16_v.cpp:43, is unchanged — only
+  how many of `m_bgbank`'s bits matter differs with ROM size); (2) BG
+  and sprite ROM reads are descrambled through two `nmk214` instances,
+  wired continuously (address in, raw byte/word in, descrambled byte/
+  word out) rather than as a one-time bulk pre-transform — confirmed
+  equivalent to the reference's own `decode_nmk214()` (a MAME-side perf
+  shortcut: the descrambling result depends only on address and the
+  once-loaded init_config, both fixed after the protection MCU's own
+  startup handshake, so per-fetch combinational decode produces an
+  identical steady-state result while also matching how the real
+  NMK214 silicon actually works). BG is byte-mode (MODE=1,
+  `nmk214_bg_address_bitswap`); sprites are word-mode (MODE=0,
+  `nmk214_sprites_address_bitswap`, word address = byte address/2,
+  big-endian word reconstruction matching the reference's own
+  `get_u16be`) — both bitswap tables transcribed directly from
+  nmk16.cpp:5683-5684.
+- **`rtl/macross/macross_core.sv`** — system integration, combining
+  hachamf_core.sv's own clock/address-decode architecture with the new
+  TMP90840-parameterized protection MCU and the two `nmk214` instances'
+  shared config-load strobe.
+- **`sim/rtl/macross/tb_macross.cpp`** + **`Makefile`** — following
+  tdragon1/hachamf's own testbench pattern. ROM extraction used
+  existing `tools/mkgfxrom.py` modes unchanged (`concat` for fgtile/
+  bgtile/protcpu/nmk004-ext/oki1/oki2/vtiming — all single, non-
+  interleaved `ROM_LOAD`s; `word_swap` for the sprite ROM, same
+  convention as blkheart's own) — no new tooling needed for graphics
+  ROMs. The 68000 program ROM (`921a03`) *did* need something new: a
+  single `ROM_LOAD16_WORD_SWAP` file, not the two-chip
+  `ROM_LOAD16_BYTE` split `tools/mkrom.py`'s own `--hi`/`--lo`
+  interface expects — the first maincpu ROM this project has needed to
+  extract this way. Handled as a small inline conversion in the
+  Makefile's own `rom:` target (byte-pair-swap, then emit one 16-bit
+  word per line) rather than extending `mkrom.py`'s interface for a
+  one-off case. The "color" PROM (`921a10`, 0x20 bytes, present in this
+  romset like several others) is confirmed unused anywhere in the
+  reference's own driver code (`grep -rn 'memregion("color")'` across
+  the whole file — zero hits) — not modeled, same precedent as
+  `tlcs90.sv`'s own dead `TSET`/`LDA` opcodes.
+
+### Verification results — a genuine, well-characterized remaining issue, not a clean pass
+
+Full 300M-cycle run: no crash, 422 video frames rendered, NMK004 side
+healthy (4.75M instructions, normal YM2203/OKI write activity). But
+**the protection MCU never once asserts the 68000's HALT line** (0
+occurrences, vs. tdragon1's own 508 and hachamf's own 802 over the
+same cycle budget) and ends the run at a low PC (`$008E`) after 2.5M
+of its own instructions — a real difference from tdragon1/hachamf's
+own pattern, not just a smaller number.
+
+Oracle comparison (`sim/compare/cyc_diff.py` against fresh
+`capture_cyc_trace.py` captures) explains why, precisely:
+
+- **NMK004 side**: 7,586 of 1,143,304 oracle checkpoints matched before
+  the PC sequence stops being findable further in the candidate trace,
+  diverging around the same class of host-handshake poll-loop PC
+  (`$0EB1`) every other NMK004 port's own poll loop has already been
+  characterized at — plausibly the same benign race-sensitive
+  resolution-rate difference documented extensively elsewhere in this
+  project, not re-investigated further given the protection-MCU side
+  below is the more clearly load-bearing issue.
+- **Protection MCU side**: **704,889 of 755,447 oracle checkpoints
+  matched (93%)** — the instruction *sequence* is correct for the vast
+  majority of the run, ruling out a decode/logic bug in the newly-added
+  TMP90840 parameterization or NMK214 wiring. But the *cycle cost* is
+  systematically wrong: 192,546 of 704,888 matched instructions
+  (27%) have the wrong cycle cost, and the aggregate ratio over the
+  matched span is **candidate/oracle = 3.997** — almost exactly 4x too
+  slow, not the small bounded handful of already-documented TLCS-90
+  timing edge cases every other port's own protection/NMK004 CPU shows.
+  This directly explains the 0-HALT observation: at ~4x the correct
+  per-instruction cost, the protection MCU simply doesn't reach as far
+  in real elapsed time within the same 300M-cycle budget as tdragon1/
+  hachamf's own correctly-timed protection MCUs do, and never reaches
+  whatever later point in its own firmware actually asserts the
+  halt/bus-take sequence.
+- Root cause of the ~4x figure itself is **not yet found** — the clock
+  divider generating `prot_clk_r` (`/10` off a 40MHz `clk_sys`, giving
+  a nominal 4MHz) is copied verbatim from hachamf_core.sv's own
+  (already-working) divider, and `tlcs90.sv`'s own `instr_cycles()`
+  cost table is unchanged/shared, so a systematic ~4x inflation instead
+  of a handful of edge-case mismatches doesn't point cleanly at either
+  of those. One live hypothesis, not confirmed: extra real bus-wait
+  latency on the protection MCU's own shared-bus pass-through path
+  (`sel_shared`) if macross's own NMK-215 firmware makes substantially
+  more/different 68000-shared-RAM accesses early in boot than tdragon1/
+  hachamf's own firmware does — `cyc_diff.py` measures raw elapsed
+  cycles between PC checkpoints, so any such RTL-side bus-wait latency
+  (a genuine hardware effect MAME's own simpler model may not
+  reproduce) would show up exactly as an inflated per-instruction cost
+  here, without touching `instr_cycles()` at all. Not chased further
+  this session — left as a concrete, well-diagnosed next step rather
+  than an unexplained failure.
+
+Despite the above, the VRAM/pixel dump shows **56,256/86,016 (65%)
+pixels nonzero**, palette `406/1024` non-blank, bgvram only `288/8192`
+non-blank (a small fraction, the same "real content, not a never-
+cleared 100% signature" shape tdragon1's own post-fix result showed,
+not hachamf-pre-correction's own 100%-non-blank false alarm) — some
+genuine partial rendering is happening even without the protection
+handshake completing, plausibly the 68000 running largely on its own
+boot sequence. Not confirmed pixel-correct against the oracle (no
+frame-level comparison attempted, given the CPU-side divergence above
+already explains why it wouldn't match). **macross is not yet
+playable — a real, honestly-diagnosed remaining issue, not a clean
+pass** — but the new `nmk214`/dual-descrambler/TMP90840-parameterization
+infrastructure is built, standalone-verified where feasible, and the
+actual blocker is narrowed to a specific, falsifiable next step (the
+protection MCU's own ~4x cycle-cost inflation) rather than an open-
+ended unknown.
+
+### The ~4x figure, narrowed further — two distinct causes found, one still open
+
+Continued digging (per explicit user direction) into the ~4x
+protection-MCU cycle-cost inflation above. Broke the aggregate
+`cyc_diff.py` mismatch down by contribution (summing `diff` per
+occurrence, not just counting occurrences) rather than trusting the
+single ratio figure, and found it's **not one bug** — the 3,700,697
+total extra candidate cycles over the matched span split into two
+genuinely different causes:
+
+- **A real, secondary, previously-known-but-newly-consequential bug**
+  (~124,068 cycles, minor by contribution but a genuine correctness
+  gap worth fixing): `tlcs90.sv`'s `instr_cycles()` hardcodes `DJNZ`'s
+  cost to a flat `20` (`8'h18: cyc = 6'd20;`) regardless of taken/not-
+  taken. The reference's own `Cyc()`/`Cyc_f()` split (`tlcs90.cpp:283-
+  286`, `2023-2029`) is genuinely stateful: `OP(DJNZ,10)` only ever sets
+  `m_cyc_t` (the *taken* cost); `m_cyc_f` (the *not-taken* cost) is left
+  holding whatever the most recently-executed `OPCC`-based instruction
+  (e.g. a conditional `JR cc`) last set it to — `m_cyc_t`/`m_cyc_f` are
+  reset to 0 only once, at machine reset, never per-instruction.
+  Directly confirmed via live disassembly of macross's own protection
+  ROM: a tight 3-instruction poll loop at `$01BF-$01C8` (`cp
+  (hl),$20` / `jr nc,$01CC` / `inc c` / `add hl,4` / `djnz $01BF`) —
+  the preceding `jr nc` (`OPCC(JR,4,8)`) sets `m_cyc_f=8`, so DJNZ's
+  own not-taken exit borrows that same `8`, not the `20` our RTL always
+  charges. This is the exact "genuine MAME stateful-implementation
+  quirk in DJNZ's not-taken cost" `docs/PLAN.md`'s own original TLCS-90
+  cycle-timing fix already flagged as a known, accepted residual — it
+  was low-impact for every prior port; macross's own firmware just
+  happens to hit it in a hot loop.
+
+  **Now fixed.** Added `cyc_f_reg`, a persistent register mirroring
+  the reference's own `m_cyc_f` exactly: reset to 0 once (at machine
+  reset, never per-instruction), updated only when the just-decoded
+  opcode is genuinely `OPCC`-class (a new `is_opcc(p,s)` function —
+  `s[7:4]==4'hc` or `4'hd` covers every JP/CALL-cc form across every
+  prefix group, plus base-table `0x07`/`0x0f`/`0x1a`/`0x1b`/`0x1c`/
+  `0x1e` and the `PFX_G8` LDI-family at `0x58-0x5f`), using that same
+  opcode's own not-taken cost (`instr_cycles(..., taken=1'b0, ...)` —
+  already well-defined for every opcode `is_opcc` gates, since those
+  are exactly the entries the table's own ternaries already cover).
+  `instr_cycles()` gained a `cyc_f_in` parameter so DJNZ's own table
+  entries (`8'h18`/`8'h19`) could change from a flat `20` to
+  `taken ? 20 : cyc_f_in`, both wired at both existing call sites
+  (`S_DECODE`/`S_PFX_SEL`).
+
+  **A second, related bug found while verifying the first**: the
+  `taken` value fed into this fix reused `test_cc(d_r1e[3:0], f)` —
+  flag-based, and meaningless for DJNZ, whose real branch condition is
+  whether the *decremented* `B`/`BC` register is nonzero, not any CPU
+  flag (the 16-bit form's own `d_r1e` doesn't even hold a
+  condition-code nibble here — decode sets it to `R16_BC`, a
+  register-select code, for an unrelated reason). This wasn't a new
+  bug in itself (DJNZ's table entries never used the `taken` ternary
+  before this fix, so the wrong value was previously harmless) — but
+  fixing the not-taken side without also fixing `taken` regressed the
+  candidate's own PC-sequence match against the oracle from 122,929
+  checkpoints down to 5,997, caught immediately by re-running the same
+  `cyc_diff.py` verification. Fixed by computing DJNZ's real branch
+  condition directly from the live `bc` register at the same decode
+  point (`(bc[15:8]-1)!=0` for the 8-bit form, `(bc-1)!=0` for the
+  16-bit form) — mirroring exactly what the `OP_DJNZ` execute block
+  itself already re-derives independently, just read-only and one
+  pipeline stage earlier.
+
+  **Verified**: re-running `cyc_diff.py` after both fixes, the
+  specific DJNZ-not-taken mismatch class (e.g. the `$01C8→$0038`
+  transition, oracle=8/candidate=20 before) no longer appears at all.
+  The dominant P5-wait-loop stall issue below is **completely
+  unaffected** — still 84 occurrences of the same ~65,000-70,000-cycle
+  stalls at the same PC transitions, aggregate ratio still ~3.9x —
+  confirming this was a real but genuinely minor, separable
+  contributor, exactly as scoped. Zero regressions: fresh full
+  300M-cycle runs of tdragon1 and hachamf (both share `tlcs90.sv`)
+  match their own established baselines exactly (tdragon1:
+  `palette=609/1024`, `52358/86016` pixels, `508` HALT asserts;
+  hachamf: `palette=478/1024 bgvram=8192/8192 txvram=1024/1024`,
+  `86016/86016` pixels, `802` HALT asserts).
+- **The dominant cause** (~3.5M of the 3.7M total, a handful of huge
+  individual stalls of 62,783-68,151 cycles each): every one of them
+  is the *same* transition shape — either landing directly on a timer-
+  interrupt vector (`$0030`/`$0038`/`$0040` — T0/T1/T2 respectively,
+  confirmed against `tlcs90.sv`'s own `irq_vector` formula) or inside
+  the P5 (scanline)-polling loop those handlers funnel into
+  (`$0088: ld a,(P5) / and $3F / cp $1D / jr nz,$0088` — wait for
+  `vpos>>2==29`, i.e. `vcount` in `[116,119]`), where the oracle
+  resolves in 8-16 cycles (first-or-second poll) but the candidate
+  takes very close to one full video frame (measured actual frame
+  period in this run: **~71,177-71,446 protcpu cycles**, matching the
+  stall magnitudes closely). Ruled out, with direct evidence, three
+  plausible causes before narrowing further:
+  - **Not a stuck `vt_vcount`**: a `TB_LOG_PROT_REGS` capture extended
+    to include `dbg_vt_vcount` alongside the existing PC/HL trace
+    (`sim/rtl/macross/tb_macross.cpp`) shows it incrementing
+    continuously and correctly (`240,241,242...` from reset, ~257
+    `clk_sys/10` cycles per scanline, matching ~278 lines/frame — the
+    already-fixed `VACTIVE_END` reset value is confirmed correct here
+    too).
+  - **Not a `TRUN` register bit-masking bug**: cross-checked our own
+    `en0..en4 = trun[5] & trun[i]` gating (`nmk004_periph.sv:215-216,
+    326`) against the reference's own `trun_w()`
+    (`tlcs90.cpp:2666-2692`, `mask = 0x20 | (1<<i)`,
+    `(data & mask) == mask`) — identical dual master-bit-plus-per-timer-
+    bit semantics, confirmed by directly disassembling and tracing the
+    ROM's own boot-time `TRUN` write sequence (`$27`→`$25`→`$21`→`$20`,
+    each interrupt handler disabling only its own bit, matching this
+    gating exactly).
+  - **Not a reset-wiring skew**: `prot_mcu` and `vtiming` are both tied
+    to the identical `reset` signal in `macross_core.sv` (no registered
+    delay difference between them).
+  - **A real, measured anomaly that *does* point somewhere concrete**:
+    all three of T0/T1/T2 — configured via the ROM's own boot-time
+    `TCLK`/`TMOD`/`TREG0-2` writes (`TCLK=$FB`→prescale `/256`,`/16`,
+    `/256`; `TREG0-2=$20,$4C,$16`) to wildly *different* individual
+    periods (math: T0≈65,536 cycles, T1≈9,728, T2≈45,056, all at the
+    protection MCU's own 4MHz) — show the **same** ~71,177-cycle real
+    inter-arrival rate for their own interrupt vectors in the candidate
+    trace, matching the measured video-frame period almost exactly, not
+    their own individually-configured periods. This means whichever
+    timer's own countdown finishes first, the CPU ends up funneled
+    through the same P5-wait bottleneck every time, and that P5-wait —
+    not any individual timer's own period — is what actually paces the
+    observed recurrence.
+  - **Leading hypothesis, not yet confirmed**: a reset-relative *phase*
+    mismatch between the protection MCU's own effective start-of-
+    counting moment and `vt_vcount`'s own reset-relative phase — subtly
+    different from the already-fixed `vt_vcount` reset *value* bug
+    (confirmed correct above): even with the right reset value and a
+    correctly-running counter, the protection MCU's own clock-divider
+    phase (`prot_clk_r`, a `/10` non-power-of-2 divider off macross's
+    40MHz `clk_sys`, unlike tdragon1's clean `/8` power-of-2 one)
+    starting at a different clk_sys-tick offset than real hardware's
+    own TMP90840 would deterministically make every P5-wait miss its
+    target window on the first pass and converge over several frames
+    instead of one — consistent with the observed values clustering
+    near but not exactly at one frame period, and recurring
+    consistently rather than randomly. Concrete next step (not done
+    this session): the same live-MAME-debugger-capture methodology
+    already used to find and fix the original `video_timing.sv` reset-
+    phase bug, applied here — capture `screen.vpos()` at the exact
+    moment the real TMP90840 first executes its own P5-wait loop, and
+    compare against this RTL's own equivalent measurement, to directly
+    quantify (rather than infer) the phase gap.
+
+### Regression sweep
+
+Rebuilt and ran tdragon1, hachamf (both fresh rebuilds, picking up
+every shared-file change this session made: `nmk_prot_core.sv`'s new
+parameters/outputs, `nmk004_periph.sv`'s new P3/P7 write taps), and
+blkheart (a plain NMK004-role game, confirming `nmk004_core.sv`'s own
+inert tie-off of the new taps). All three match their own previously-
+established baselines **exactly**: tdragon1 — 508 halt/bus-take
+cycles, 2,977,951 protection-MCU instructions, 13,784,870 68000
+instructions (identical to every prior run this session); hachamf —
+802 halts, 2,330,347 protection-MCU instructions, 12,826,319 68000
+instructions (identical); blkheart — 527 frames rendered, healthy
+NMK004/sound activity, no crash. Zero regressions from this session's
+shared-file changes.

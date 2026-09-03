@@ -561,8 +561,36 @@ module tlcs90 (
 	// own OP()/OPCC()/OP16()/OPCC16() macro table (CT*2 = real clock
 	// cycles; conditional entries use the branch-taken result via the
 	// same test_cc() the EXECUTE stage itself uses).
+	//
+	// DJNZ's own not-taken cost (0x18/0x19 below) is a deliberate
+	// exception to "look it up in this table": the reference's own
+	// `OP(DJNZ,10)` (tlcs90.cpp:379/381) only ever sets `m_cyc_t` —
+	// `m_cyc_f` (the not-taken cost `Cyc_f()` charges when the branch
+	// isn't taken, tlcs90.cpp:2023-2029) is genuinely STATEFUL: it's
+	// whatever the most recently-executed `OPCC`-class instruction
+	// (any conditional/unconditional JP/CALL/RET/JR-cc form, or INCX/
+	// DECX/the LDI-family) last set it to, since `m_cyc_t`/`m_cyc_f`
+	// are reset to 0 exactly once at machine reset
+	// (tlcs90.cpp:3025) and never per-instruction otherwise. `cyc_f_in`
+	// (the FSM's own `cyc_f_reg`, updated at every `OPCC`-class decode
+	// — see `is_opcc` below and its two update sites in the FSM) is
+	// this same stateful value, threaded in here so DJNZ's own table
+	// entry can borrow it exactly like the reference does. Found via
+	// macross's own protection-MCU firmware: a hot 3-instruction poll
+	// loop whose preceding `JR cc,+d` leaves a small `m_cyc_f` that a
+	// trailing `DJNZ`'s own not-taken exit then reused — this project's
+	// RTL previously charged a flat, always-taken-shaped cost instead,
+	// a genuine but previously low-impact gap (already flagged as a
+	// known residual in the original TLCS-90 cycle-timing fix) that
+	// compounded heavily in that specific hot loop.
 	// ------------------------------------------------------------------
-	function automatic [5:0] instr_cycles(input [3:0] p, input [7:0] s, input taken);
+	function automatic is_opcc(input [3:0] p, input [7:0] s);
+		is_opcc = (s[7:4] == 4'hc) || (s[7:4] == 4'hd)
+		        || (p == PFX_NONE && (s == 8'h07 || s == 8'h0f || s == 8'h1a || s == 8'h1b || s == 8'h1c || s == 8'h1e))
+		        || (p == PFX_G8   && s[7:3] == 5'b01011); // 0x58-0x5f, LDI-family
+	endfunction
+
+	function automatic [5:0] instr_cycles(input [3:0] p, input [7:0] s, input taken, input [5:0] cyc_f_in);
 		reg [5:0] cyc;
 		begin
 			cyc = 6'd4; // fallback for any (pfx,selector) combination not in the table below
@@ -586,8 +614,8 @@ module tlcs90 (
 				8'h12, 8'h13: cyc = 6'd32;
 				8'h14, 8'h15, 8'h16: cyc = 6'd12;
 				8'h17: cyc = 6'd16;
-				8'h18: cyc = 6'd20;
-				8'h19: cyc = 6'd20;
+				8'h18: cyc = taken ? 6'd20 : cyc_f_in;
+				8'h19: cyc = taken ? 6'd20 : cyc_f_in;
 				8'h1a: cyc = 6'd16;
 				8'h1b: cyc = 6'd20;
 				8'h1c: cyc = 6'd28;
@@ -1104,6 +1132,16 @@ module tlcs90 (
 	reg [5:0] target_cyc;
 	reg [5:0] cyc_elapsed;
 
+	// DJNZ's own not-taken cost borrows this — see instr_cycles()'s own
+	// header for the full derivation. Mirrors the reference's `m_cyc_f`:
+	// reset to 0 exactly once (never per-instruction), updated only at
+	// an `OPCC`-class instruction's own decode (both update sites use
+	// `instr_cycles(..., taken=1'b0, ...)`, i.e. that opcode's own
+	// not-taken/CF-derived cost — always well-defined here since
+	// `is_opcc` only ever gates opcodes this table already has a real
+	// entry for).
+	reg [5:0] cyc_f_reg;
+
 	// ------------------------------------------------------------------
 	// Interrupt state: NMI edge-latch and the 11 maskable sources'
 	// pending-request latches (see take_interrupt()/check_interrupts() in
@@ -1250,6 +1288,7 @@ module tlcs90 (
 			irq_taking <= 1'b0;
 			cyc_elapsed <= 6'd0;
 			target_cyc <= 6'd0;
+			cyc_f_reg <= 6'd0;
 		end else begin
 			case (state)
 				// ------------------------------------------------------
@@ -1328,7 +1367,22 @@ module tlcs90 (
 						// the same mode1/mode2 tag.
 						pfx <= PFX_NONE;
 						sel_byte <= din;
-						target_cyc <= instr_cycles(PFX_NONE, din, test_cc(d_r1e[3:0], f));
+						// DJNZ (0x18/0x19) is NOT a flag-based conditional —
+						// test_cc()'s own d_r1e-keyed lookup is meaningless
+						// for it (0x19's own d_r1e even holds R16_BC, a
+						// register-select code, not a condition-code
+						// nibble). Its own "will branch" outcome is whether
+						// the live `bc`/`bc[15:8]` register is nonzero
+						// *after* decrementing — the same live register the
+						// OP_DJNZ execute block itself (further below)
+						// re-derives independently; mirrored here, read-
+						// only, purely so instr_cycles()'s own taken-cost
+						// table entry for 0x18/0x19 picks the right branch.
+						target_cyc <= instr_cycles(PFX_NONE, din,
+							(din == 8'h18) ? ((bc[15:8] - 8'd1) != 8'd0) :
+							(din == 8'h19) ? ((bc - 16'd1) != 16'd0) :
+							test_cc(d_r1e[3:0], f), cyc_f_reg);
+						if (is_opcc(PFX_NONE, din)) cyc_f_reg <= instr_cycles(PFX_NONE, din, 1'b0, cyc_f_reg);
 						if (d_m1bytes == 2'd1) begin
 							addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
 							state <= S_M1_BYTE;
@@ -1413,7 +1467,8 @@ module tlcs90 (
 					// cc form, regardless of which slot it ends up in below)
 					// — safe to test unconditionally here.
 					sel_byte <= din;
-					target_cyc <= instr_cycles(pfx, din, test_cc(d2_r1e[3:0], f));
+					target_cyc <= instr_cycles(pfx, din, test_cc(d2_r1e[3:0], f), cyc_f_reg);
+					if (is_opcc(pfx, din)) cyc_f_reg <= instr_cycles(pfx, din, 1'b0, cyc_f_reg);
 					if (d2_mem_slot == 2'd1) begin
 						r1 <= (pfx == PFX_GG_SRC || pfx == PFX_GG_DST || pfx == PFX_G8) ? {12'h0, gg} : pfx_addr;
 						r2 <= {12'h0, d2_r2e};

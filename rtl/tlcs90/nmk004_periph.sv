@@ -83,6 +83,20 @@
 //     Same pattern as P5/P6: tied inert (0/0) for both NMK004's own
 //     role and tdragon1's own protection role, where P7 stays a plain
 //     read/write latch exactly as before.
+//   - **P3/P7 write taps** (`p3_we`/`p3_wdata`, `p7_we`/`p7_wdata`):
+//     added for the NMK-215 (TMP90840) protection-MCU role used by
+//     macross/gunnail/bjtwin_prot (`macross_prot_state::
+//     mcu_port3_to_214_w`/`mcu_port7_to_214_w` in the reference), which
+//     installs `port_write<3>`/`port_write<7>` callbacks that load the
+//     two on-board NMK214 descramblers' init config: P7 writes stash a
+//     data byte, then a P3 write with bit 2 set is the strobe that
+//     latches that byte into both NMK214s (see rtl/nmk214/nmk214.sv and
+//     rtl/tlcs90/nmk_prot_core.sv's own P3/P7 wiring for the rest of the
+//     mechanism — this module only exposes the raw write events, same
+//     "additive tap, not a behavior replacement" pattern as P6's own
+//     write tap, since P3/P7 keep functioning as plain port latches
+//     otherwise; unlike P6, nothing here needs to *change* what a plain
+//     read returns).
 module nmk004_periph (
 	input        clk,
 	input        reset,
@@ -112,7 +126,17 @@ module nmk004_periph (
 	// P7 external-read override — see header. Tie p7_ext_en low to
 	// preserve the plain read/write latch behavior exactly.
 	input        p7_ext_en,
-	input  [7:0] p7_ext_val
+	input  [7:0] p7_ext_val,
+
+	// P3/P7 write taps — see header's "P3/P7 write taps" entry. Fire
+	// alongside the normal P3/P7 latch write (both still happen; these
+	// are additive observation points, not a behavior replacement like
+	// P6's own write tap above), so unused callers (nmk004_core.sv's
+	// own instantiation) can simply leave them unconnected.
+	output       p3_we,
+	output [7:0] p3_wdata,
+	output       p7_we,
+	output [7:0] p7_wdata
 );
 
 	// ------------------------------------------------------------------
@@ -351,6 +375,10 @@ module nmk004_periph (
 	// the p6 latch itself (which still updates normally below).
 	assign p6_we = we & (reg_addr == 6'h0c);
 	assign p6_wdata = wdata;
+	assign p3_we = we & (reg_addr == 6'h06);
+	assign p3_wdata = wdata;
+	assign p7_we = we & (reg_addr == 6'h0d);
+	assign p7_wdata = wdata;
 
 	// ------------------------------------------------------------------
 	// Register read mux

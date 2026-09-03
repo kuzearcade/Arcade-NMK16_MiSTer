@@ -191,7 +191,8 @@ module nmk004_core #(
 		.p5_ext_en(1'b0), .p5_ext_val(8'h00),
 		.p6_ext_en(1'b0), .p6_ext_val(8'h00),
 		.p6_we(), .p6_wdata(),
-		.p7_ext_en(1'b0), .p7_ext_val(8'h00)
+		.p7_ext_en(1'b0), .p7_ext_val(8'h00),
+		.p3_we(), .p3_wdata(), .p7_we(), .p7_wdata()
 	);
 
 	// ------------------------------------------------------------------
