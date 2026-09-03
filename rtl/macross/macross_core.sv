@@ -93,6 +93,7 @@ module macross_core #(
 	output [15:0] dbg_prot_de,
 	output [15:0] dbg_prot_iy,
 	output [19:0] dbg_prot_addr,
+	output  [7:0] dbg_prot_int_ram_at_hl,
 	output [9:0]  dbg_vt_vcount,
 
 	output        dbg_ym_we,
@@ -567,7 +568,8 @@ module macross_core #(
 		.halt_68k(halt_68k),
 		.nmk214_cfg_we(nmk214_cfg_we), .nmk214_cfg_data(nmk214_cfg_data),
 		.dbg_pc(dbg_prot_pc), .dbg_valid(dbg_prot_valid),
-		.dbg_hl(dbg_prot_hl), .dbg_a(dbg_prot_a), .dbg_de(dbg_prot_de), .dbg_iy(dbg_prot_iy)
+		.dbg_hl(dbg_prot_hl), .dbg_a(dbg_prot_a), .dbg_de(dbg_prot_de), .dbg_iy(dbg_prot_iy),
+		.dbg_int_ram_at_hl(dbg_prot_int_ram_at_hl)
 	);
 
 	wire [15:0] prot_rom_dout     = rom[prot_addr[18:1]];

@@ -152,7 +152,18 @@ module nmk_prot_core #(
 	output [15:0] dbg_hl,
 	output  [7:0] dbg_a,
 	output [15:0] dbg_de,
-	output [15:0] dbg_iy
+	output [15:0] dbg_iy,
+
+	// debug: internal-RAM content at the live HL address — for
+	// root-causing macross's own P5-wait scan-loop divergence (see
+	// docs/tier2-system.md's "The ~4x figure" investigation): that
+	// loop's own behavior depends on live internal-RAM/peripheral
+	// byte values, not just PC sequence, so dbg_hl alone can't show
+	// *why* it diverges. Combinational, harmless when dbg_hl is
+	// outside int_ram's own [RAM_BASE, RAM_BASE+RAM_SIZE) window
+	// (the caller only interprets this when it already knows from
+	// the trace that HL is in range).
+	output  [7:0] dbg_int_ram_at_hl
 );
 
 	// ------------------------------------------------------------------
@@ -206,6 +217,7 @@ module nmk_prot_core #(
 	reg [7:0] int_ram [0:RAM_SIZE-1];
 	wire [15:0] int_ram_addr = cpu_addr - RAM_BASE;
 	always @(posedge clk) if (cpu_mem_wr && sel_int_ram) int_ram[int_ram_addr] <= cpu_dout;
+	assign dbg_int_ram_at_hl = int_ram[dbg_hl - RAM_BASE];
 
 	// ------------------------------------------------------------------
 	// Shared-bus master (68000's own memory space) — see header.

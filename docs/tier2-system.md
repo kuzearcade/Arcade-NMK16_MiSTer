@@ -2554,13 +2554,49 @@ genuinely different causes:
     whatever real, timing-dependent system state (peripheral register
     values, actual 68000 RAM content) happens to be live at scan time —
     not a fixed, deterministic clock relationship this session can
-    "phase-align" its way out of. Concrete next step, not done this
-    session: identify *which* specific register/RAM byte the scan
-    actually first encounters that differs between oracle and
-    candidate (a live side-by-side memory dump at the scan's own start
-    address, both sides, same absolute cycle) — the real fix is
-    wherever *that* value's own generation differs, not anything in
-    the protection-MCU's own timing.
+    "phase-align" its way out of.
+  - **Ran that next step down directly** (per explicit user direction
+    to keep digging): added a new debug output,
+    `dbg_int_ram_at_hl` (`nmk_prot_core.sv`, combinational — the
+    internal-RAM byte at the live `HL` address), threaded through
+    `macross_core.sv` into `tb_macross.cpp`'s own `prot_regs.trace`.
+    Captured the *ordered sequence* of every `(HL, byte)` pair the
+    scan loop reads (not just cycle-timestamped PC, which is what
+    `cyc_diff.py` already had and which is exactly what produced the
+    misleading huge-delta report above), on both the oracle (a live
+    MAME `tracelog` printing `hl`/`b@hl`) and the candidate, over the
+    same overlapping cycle window (~1.63M protcpu cycles — the
+    candidate's own capture duration is shorter in *emulated* time
+    than a 2-second oracle capture, since Verilator simulation runs
+    far slower than realtime; restricting the oracle sequence to the
+    same cycle range before comparing was necessary to avoid a
+    spurious "candidate is missing thousands of entries" artifact from
+    comparing mismatched durations).
+    **Result: there is no single wrong byte.** The *set* of unique
+    `(address, value)` pairs each side ever observes is identical —
+    every value the candidate reads at a given address, the oracle
+    also reads at that same address at some point, and vice versa
+    (confirmed via a sorted-unique diff, empty). The only difference
+    is *how many times* the idle value (`$FFB0`→`$12`, "no task
+    queued") repeats between real events — small, scattered blocks of
+    2, 11, 13, ... extra idle repetitions in the oracle, growing
+    through the window, totaling 242 extra idle passes out of ~13,000
+    over this span (~1.9%). This is a genuine, real, but small and
+    *cumulative* timing drift — consistent with the project's own
+    already-known, already-accepted residual per-instruction
+    cycle-cost imprecision (the same class as the "1-cycle
+    FSM-pipeline-floor" quirk documented in the original TLCS-90
+    cycle-timing fix) compounding, over many thousands of instructions,
+    into a small but nonzero difference in exactly which idle-loop
+    pass a given real event (a new task getting queued, likely
+    interrupt- or sound/OKI-write-driven) gets observed on. Not a
+    single fixable bug at a single address — closing it out fully
+    would mean auditing per-instruction cycle costs to a much tighter
+    tolerance project-wide than any prior port has needed, since this
+    is the first firmware in the project sensitive enough to a
+    live, content-dependent polling loop's own exact iteration count
+    to expose it at all. Left open, correctly scoped rather than
+    further chased this session.
 
 ### Regression sweep
 
