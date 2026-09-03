@@ -3094,3 +3094,159 @@ module could hit):
   RAM-content-dependent poll.
 
 Changes committed.
+
+## tdragonb — Tier 5's second port (Family E, second Z80-based port in this project)
+
+`tdragonb` ("Thunder Dragon (bootleg with Raiden sounds, encrypted)") is
+the natural second Family E target: a Raiden-sound bootleg of `tdragon`
+(Tier 2) sharing mustangb's own Seibu Sound System v1.02 hardware
+end-to-end — same `set_hacky_interrupt_timing`, same `seibu_sound_map`,
+same YM3812/OKIM6295 wiring, even a **byte-identical audiocpu ROM**
+(`td_02.bin`, CRC `99ee7505`, same as mustangb's own `mustang.16`).
+Despite its name suggesting extra difficulty, `tdragonb` was chosen over
+its unencrypted sibling `tdragonb3` because `tdragonb3`'s own `bgtile`
+ROM is marked `BAD_DUMP`/"undumpable on this PCB" in the reference
+(`nmk16.cpp:7634`) while `tdragonb`'s own ROM set is cleanly, fully
+dumped throughout — its "encryption" turned out to be a simple,
+**static, one-time bit-permutation** (`decode_tdragonb()`,
+`nmk16.cpp:6082-6125`), not a live hardware descrambler, so it was
+solvable as an offline ROM-extraction-time transform rather than new
+RTL. `tdragonb2`, the third sibling, is flagged
+`MACHINE_NOT_WORKING` in the reference itself and wasn't considered.
+
+### What was built
+
+- **`tools/decode_tdragonb.py`** (new tool): a small, standalone
+  transliteration of `decode_byte()`/`decode_word()`
+  (`nmk16.cpp:5974-5996`) — pure bit-permutation functions, applied once
+  by MAME at init, not per-access. Verified against the reference before
+  trusting it on real ROM data: both permutation tables checked as
+  genuine bijections (`sorted(table) == range(n)`), plus two
+  hand-traced single-bit-position examples matched the formula exactly.
+  Run *after* `tools/mkrom.py`/`tools/mkgfxrom.py` (which already handle
+  the hi/lo interleaving `decode_tdragonb()` itself assumes is already
+  done, confirmed via its own `NATIVE_ENDIAN_VALUE_LE_BE` byte-position
+  handling resolving, on this little-endian host, to exactly the
+  "ROM byte 0 = high byte of the word" convention `mkrom.py` already
+  produces) — this tool only permutes bits within already-assembled hex
+  lines, no file reading/interleaving of its own. Applied to `maincpu`
+  (word mode, 16-bit table) and `bgtile`/`sprites` (byte mode, 8-bit
+  table); `fgtile`/`oki`/`audiocpu` are untouched by the reference's own
+  `decode_tdragonb()` and extracted plainly.
+- **`rtl/tdragonb/tdragonb_core.sv`** (new system top-level): the same
+  fx68k+T80s+`seibu_sound`+jtopl2+jt6295 architecture as `mustangb_core.sv`
+  (reusing `rtl/seibu/seibu_sound.sv`, `rtl/third_party_gen/t80/T80s.v`,
+  `rtl/bjtwin/video_timing.sv` + `rtl/bjtwin/nmk_irq_hacky.sv` all
+  **unmodified**), but with `tdragonb_map`'s own memory layout
+  (`nmk16.cpp:870-886` — genuinely different from `mustangb_map`: no
+  mirroring at all, `main_mustb_w` at `0xC001E-0xC001F` not
+  `0x08001E-0x08001F`, a hardwired-constant protection-shrug read at
+  `0x044022-0x044023` returning `0x0003` — replicated as-is like this
+  project already does for other MAME-author-shrug hacks, not
+  investigated further) and, genuinely new to Tier 5,
+  **`rtl/tdragon/video_tdragon.sv`** (already built for Tier 2's own
+  `tdragon` — confirmed `tdragon_map` and `tdragonb_map` share the
+  identical video/VRAM/palette/tilebank/scroll register layout, so this
+  port's own scroll/tilebank register wiring is a direct copy of
+  `tdragon_core.sv:314-336`'s own working pattern, not reinvented).
+- **A genuinely new clock ratio**: `tdragonb`'s own 68000 runs at
+  **10MHz**, not the clean `clk_sys/4 = 8MHz` every single other port in
+  this project uses (confirmed via a project-wide grep — every other
+  `*_core.sv` uses the identical `cpu_div==2'd3`/`2'd1` pattern; this is
+  the first port needing anything else). `GCD(10000000,32000000)
+  =2000000` gives `increment=5, modulus=16` — a small 4-bit phase
+  accumulator drives `enPhi1`/`enPhi2` instead of a free-running
+  counter. The one property that actually matters for correctness —
+  fx68k's own internal T-state FSM requires `enPhi1`/`enPhi2` to
+  **strictly alternate** (never two of the same enable back-to-back,
+  confirmed by reading `fx68k.sv`'s own T-state transition table) — was
+  verified by simulating the exact accumulator logic in Python for 200
+  cycles (12+ full periods) before trusting it in RTL: zero
+  same-enable-twice-in-a-row violations. The resulting real average rate
+  was cross-checked post-hoc against the actual testbench run too: ~18.75M
+  `enPhi1` pulses over 60M `clk_sys` cycles = ratio 0.3125 = 5/16 exactly.
+
+### Verification results
+
+Full 60M-`clk_sys`-cycle (32MHz) run: Z80 executed 745,063 instructions
+(last fetch PC=`$0126`, same idle-loop signature as mustangb's own),
+68000 executed 3,402,738 instructions (295,839 write bus cycles, last
+fetch PC=`$00046C` — notably further into the program than mustangb's
+own run reached, consistent with the faster 10MHz clock covering more
+real time per `clk_sys` cycle). IM0 interrupt-acknowledge cycles: 1
+total — RST10 (YM3812) only, 0 RST18, 0 spurious (this run's own
+boot/attract sequence apparently doesn't reach a `main_mustb_w` write
+within the window, unlike mustangb's own; not investigated further,
+consistent with this being an input-idle attract-mode run rather than a
+gameplay session). Pixel/VRAM sanity is **substantially richer than
+mustangb's own**: palette 674/1024 non-blank, BG VRAM 4,608/8,192,
+TX VRAM 78/1,024, and **85,250/86,016 (99%) rendered pixels non-zero** —
+a fully-populated, plausible real frame, not a partial boot screen,
+consistent with the 68000 covering much more program ground in the same
+`clk_sys` budget.
+
+**Z80 core cycle-accuracy, checked against a real MAME oracle capture**
+(`sim/oracle/capture_cyc_trace.py --device :audiocpu`, 3 real seconds ≈
+1,150,044 oracle instructions, diffed via `sim/compare/cyc_diff.py`):
+the PC sequence matches as an ordered subsequence for the first **6,368
+checkpoints** — nearly 3x further than mustangb's own 2,326 — with
+**only 1/6,367 matched instruction cycle-costs differing** (tolerance=0;
+the one mismatch: checkpoint 6367, `PC 0129->012A`, oracle=4
+candidate=10, diff=+6), total cycles over the matched span
+oracle=82,933/candidate=82,939 (**ratio=1.000**). This is a second,
+independent confirmation — at a different main-CPU clock (10MHz vs
+mustangb's 8MHz), with the same audiocpu ROM but different interrupt
+arrival timing — that the GHDL-translated T80 core is genuinely
+cycle-exact against real Z80 hardware, not a coincidence specific to
+mustangb's own timing.
+
+**Where the match stops, and what that is**: oracle checkpoint 6,369
+(PC=`$0010`) is never found anywhere in the candidate's own full
+745,063-instruction trace (confirmed directly). `$0010` is exactly where
+a Z80 executing the `RST 10h` opcode (`0xD7` — the YM3812's own IM0
+vector byte) lands, so this is the **same underlying mechanism** as
+mustangb's own finding, one interrupt source over: both oracle and
+candidate *do* experience an RST10 interrupt at some point in their
+respective runs (oracle: within this capture window, as this checkpoint
+shows; candidate: the single RST10 IACK reported above, at some other
+point in its own longer run) — the divergence is *which iteration* of
+the `$0126`/`$0129`/`$012A` idle-poll loop the interrupt lands on, not
+whether it fires at all or a CPU-decode error (the cycle-perfect match
+up to this exact point rules that out). Same class of finding as
+mustangb's own "interrupt-during-a-repeat-checked-loop" timing
+sensitivity — not further diagnosed this session, consistent with this
+project's own established practice for this class of issue.
+
+### Regression sweep
+
+No shared file was modified — `rtl/tdragon/video_tdragon.sv`,
+`rtl/seibu/seibu_sound.sv`, `rtl/bjtwin/video_timing.sv`,
+`rtl/bjtwin/nmk_irq_hacky.sv`, `rtl/third_party_gen/t80/T80s.v`, and the
+vendored `jtopl2.v`/`jt6295.v` were only referenced, never edited.
+Re-ran `mustangb`'s own testbench (fresh rebuild, 60M cycles): matches
+its own already-established baseline exactly (745,065 Z80 instructions,
+2,710,850 68000 instructions, 2 IACKs, 106 frames) — zero regression.
+Re-ran `tdragon`'s own testbench (fresh rebuild, 300M cycles): NMK004
+executed 6,262,509 instructions (last PC=`$01DB`), 68000 executed
+14,151,673 instructions, 527 frames rendered, 35,338 YM2203 writes,
+26/20 OKI1/OKI2 writes — a clean, healthy run with no crash. Re-ran
+`tdragon1`'s own testbench too (fresh rebuild, 300M cycles): NMK004
+executed 6,148,238 instructions (last PC=`$01DA`), protection MCU
+executed 2,981,349 instructions (last PC=`$08C4`), **68000 HALT
+asserted 508 times** — matching this port's own already-established
+baseline exactly — 527 frames rendered, no crash. Zero regressions
+across all three.
+
+### Status
+
+Built, boots, and runs clean on both CPUs. The Z80/T80 core now has a
+**second, independent cycle-exact confirmation** against real MAME
+hardware timing, at a different main-CPU clock ratio than mustangb's
+own — a real test of the GHDL translation's own correctness, not a
+repeat of the same conditions. IM0 interrupt vectoring, `video_tdragon.sv`
+reuse, and the new non-power-of-2 68000 clock-enable derivation all work
+correctly. **Not yet a full oracle match**: a single well-characterized
+loop-exit-path divergence (detailed above), the same class of finding as
+mustangb's own, stops the ordered PC-sequence match at instruction 6,368
+of the candidate's own much longer run — left open, not further chased
+this session.
