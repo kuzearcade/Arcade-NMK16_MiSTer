@@ -1229,6 +1229,46 @@ module tlcs90 (
 		endcase
 	endfunction
 
+	// Structural 1-cycle-floor fix (docs/tier2-tlcs90.md's "Twelfth
+	// verification result": the reference's own cheapest opcodes
+	// (NOP/DI/EI/LD r,r'/etc, CT=2 -> target_cyc=4) take 5 real FSM
+	// states minimum here (S_FETCH_OP/S_DECODE/S_PRE_READ1/
+	// S_PRE_READ2/S_EXECUTE) even though neither S_PRE_READ1 nor
+	// S_PRE_READ2 ever do real work for these — both always take
+	// their own pass-through "else" branch, since op_reads_m1(op) is
+	// false for every op reaching this shortcut and mode_needs_read()
+	// only ever flags real memory-indirect modes (M_MI16/M_MR16), so
+	// the padding-only cyc_elapsed/target_cyc mechanism (which can
+	// only ADD cycles, see instr_cycles()'s own header) could never
+	// close a 5-vs-4 *deficit*. This mirrors S_PRE_READ1's/
+	// S_PRE_READ2's own real-read gating exactly (true here iff both
+	// states would take their pass-through branch), evaluated
+	// combinationally on the not-yet-registered d_* decode outputs so
+	// S_DECODE can skip straight to S_EXECUTE the same cycle instead
+	// of visiting both pass-through states — dropping the natural
+	// minimum from 5 to 3 real-work cycles (S_FETCH_OP/S_DECODE/
+	// S_EXECUTE), which the existing padding mechanism then pads back
+	// up to whatever target_cyc actually calls for, exactly as it
+	// already does for every opcode whose natural traversal is
+	// shorter than its own real cost. Safe for every other opcode
+	// too: 3 cycles is still <= every target_cyc value in the table
+	// (the smallest is 4), so this can only ever increase how much
+	// slack padding has to work with, never create a new deficit.
+	// Gated the same way the existing d_m1bytes/d_m2bytes branch
+	// above already is (base-table only, PFX_NONE) — opcodes needing
+	// immediate-byte fetches (d_m1bytes/d_m2bytes != 0) already take
+	// a different path before ever reaching S_PRE_READ1, unaffected.
+	// A plain wire, not a wrapping function, deliberately — this
+	// project has a confirmed, documented Verilator quirk around
+	// composing one function's result through another inside a
+	// non-blocking assignment's own ternary RHS (see the
+	// "resolve_direct" comment above); this signal only ever feeds an
+	// `if` condition below, not that pattern, but there's no reason
+	// to risk it when a flat wire is just as clear.
+	wire d_pre_read1_real = op_reads_m1(d_op) && mode_needs_read(d_mode1);
+	wire d_pre_read2_real = (d_mode2 != M_NONE) && mode_needs_read(d_mode2);
+	wire d_skip_pre_reads = !d_pre_read1_real && !d_pre_read2_real;
+
 	// Resolved register/immediate value for a non-memory mode (used once
 	// we've established the operand doesn't need a bus read). This used to
 	// be a `resolve_direct(m, rsel)` function wrapping a case over
@@ -1389,6 +1429,17 @@ module tlcs90 (
 						end else if (d_m2bytes != 2'd0) begin
 							addr <= pc; mem_rd <= 1'b1; pc <= pc + 16'd1;
 							state <= S_M2_BYTE1;
+						end else if (d_skip_pre_reads) begin
+							// 1-cycle-floor fix — see d_skip_pre_reads's own
+							// header. Mirrors S_PRE_READ1's/S_PRE_READ2's own
+							// pass-through "else" branches exactly, just
+							// sourced from the not-yet-registered d_r1e/
+							// d_r2e/d_mode1/d_mode2 instead of r1/r2/mode1/
+							// mode2 (which won't hold these values until
+							// *next* cycle).
+							val1 <= !op_reads_m1(d_op) ? {12'h0, d_r1e} : (d_mode1 == M_R8) ? {8'h00, r8_read(d_r1e[2:0])} : (d_mode1 == M_R16) ? r16_read(d_r1e[3:0]) : {12'h0, d_r1e};
+							if (d_mode2 != M_NONE) val2 <= (d_mode2 == M_R8) ? {8'h00, r8_read(d_r2e[2:0])} : (d_mode2 == M_R16) ? r16_read(d_r2e[3:0]) : {12'h0, d_r2e};
+							state <= S_EXECUTE;
 						end else begin
 							state <= S_PRE_READ1;
 						end

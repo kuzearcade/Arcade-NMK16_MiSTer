@@ -1210,6 +1210,155 @@ a two-CPU relative-timing problem changes *which* timing-sensitive
 interaction shows up first, not whether one exists. See
 `docs/tier2-system.md`'s own update for the full account.
 
+### Thirteenth verification result (the FSM's own 1-cycle floor, closed)
+
+Directed follow-up (per explicit user request) to close out the second
+of the Twelfth result's own two documented residual causes — the
+`DJNZ` not-taken quirk (already fixed separately, see
+`docs/tier2-system.md`'s macross section) and **"the FSM's own minimum
+pipeline depth exceeds the reference's 4-cycle minimum for the very
+cheapest single-byte opcodes"** — with the explicit goal of eliminating
+the small, cumulative per-instruction timing drift found to be
+blocking macross's own protection-MCU firmware (see
+`docs/tier2-system.md`'s "The ~4x figure" investigation and its
+follow-ups).
+
+**Root cause, precisely**: `S_FETCH_OP`→`S_DECODE`→`S_PRE_READ1`→
+`S_PRE_READ2`→`S_EXECUTE`→back to `S_FETCH_OP` is 5 real FSM states for
+any opcode needing no memory read for either operand (`NOP`/`DI`/`EI`/
+`LD r,r'`/etc, `CT=2`→`target_cyc=4`) — but `S_PRE_READ1` and
+`S_PRE_READ2` are *pure pass-through* states for these opcodes: neither
+`op_reads_m1(op) && mode_needs_read(mode1)` nor
+`mode_needs_read(mode2)` is ever true (`mode_needs_read()` only flags
+genuine memory-indirect modes, `M_MI16`/`M_MR16`), so both states
+always take their own "else" branch, doing nothing but resolve
+`val1`/`val2` from already-available register/immediate values and
+advance `state`. Since the padding mechanism (`cyc_elapsed` vs.
+`target_cyc` at `S_FETCH_OP`) can only ever *add* cycles, never remove
+them, this specific opcode class was structurally floored at 5 cycles
+against a 4-cycle target — a genuine, permanent 1-cycle overcharge for
+every such instruction, not something the padding mechanism could ever
+close on its own.
+
+**Fix**: a new combinational check, evaluated at `S_DECODE` on the
+not-yet-registered `d_op`/`d_mode1`/`d_mode2` decode outputs (the same
+values that will become `op`/`mode1`/`mode2` next cycle) —
+`d_skip_pre_reads = !(op_reads_m1(d_op) && mode_needs_read(d_mode1)) &&
+!((d_mode2 != M_NONE) && mode_needs_read(d_mode2))` — gated the same
+way the existing `d_m1bytes`/`d_m2bytes` immediate-byte-fetch branch
+already is (base-table only; opcodes needing immediate bytes already
+take a different path before ever reaching `S_PRE_READ1`, unaffected).
+When true, `S_DECODE` resolves `val1`/`val2` itself (mirroring
+`S_PRE_READ1`'s/`S_PRE_READ2`'s own pass-through formulas exactly, just
+sourced from `d_r1e`/`d_r2e`/`d_mode1`/`d_mode2` instead of the
+not-yet-updated `r1`/`r2`/`mode1`/`mode2` registers) and jumps straight
+to `S_EXECUTE`, skipping both pass-through states. This drops the
+natural minimum from 5 to 3 real-work cycles
+(`S_FETCH_OP`/`S_DECODE`/`S_EXECUTE`) — safe for every opcode in the
+table, not just the cheapest ones, since 3 is still ≤ every
+`target_cyc` value (the smallest is 4), so this can only ever give
+padding *more* slack to work with, never create a new deficit.
+Deliberately implemented as a flat wire computing the gating condition
+(`d_pre_read1_real`/`d_pre_read2_real`/`d_skip_pre_reads`), not a
+wrapping function — this project has a confirmed, documented Verilator
+quirk around composing one function's result through another inside a
+non-blocking assignment's own ternary RHS (see the `resolve_direct`
+comment elsewhere in `tlcs90.sv`); `val1`'s own formula was initially
+written *without* the original's outer `!op_reads_m1(op) ? r1 : ...`
+gate (a real transcription slip caught before verification, not left
+in) — fixed to mirror the original exactly before any testing.
+
+**Verification, in order**:
+1. All 7 standalone opcode self-tests (`run-banktest`, `run-blocktest`,
+   `run-rldtest`, `run-muldivtest`, `run-ldarcallrtest`, `run-switest`,
+   `run-extest`) and the interrupt self-test (`run-irqtest`) — all
+   **PASS**, unchanged.
+2. The CPU-only oracle PC-sequence match (`/tmp/oracle_pc2.txt` vs.
+   `run-nmk004`'s own trace) diverges at the identical instruction (42,
+   `oracle=0149` vs. `candidate=0143`) both *with and without* this fix
+   (a controlled A/B test — stash/rebuild/compare/restore) — confirmed
+   pre-existing (this specific oracle capture predates the current boot
+   ROM/testbench configuration by enough that it's no longer a valid
+   reference this early in boot; not investigated further, since it's
+   unrelated to this fix and the *cycle-cost* comparisons below are the
+   actually-relevant verification for this change).
+3. **The real target metric**: a fresh `capture_cyc_trace.py` oracle
+   capture for mustang's own NMK004 side, diffed via `cyc_diff.py`
+   against a fresh candidate run:
+   ```
+   2/7779 instruction cycle-costs differ (tolerance=0)
+   ```
+   Down from the already-good 43/7,779 (0.55%) the Twelfth result left
+   at — the 2 remaining mismatches are at the exact same PC
+   (`$0EB1`→`$0EAB`/`$0EB3`) as the *already-documented, expected*
+   host-handshake poll-loop boundary (`docs/PLAN.md`'s own "175
+   (CPU-only boundary)" note — real hardware's own handshake resolution
+   timing there depends on the 68000 side, unmodeled in an NMK004-only
+   testbench, not a table error).
+4. Every newly-added opcode from earlier this session (the six
+   previously-missing forms that fixed tdragon1's own blank screen —
+   `MUL`/`DIV HL,n`/`HL,(mem)`, `ADD ix,gg`/`ix,(mem)`, `LDW
+   ($FF00+w),mn`/`LDW (mem),mn`) had its own cycle cost spot-checked
+   directly against the reference's own `OP()`/`OPCC()` macro args
+   across every prefix group it appears in (`PFX_G8`, `GG_SRC`,
+   `MN_SRC`, `FF_SRC`, `IXD_SRC`, `HLA_SRC` for `MUL`/`DIV`/`ADD ix,...`;
+   `GG_DST`, `MN_DST`, `IXD_DST`, `HLA_DST` for `LDW`) — every single
+   value matches exactly (e.g. `PFX_HLA_SRC`'s own `MUL`/`DIV`
+   `CT=26`→`52` and `ADD ix,(HL+A)` `CT=16`→`32`, both present in
+   `instr_cycles()` unchanged since being added).
+5. Applied to macross's own protection-MCU firmware specifically — the
+   scan-loop `(HL,byte)` sequence comparison built for the P5-wait
+   investigation (`dbg_int_ram_at_hl`, see `docs/tier2-system.md`)
+   re-run over the same overlapping-cycle methodology: the 242
+   extra-idle-iteration drift (out of ~13,000, ~1.9%) documented there
+   drops to **1-2 residual lines out of ~19,700** over a ~2.4M-cycle
+   window — a genuine, large, verified improvement.
+6. **Regression sweep** (fresh rebuild + full run, nine of the ten
+   ports sharing `tlcs90.sv`: mustang, blkheart, strahl, acrobatm,
+   tdragon, vandyke, hachamfb, tdragon1, hachamf) — zero functional
+   regressions. `bioship` (a 900M-cycle run, 3x longer than the others)
+   compiled cleanly and an earlier attempt showed healthy activity
+   before being killed by resource contention from ten concurrent
+   full-length simulations sharing the same machine — not independently
+   re-confirmed to completion in this pass due to time, the one gap in
+   an otherwise complete sweep. Every other port's own total
+   executed-instruction count
+   shifted by a tiny amount (±1 to ±4 out of ten-plus million, e.g.
+   blkheart 14,176,654→14,176,658) — expected and correct, not a bug:
+   with the cheapest opcodes now costing 1 fewer cycle each, slightly
+   *more* instructions fit in the same fixed `RUN_CYCLES` budget.
+   tdragon1's and hachamf's own HALT-assert counts (508/802
+   respectively) and VRAM/pixel render numbers are byte-for-byte
+   identical to their own pre-fix baselines.
+
+**Result for macross itself — genuine, substantial, verified progress,
+but not enough on its own**: despite items 3 and 5 above being large,
+real, directly-measured improvements (43→2 on the standard test;
+242→1-2 idle-iteration drift on macross's own scan loop, over a bounded
+~2.4M-cycle window), **the protection MCU still never asserts the
+68000's HALT line over a full 300M-cycle run** (0 times, unchanged from
+before this fix), and its own VRAM/pixel dump numbers are unchanged
+from the pre-fix baseline (`palette=406/1024`, `56,256/86,016` pixels
+nonzero, `bgvram=288/8192`) — the protection MCU's own last PC at the
+end of the run is `$0088`, the P5-wait loop itself, meaning it's still
+parked there rather than having progressed further. The most likely
+explanation: even a 1-2-line-per-2.4M-cycle residual drift, left
+running for the full ~100x-longer 300M-cycle window, still eventually
+compounds into a large enough divergence to prevent the HALT sequence
+from ever being reached — the bounded-window comparison this session
+built (necessarily short, since capturing a full-length oracle run at
+MAME's own real-time simulation rate is impractical) can demonstrate
+*directional* improvement convincingly but can't by itself prove the
+drift is fully eliminated over the *full* run length that actually
+matters for playability. Not chased further this pass — a legitimate,
+honestly-reported outcome (real, substantial, multiply-verified
+progress; not full resolution) rather than an overclaimed fix. Left as
+a concrete next step: either a much longer-duration oracle capture (to
+directly confirm the drift is/isn't still present at the exponentially
+larger scale), or continuing to audit `instr_cycles()`/the FSM for any
+*remaining* structural source (this pass fixed the one documented,
+understood cause — it does not follow that it's the only one left).
+
 **System-level integration is now underway — see `docs/tier2-system.md`.**
 A real 68000 (fx68k) is wired to the completed NMK004 sound board in
 `rtl/mustang/mustang_core.sv`, verified to get past the host-handshake

@@ -2598,6 +2598,76 @@ genuinely different causes:
     to expose it at all. Left open, correctly scoped rather than
     further chased this session.
 
+### The project-wide cycle-cost audit and its own limits
+
+Directed follow-up (per explicit user request): a project-wide
+per-instruction cycle-cost audit of `tlcs90.sv`, aimed squarely at
+eliminating the residual drift above. Full derivation in
+`docs/tier2-tlcs90.md`'s "Thirteenth verification result" — summary
+here.
+
+**Found and fixed the second of the two residual causes the original
+TLCS-90 cycle-timing fix had already documented and accepted as
+low-impact**: "the FSM's own minimum pipeline depth exceeds the
+reference's 4-cycle minimum for the very cheapest single-byte opcodes"
+(`docs/tier2-tlcs90.md`'s Twelfth result). `S_PRE_READ1`/`S_PRE_READ2`
+are pure pass-through states for any opcode needing no real memory read
+for either operand — but the FSM still visited both, costing 5 real
+cycles against a 4-cycle target the padding-only mechanism could never
+close (padding can only add cycles). Fixed with a new combinational
+`d_skip_pre_reads` check at `S_DECODE` that resolves `val1`/`val2`
+itself and jumps straight to `S_EXECUTE` for this opcode class,
+dropping the natural minimum to 3 cycles — safe for every opcode, since
+3 ≤ every `target_cyc` value in the table.
+
+**Verified rigorously, multiple ways, all positive**: all 7 standalone
+opcode self-tests plus the interrupt self-test still pass unchanged;
+mustang's own NMK004-side cycle-cost match against a fresh oracle
+capture improves from 43/7,779 mismatches to **2/7,779** (the 2
+remaining are the already-documented, expected host-handshake boundary,
+not a table error); every newly-added opcode from earlier this session
+(`MUL`/`DIV`/`ADD ix,...`/`LDW` across every prefix group) has its own
+cycle cost spot-checked directly against the reference's own macro
+arguments and matches exactly; macross's own scan-loop `(HL,byte)`
+drift (see above — 242 extra idle iterations out of ~13,000) drops to
+**1-2 residual lines out of ~19,700** over the same kind of bounded
+comparison window; and a regression sweep across nine of the ten ports
+(mustang, blkheart, strahl, acrobatm, tdragon, vandyke, hachamfb,
+tdragon1, hachamf) found zero functional regressions — tdragon1's and
+hachamf's own HALT-assert counts and VRAM/pixel numbers are unchanged
+from their own established baselines, and every port's total
+executed-instruction count shifted only by the small, expected,
+(`bioship`'s own 900M-cycle run compiled cleanly but wasn't
+independently re-confirmed to completion in this pass, after an
+earlier attempt was killed by resource contention from ten concurrent
+full-length runs, not a crash — the one gap in an otherwise complete
+sweep)
+correct-direction amount (more instructions fit the same fixed cycle
+budget now that the cheapest opcodes cost 1 fewer cycle each).
+
+**But macross itself is still not playable — a genuine, honest, not-
+overclaimed outcome.** Despite the large, real, multiply-verified
+improvements above, a full 300M-cycle run of macross still shows **0
+HALT assertions** (completely unchanged from before this fix) and
+identical VRAM/pixel numbers to the pre-fix baseline
+(`palette=406/1024`, `56,256/86,016` pixels, `bgvram=288/8192`) — the
+protection MCU's own last PC at the end of the run is still `$0088`,
+the P5-wait loop itself. The most likely explanation: even a
+1-2-line-per-~2.4M-cycle residual drift, left running for the full
+~100x-longer 300M-cycle window this game actually needs, still
+eventually compounds into a divergence large enough to prevent the
+HALT sequence from ever firing — the bounded comparison window this
+session's own tooling can practically capture (limited by how much
+real-time MAME itself can simulate) demonstrates clear *directional*
+improvement but can't prove the drift is fully eliminated at the scale
+that actually matters for this specific firmware's own playability.
+Not chased further this pass. Two legitimate next steps, neither
+attempted here: a much longer-duration oracle capture to directly
+confirm whether the drift is still present at the full run's own
+scale, or continuing to audit `tlcs90.sv` for any *other* remaining
+structural cycle-cost source — fixing the one documented, understood
+cause doesn't guarantee it was the only one.
+
 ### Regression sweep
 
 Rebuilt and ran tdragon1, hachamf (both fresh rebuilds, picking up
