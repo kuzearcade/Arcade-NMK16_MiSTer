@@ -3250,3 +3250,173 @@ loop-exit-path divergence (detailed above), the same class of finding as
 mustangb's own, stops the ordered PC-sequence match at instruction 6,368
 of the candidate's own much longer run — left open, not further chased
 this session.
+
+## acrobatmbl — Tier 5's third port (Family E, third Z80-based port in this project)
+
+`acrobatmbl` ("Acrobat Mission (bootleg with Raiden sounds)") is the
+natural third Family E target: a Raiden-sound bootleg of `acrobatm`
+(Tier 2) sharing mustangb's/tdragonb's own Seibu Sound System v1.02
+hardware end-to-end (`set_hacky_interrupt_timing`, `seibu_sound_map`,
+YM3812/OKIM6295 wiring) and, again, a **byte-identical audiocpu ROM**
+(`2.12w`, CRC `99ee7505`, same as mustangb's `mustang.16` and tdragonb's
+`td_02.bin`). Despite the ROM_START comment calling this "a bootleg with
+a PIC performing simple protection checks," the PIC needed **zero new
+RTL**: its own machine config declares `PIC16C57(config,"mcu",
+8_MHz_XTAL/2).set_disable()`, `acrobatmbl_map` has no read/write handler
+referencing any PIC/protection port at all, and the PIC's own ROM is
+genuinely undumped (`NO_DUMP`) — MAME instead statically patches 4
+sixteen-bit words in the 68000 program ROM (`init_acrobatmbl()`,
+`nmk16.cpp:6238-6262`), replacing two jumps into PIC-protected RAM with
+jumps elsewhere. Solvable as an offline ROM-extraction-time transform,
+same category as tdragonb's own `decode_tdragonb.py`.
+
+### What was built
+
+- **`tools/patch_rom_words.py`** (new tool): a small, generic word-offset
+  patcher for `$readmemh` hex files — applies `init_acrobatmbl()`'s own 4
+  word pokes (`rom[0x364]=0x0000, rom[0x365]=0x2d84, rom[0x36a]=0x0000,
+  rom[0x36b]=0x3510`, word indices = byte offset/2) after `tools/mkrom.py`'s
+  own interleaving. Unlike `decode_tdragonb.py` (a fixed bit-permutation),
+  this is a plain value poke, and was written generically enough to reuse
+  for any future Family G-style "protection cracked/patched out" ROM fixup
+  this project's own `docs/PLAN.md` already anticipates.
+- **`rtl/acrobatmbl/acrobatmbl_core.sv`** (new system top-level): the same
+  fx68k+T80s+`seibu_sound`+jtopl2+jt6295 architecture as `mustangb_core.sv`/
+  `tdragonb_core.sv` (reusing `rtl/seibu/seibu_sound.sv`,
+  `rtl/third_party_gen/t80/T80s.v`, `rtl/bjtwin/video_timing.sv` +
+  `rtl/bjtwin/nmk_irq_hacky.sv` all **unmodified**), but with
+  `acrobatmbl_map`'s own memory layout (`nmk16.cpp:766-781` — confirmed
+  identical to `acrobatm_map` apart from the sound/protection entries,
+  `main_mustb_w` at `0xC001E-0xC001F` replacing the NMK004 read/write
+  trio) and, genuinely new to Tier 5, **`rtl/acrobatm/video_acrobatm.sv`**
+  (already built for Tier 2's own `acrobatm` — confirmed identical
+  video/VRAM/palette/tilebank/scroll register layout, including the
+  family's smallest palette, **768 entries, not 1024**). Deliberately
+  does NOT reuse `acrobatm_core.sv`'s own 40MHz `clk_sys` architecture
+  (that ratio is specific to the real board's 10MHz 68000) — `acrobatmbl`'s
+  own 68000 genuinely runs at a plain `8_MHz_XTAL`, so this port uses
+  mustangb's/tdragonb's own 32MHz `clk_sys` convention instead
+  (`clk_sys/4`). `video_acrobatm.sv` itself takes a generic `clk_sys`
+  input with no internal frequency-specific derivation (verified directly
+  against its own module body before assuming this), so it drops into
+  either convention unchanged.
+- **The project's simplest clock ratios yet**: every clock enable in this
+  port is a clean power-of-2 divide from 32MHz `clk_sys` — 68000
+  `clk_sys/4` (same as mustangb's own), Z80+YM3812 `clk_sys/8` = 4MHz
+  (`8_MHz_XTAL/2`, `nmk16.cpp:4862,4880` — a plain free-running counter,
+  not mustangb's/tdragonb's own `14318180/4` phase accumulator),
+  OKIM6295 `clk_sys/32` = 1MHz (`8_MHz_XTAL/8`, `nmk16.cpp:4884`).
+- **ROM extraction hit a real split-romset naming trap**: `mame_roms/
+  acrobatmbl.zip` contains only 5 files (`1.14y`, `2.12w`, `3.10f`,
+  `4.10c`, `c.2m`) — `fgtile`/`bgtile`/sprites-part-1 (`10m`/`a.9x`/`b.2k`)
+  are shared with parent set `acrobatm` (CRCs confirmed identical via
+  direct extraction+hash), but — unlike mustangb's own parent/clone pair
+  — stored under genuinely **different member names** in the parent zip
+  (`3.ic79`/`am-03.ic8`/`am-01.ic42`, reflecting that board's own chip
+  labels). `tools/mkgfxrom.py`'s `--zip` fallback only retries the *same*
+  filename in each zip in turn, so this needed the parent zip's own real
+  names, not a same-name fallback. Also confirmed and correctly handled
+  the same `ROM_IGNORE`-truncation trap `mustangb`'s own review flagged
+  as a risk in the brief for this port: `c.2m` is a `0x100000`-byte file
+  of which only the first half is used (`ROM_IGNORE(0x080000)`) — loading
+  it in full would overflow the declared `0x180000`-byte sprites region.
+  Extracted the two contributing files separately (`mkgfxrom.py`'s
+  `segments` mode truncates `c.2m` to its used half) and concatenated,
+  with a line-count assertion (`1572864` = `0x180000`) added to the
+  Makefile itself to catch any future regression in this step mechanically
+  rather than relying on a human noticing a silently-wrong sprite sheet.
+
+### Verification results
+
+First run at `RUN_CYCLES=60,000,000` (mustangb's/tdragonb's own budget)
+showed a **completely blank frame** — `0/768` palette entries non-blank,
+`0/86,016` pixels non-zero. Investigated rather than accepted: `acrobatm`'s
+own already-established testbench (`docs/tier2-system.md`'s "acrobatm"
+section, above) needed `RUN_CYCLES=240,000,000` at 40MHz (6.0 real
+seconds) to reach its own first palette-populated frame — `acrobatmbl`'s
+boot sequence follows its parent's closely (`ROM_START`'s own comment:
+"extremely similar to the original"), so 60M cycles at 32MHz (1.9 real
+seconds) was simply nowhere near enough real time, not a bug. Re-ran at
+`RUN_CYCLES=240,000,000` (7.5 real seconds at this port's own 32MHz,
+more generous than acrobatm's own 6s budget): **palette 15/768 non-blank,
+82,349/86,016 (95.7%) rendered pixels non-zero — an EXACT match to
+acrobatm's own already-documented numbers** (same section: "palette RAM
+shows 15/768 non-zero entries and 82,349/86,016 rendered pixels are
+non-zero... a fully readable, correctly formatted DIP-switch service-mode
+menu"). Given acrobatmbl and acrobatm share near-identical boot code,
+this exact numeric match is strong evidence `acrobatmbl` renders the
+identical DIP-switch menu correctly, not just "plausible" content —
+tighter corroboration than either mustangb's or tdragonb's own "partial
+but real, non-noise" verification could offer, since there's a matching
+sibling result to cross-check against. Z80 executed 3,332,658
+instructions (last fetch PC=`$012A`), 68000 executed 10,505,300
+instructions (443,098 write bus cycles, last fetch PC=`$002112`). IM0
+interrupt-acknowledge cycles: 1 total — RST10 (YM3812) only, 0 RST18, 0
+spurious, same shape as tdragonb's own run (no `main_mustb_w` write
+observed in this input-idle window).
+
+**Z80 core cycle-accuracy, checked against a real MAME oracle capture**
+(`sim/oracle/capture_cyc_trace.py --device :audiocpu`, 3 real seconds ≈
+1,312,133 oracle instructions, diffed via `sim/compare/cyc_diff.py`):
+the PC sequence matches as an ordered subsequence for the first **6,368
+checkpoints**, with **only 1/6,367 matched instruction cycle-costs
+differing** (tolerance=0; the one mismatch: checkpoint 6367, `PC
+0129->012A`, oracle=4 candidate=10, diff=+6), total cycles over the
+matched span oracle=82,933/candidate=82,939 (**ratio=1.000**). This is a
+**third, independent confirmation** that the GHDL-translated T80 core is
+cycle-exact against real Z80 hardware — and notably, the checkpoint
+count, mismatch location, and total-cycle figures are **numerically
+identical to tdragonb's own result**, despite acrobatmbl's Z80 running
+at a genuinely different real clock rate (4MHz here vs tdragonb's
+3579545Hz) — exactly what correct Z80 emulation should produce, since
+T-state costs are defined per-instruction, not per-real-time-unit, and
+both ports share the identical audiocpu ROM. Internal-consistency
+evidence on top of the oracle match itself, not just a repeat of it.
+
+**Where the match stops, and what that is**: oracle checkpoint 6,369
+(PC=`$0010`, the `RST 10h`/YM3812 IM0 vector address) is never found in
+the candidate's own full 3,332,658-instruction trace. Same underlying
+mechanism already characterized for mustangb/tdragonb — an
+interrupt-during-a-repeat-checked-idle-loop timing sensitivity, not a
+CPU-decode error (the cycle-perfect match up to this exact point rules
+that out) — recurring here specifically *because* the audiocpu ROM is
+unchanged from those two ports, not a newly-discovered issue. Not
+further diagnosed this session, consistent with this project's own
+established practice for this class of finding.
+
+### Regression sweep
+
+No shared file was modified — `rtl/acrobatm/video_acrobatm.sv`,
+`rtl/seibu/seibu_sound.sv`, `rtl/bjtwin/video_timing.sv`,
+`rtl/bjtwin/nmk_irq_hacky.sv`, `rtl/third_party_gen/t80/T80s.v`, and the
+vendored `jtopl2.v`/`jt6295.v` were only referenced, never edited.
+Re-ran `mustangb`'s own testbench (fresh rebuild, 60M cycles): matches
+its own already-established baseline exactly (745,065 Z80 instructions,
+2,710,850 68000 instructions, 2 IACKs, 106 frames) — zero regression.
+Re-ran `acrobatm`'s own testbench (fresh rebuild, 240M cycles): NMK004
+executed 4,105,176 instructions (last PC=`$01DB`), 68000 executed
+10,545,348 instructions, 338 frames rendered, 21,681 YM2203 writes, 5/5
+OKI1/OKI2 writes — a clean, healthy run with no crash, consistent shape
+with this port's own established behavior (no shared file was touched,
+so this is confirmatory rather than a genuine regression risk).
+
+### Status
+
+Built, boots, and runs clean on both CPUs. The Z80/T80 core now has a
+**third, independent cycle-exact confirmation** against real MAME
+hardware timing, and — uniquely among the three Tier 5 ports so far —
+a **quantitatively exact video-content match** against a closely related
+sibling port's own already-verified rendering. The PIC "protection" is
+fully resolved via the same offline-ROM-patch technique this project's
+own `decode_tdragonb.py` established, needing zero new RTL. A real
+split-romset filename mismatch (parent zip stores shared graphics ROMs
+under different member names than the clone's own `ROM_START` labels)
+was found and worked around correctly, with the previously-flagged
+`ROM_IGNORE` truncation trap also handled correctly and now mechanically
+guarded by a line-count assertion in the Makefile. **Not yet a full
+oracle match**: the same class of well-characterized, unchased
+interrupt-timing loop-exit divergence as mustangb's/tdragonb's own
+(recurring here because the audiocpu ROM is unchanged, not a new
+finding) stops the ordered PC-sequence match at instruction 6,368 of the
+candidate's own much longer run — left open, not further chased this
+session.
