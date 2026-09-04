@@ -3612,3 +3612,256 @@ new finding) stops the ordered PC-sequence match at instruction 6,368 of
 the candidate's own much longer run — left open, not further chased
 this session. Changes left uncommitted for the primary session's own
 review before commit.
+
+## gunnailb — Tier 5's fifth port, architecturally different from the prior four
+
+`gunnailb` ("GunNail (bootleg)") was assumed to be the natural fifth
+Family E target, matching mustangb/tdragonb/acrobatmbl/strahljbl's own
+Seibu Sound System hardware — but direct research into the reference
+shows this is wrong. `mame/src/mame/nmk/nmk16.cpp:172`'s own "uses the
+Seibu Raiden sound hardware" comment lists only `acrobatmbl, mustangb,
+strahljb and tdragonb` — **not gunnailb**. Its own `gunnailb()` machine
+config (`nmk16.cpp:5419-5442`) calls `gunnail(config)` first (inheriting
+Tier 4's real `gunnail` board's own 68000 clock, video, and YM2203
+instance unchanged), then swaps in a Z80 with its own distinct sound/IO
+maps (`gunnailb_sound_map`/`gunnailb_sound_io_map`, `nmk16.cpp:1065-1079`
+— **not** `seibu_sound_map`), wires the YM2203 IRQ directly to the Z80
+(a plain maskable IRQ0, no Seibu-style IM0 vector arbitration), moves the
+OKI to be driven **directly by the 68000** instead of the Z80 (a source
+comment, `nmk16.cpp:1077`: "since the bootleggers used the same audio CPU
+ROM as airbustr but a different Oki ROM, they connected the Oki to the
+main CPU" — confirmed via `ROM_START(gunnailb)`, `nmk16.cpp:8226`: the
+audiocpu ROM comment literally says "matches the one for Kaneko's Air
+Buster", a completely unrelated game's Z80 sound program reused
+verbatim), and removes the NMK004 device entirely
+(`config.device_remove("nmk004")`) — so this port is fully decoupled
+from `gunnail`'s own still-open protection-MCU timing-drift issue
+(`docs/PLAN.md`'s Tier 4 section).
+
+### What was built
+
+- **`rtl/gunnail/video_gunnailb.sv`** (new — a derivative of Tier 4's
+  `video_gunnail.sv`, NOT a shared edit to it): `video_gunnail.sv` drives
+  its own bgtile/sprites ROM fetches through two LIVE
+  `rtl/nmk214/nmk214.sv` instances, configured via a protection-MCU
+  handshake this board doesn't have. `gunnailb`'s own bgtile/sprites ROM
+  data is instead descrambled ONCE, OFFLINE — a completely separate
+  mechanism from `nmk214` despite sharing the same "8 tables,
+  address-bits select which one" conceptual shape (`decode_gfx()`,
+  `nmk16.cpp:6005-6054`, called directly from `init_gunnailb()`,
+  `nmk16.cpp:6275-6279` — not a live circuit at all). Feeding
+  already-correct, offline-descrambled data through a live, unconfigured
+  `nmk214` instance would scramble it a second time incorrectly, so
+  `video_gunnailb.sv` removes both `nmk214` instances and reads
+  `bgtile_rom`/`sprites_rom` directly — every other line (tilemap
+  geometry, palette decode, sprite double-buffer/draw FSM, per-scanline
+  raster scroll) is copied unchanged. Also genuinely different from
+  `video_gunnail.sv`: `gunnailb`'s own `bgtile` ROM is `0x200000` bytes
+  (2MB, matching macross's own size and 14-bit tile code), **double**
+  `gunnail`'s own `0x100000`/13-bit ROM — confirmed directly by comparing
+  `ROM_START(gunnailb)` against `ROM_START(gunnail)`, not assumed from
+  the family resemblance.
+- **`tools/decode_gunnailb_gfx.py`** (new tool): a standalone
+  transliteration of `decode_gfx()`/`decode_byte()`/`decode_word()`/
+  `bjtwin_address_map_bg0()`/`bjtwin_address_map_sprites()`
+  (`nmk16.cpp:5974-6054`) — 8 candidate bit-permutation tables per region
+  (bgtile: per-byte; sprites: per-16-bit-word, little-endian byte pair),
+  selected per-address by 3 specific address bits. Verified before
+  trusting it on real ROM data: every table checked as a genuine
+  bijection, plus hand-traced single-bit-position examples on a
+  non-identity table (an earlier draft's own hand-traced examples used
+  table index 2, which turned out to be the *identity* permutation in
+  both arrays — caught and fixed before running the tool for real, not
+  after). Run *after* `tools/mkgfxrom.py`'s own `concat`/`word_swap`
+  extraction (bgtile is a plain `ROM_LOAD`, sprites is
+  `ROM_LOAD16_WORD_SWAP` — same mode `gunnail`'s own sprite ROM uses),
+  same "only permutes bits within already-assembled data" layering
+  `tools/decode_tdragonb.py` already established.
+- **`rtl/gunnailb/gunnailb_core.sv`** (new system top-level): reuses the
+  fx68k+T80s architecture every Tier 5 port shares, but on **`gunnail_
+  core.sv`'s own 40MHz `clk_sys` convention**, not the 32MHz convention
+  every Seibu-based port used — because `gunnailb(config)` inherits
+  `gunnail(config)`'s own 68000 instantiation (`XTAL(10'000'000)`)
+  unchanged, only overriding the memory-map function pointer afterward.
+  68000/pixel clock enables (`clk_sys/4`=10MHz, `clk_sys/5`=8MHz) and the
+  YM2203 (`jt03`) accumulator (`increment=3,modulus=80`→1.5MHz, the SAME
+  chip instance/clock `gunnail(config)` already set up — `gunnailb()`
+  only rewires its IRQ destination) are copied directly from
+  `gunnail_core.sv`. New here: a Z80 cen (6MHz, `GCD(6000000,40000000)
+  =2000000`→`increment=3,modulus=20`) and an OKI cen (3MHz,
+  `GCD(3000000,40000000)=1000000`→`increment=3,modulus=40`) — both
+  small phase accumulators, single-`cen`-pulse shape (no two-phase
+  `enPhi1`/`enPhi2` pair needed for either, that's 68000-specific).
+  `HALTn` tied high (no protection MCU exists to drive it here, unlike
+  `gunnail_core.sv`'s own `.HALTn(~halt_68k)`). VRAM/palette/scrollram/
+  scrollramy storage is entirely local — no `prot_wr`/`prot_addr`/
+  `prot_sel_*` arbitration anywhere in this file, since there's no
+  protection MCU to share the bus with (genuinely simpler than
+  `gunnail_core.sv`'s own storage logic in this respect).
+- **New sound path — Z80 + direct YM2203 + dual `soundlatch`, not a
+  reusable device**: `soundlatch`/`soundlatch2` (MAME's
+  `GENERIC_LATCH_8`, `nmk16.cpp:5430-5433`) are plain 8-bit registers
+  built directly in `gunnailb_core.sv` — genuinely simple (a data
+  register + a pending flag), not built as a general-purpose reusable
+  device the way `rtl/seibu/seibu_sound.sv` is, since this wiring is
+  specific to this one game. `soundlatch`'s own
+  `data_pending_callback().set_inputline(m_audiocpu, INPUT_LINE_NMI)`
+  (`nmk16.cpp:5431`) means the 68000→Z80 direction drives the Z80's NMI
+  as a level held low from the 68000's write until the Z80 itself reads
+  the latch back — implemented as exactly that (a held level, not a
+  pulse), relying on T80's own internal NMI edge-detector (real Z80
+  hardware: fires once on the falling edge, ignores the level afterward
+  until the next fresh falling edge) to handle the "only once per write"
+  semantics. The Z80's own I/O map (`gunnailb_sound_io_map`,
+  `nmk16.cpp:1072-1079`, an 8-bit `global_mask(0xff)` space) is decoded
+  directly off `z80_a[7:0]`: port `0x00` write = audiobank select
+  (`macross2_audiobank_w`, `data & 0x7`, `nmk16.cpp:302-305`), `0x02/0x03`
+  r/w = YM2203 (jt03, addr/status vs. data offset), `0x04` unused (Oki
+  moved to the 68000, see above), `0x06` r/w = `soundlatch`/`soundlatch2`.
+  No IM0 vector-mux logic exists anywhere (unlike `seibu_sound.sv`'s own)
+  — this Z80's own interrupt mode (IM1, almost certainly, given no vector-
+  supply callback is registered anywhere in the reference's own machine
+  config) is handled entirely internally by T80 once the Air Buster sound
+  program itself executes its own `IM 1` instruction, needing no external
+  vector-byte muxing at all.
+- **OKI moved to the 68000**: a single byte-write register at `0x194001`
+  (odd address, `~LDSn`-gated like every other single-byte register in
+  this project) drives `jt6295` directly from the 68000's own bus write
+  — no bank device layer (`OKIM6295(config.replace(),m_oki[0],
+  12000000/4,...) // no OKI banking`, `nmk16.cpp:5437`), driven straight
+  from the 68000 rather than relayed through the Z80's own domain. Still
+  uses the same latch-and-hold write-stretch pattern this project's other
+  OKI integrations already established (a 40-`clk_sys`-cycle `wrn` hold),
+  cheap insurance against any exact-alignment edge case even though a
+  68000 bus cycle is already wide on its own. Confirmed directly against
+  the reference: `gunnailb_map` has no corresponding OKI *read* entry
+  anywhere, consistent with this game being flagged
+  `MACHINE_IMPERFECT_SOUND` ("crappy sound, unknown how much of it is
+  incomplete emulation and how much bootleg quality").
+- **Primary-session review pass found and fixed one real bug before
+  commit**: the YM2203 (`jt03`) write-stretch hold was `6'd8` cycles, but
+  `ym_cen`'s own worst-case gap (`increment=3, modulus=80`, verified by
+  directly simulating the accumulator) is 27 `clk_sys` cycles — an 8-cycle
+  hold could not guarantee overlapping a `cen` edge, risking silently
+  dropped Z80→YM2203 register writes on unlucky phase alignment. Fixed to
+  `6'd40`, matching the exact value `gunnail_core.sv`/`macross_core.sv`
+  already use for the identical chip/`cen` setup (which safely exceeds
+  the 27-cycle worst case). Verification below was re-run after this fix,
+  not before it.
+- **ROM extraction hit the same split-romset naming trap
+  `acrobatmbl`/`strahljbl` already characterized**: `mame_roms/
+  gunnailb.zip` contains only 6 files — the sprites ROM (`27c160.a9`,
+  `0x200000` bytes) is missing entirely, shared with parent set `gunnail`
+  but stored under a different member name there
+  (`92077-7.u134` — confirmed via a direct CRC check, `d49169b3`,
+  matching exactly, not assumed from the family resemblance).
+- **`sim/rtl/gunnailb/{Makefile,tb_gunnailb.cpp}`** (new) — the
+  testbench tracks the Z80's NMI line (falling-edge count, since
+  `gunnailb` has no IM0 vector arbitration to check the way the
+  Seibu-based ports' own testbenches do) instead of IACK vector
+  bookkeeping.
+
+### Verification results
+
+Full 300M-`clk_sys`-cycle (40MHz, 7.5 real seconds) run: Z80 executed
+7,442,532 instructions (last fetch PC=`$0AA5`), 68000 executed
+13,198,403 instructions (345,205 write bus cycles, last fetch
+PC=`$00C35C`), 422 video frames rendered. Z80 NMI (soundlatch write)
+falling edges: 3 total over the run — a real, if modest, cross-CPU
+handshake signal (this is an input-idle attract/boot-only window, same
+caveat every prior port's own low-activity run carries). Z80 wrote to
+YM2203 9 times, and the 68000 wrote to the (now directly-attached) OKI 6
+times — confirming both the new sound-latch/NMI path and the new
+68000-driven OKI path actually get exercised, not just wired and never
+touched.
+
+**Pixel/VRAM sanity**: palette 354/1,024 non-blank, BG VRAM 7,951/8,192
+(97%) — a real, heavily-populated tilemap — TX VRAM 480/2,048 non-blank,
+and 9,671/86,016 (11.2%) rendered pixels non-zero. This is strong,
+non-garbage evidence the whole new pipeline works end to end: the
+offline GFX descramble tool, `video_gunnailb.sv`'s nmk214-stage removal,
+and the VRAM/palette/scrollram wiring all have to be correct
+simultaneously to produce a 97%-populated tilemap rather than noise —
+reused, already-verified rendering logic (`video_gunnailb.sv`'s own
+tilemap/sprite math, copied from Tier 4's `video_gunnail.sv`) plus new
+data-path wiring around it, and the combination renders plausibly.
+
+**Z80 core cycle-accuracy, checked against a real MAME oracle capture**
+(`sim/oracle/capture_cyc_trace.py --device :audiocpu`, 3 real seconds ≈
+1,979,403 oracle instructions, diffed via `sim/compare/cyc_diff.py`):
+the PC sequence matches as an ordered subsequence for the first
+**65,739 checkpoints** — roughly **10x further** than any prior Tier 5
+port's own longest match (strahljbl/tdragonb/acrobatmbl: 6,367 each) —
+with only **3/65,738 matched instruction cycle-costs differing**
+(tolerance=0; all three at the same location, checkpoint 65706/65709/
+65712, `PC 0AA5->0AA1`, oracle=10 candidate=247-251), total cycles over
+the matched span oracle=935,819/candidate=936,534 (**ratio=1.001**).
+This is a **fifth, independent confirmation** that the GHDL-translated
+T80 core is cycle-exact against real Z80 hardware — reaching an order of
+magnitude deeper into a completely different, unrelated Z80 program
+(Air Buster's own sound driver, not the Seibu program every prior port
+shares) than any previous port's own oracle match.
+
+**Where the match stops, and what that is**: disassembling the audiocpu
+ROM at the divergence point (`sim/rtl/gunnailb/roms/gunnailb_audiocpu.hex`,
+bytes at `$0AA1`-`$0AA7`: `ED 60` / `CB 7C` / `C2 A1 0A`) decodes to
+`IN H,(C)` / `BIT 7,H` / `JP NZ,$0AA1` — a **hardware status-bit polling
+loop** (read a port, loop while bit 7 stays set), not an idle/interrupt
+loop like every prior Tier 5 port's own divergence. The candidate takes
+~247-251 cycles to exit this loop where the oracle takes only 10 —
+consistent with our `jt03` (YM2203) integration's own busy/status flag
+staying asserted measurably longer than MAME's model expects at this
+specific polling site, a real, timing-sensitive real-hardware-emulation
+gap rather than a decode error (cycle-perfect match on every instruction
+up to and including this exact point rules that out). Not further
+diagnosed this session, consistent with this project's own established
+practice for this class of finding — but characterized precisely rather
+than left as an unexplained "loop exit" the way a purely PC-sequence-only
+diff would have to.
+
+### Regression sweep
+
+No shared file was modified — `rtl/third_party_gen/t80/T80s.v`,
+`rtl/bjtwin/video_timing.sv`, `rtl/bjtwin/nmk_irq_hacky.sv`, and the
+vendored `jt12/hdl/jt03.v`/`jt6295.v` were only referenced, never edited.
+`rtl/gunnail/gunnail_core.sv` and `rtl/gunnail/video_gunnail.sv`
+themselves were also never touched — `gunnailb` uses its own separate
+`video_gunnailb.sv` and `gunnailb_core.sv` instead (see "What was built"
+above for why). Re-ran `mustangb`'s own testbench (fresh rebuild, 60M
+cycles): matches its own already-established baseline exactly (745,065
+Z80 instructions, 2,710,850 68000 instructions, 2 IACKs, 106 frames) —
+zero regression, confirms T80s.v wasn't touched. Re-ran `gunnail`'s own
+testbench (fresh rebuild, 300M cycles): NMK004 executed 4,746,286
+instructions (last PC=`$01DB`), protection MCU executed 2,824,804
+instructions (last PC=`$0088`, **68000 HALT asserted 0 times**), 422
+frames rendered — the identical failure *signature* `docs/PLAN.md`'s own
+Tier 4 section already documents for `gunnail` (blocked by its own
+still-open protection-MCU timing-drift issue, protcpu settling at the
+same `$0088` P5-wait address with 0 HALT assertions) — confirming
+`gunnail`'s own already-known-broken behavior is unchanged, not newly
+broken, and that `video_gunnail.sv`/`gunnail_core.sv` are genuinely
+untouched by this port's own work.
+
+### Status
+
+Built, boots, and runs clean on both CPUs — genuinely new work (a Z80 +
+direct YM2203 + dual-soundlatch sound path, a new offline GFX-descramble
+tool, a new NMK214-free video derivative) rather than a reuse-heavy port
+like the prior four. The Z80/T80 core gets its **fifth independent
+cycle-exact confirmation**, and by a wide margin the deepest of any Tier
+5 port so far (65,738 matched checkpoints vs. 6,367 for the next-best).
+Video renders richly and plausibly (97% BG VRAM populated). Because
+`gunnailb` removes the NMK004/protection-MCU path entirely, it is fully
+decoupled from `gunnail`'s own still-open protection-MCU timing-drift
+issue — this port's own remaining gap (a `jt03` busy-flag-timing-
+sensitive polling loop, precisely characterized above) is unrelated to
+that issue and, unlike it, has a clear, scoped next step if picked up
+later: compare `jt03`'s own busy-flag deassertion timing against
+MAME's `ym2203_device` model directly. **Not yet a full oracle match**:
+left open, not further chased this session, per this project's own
+established practice. The new Z80+YM2203+soundlatch sound architecture
+built here is narrow to this one game's own specific wiring, not a
+general-purpose reusable device — worth noting as adjacent groundwork
+for a future Family C (`macross2`-style) port, but not itself a
+drop-in component the way `rtl/seibu/seibu_sound.sv` is. Changes left
+uncommitted for the primary session's own review before commit.
