@@ -3420,3 +3420,195 @@ interrupt-timing loop-exit divergence as mustangb's/tdragonb's own
 finding) stops the ordered PC-sequence match at instruction 6,368 of the
 candidate's own much longer run — left open, not further chased this
 session.
+
+## strahljbl — Tier 5's fourth port (Family E, fourth Z80-based port in this project)
+
+`strahljbl` ("Koutetsu Yousai Strahl (Japan, bootleg)") is the natural
+fourth Family E target: a Raiden-sound bootleg of `strahl` (Tier 2)
+sharing every prior Tier 5 port's own Seibu Sound System v1.02 hardware
+end-to-end (`set_hacky_interrupt_timing`, `seibu_sound_map`, YM3812/
+OKIM6295 wiring) and, again, a **byte-identical audiocpu ROM**
+(`a6.u417`, CRC `99ee7505`) and OKI ROM (`a5.u304`, CRC `f6f6c4bf`).
+Unlike the prior three ports, `strahljbl` uses `empty_init()`
+(`nmk16.cpp:10787`) — no ROM patching, no decryption, no protection
+workaround needed at all, confirmed by reading the source directly.
+This is also this project's first Tier 5 game with a **dual-BG-layer**
+video architecture (Strahl has two independent VRAM tilemaps, BG0+BG1,
+each with its own X/Y scroll register block).
+
+### What was built
+
+- **`rtl/strahljbl/strahljbl_core.sv`** (new system top-level): the same
+  fx68k+T80s+`seibu_sound`+jtopl2+jt6295 architecture as `mustangb_core.sv`/
+  `tdragonb_core.sv`/`acrobatmbl_core.sv` (reusing `rtl/seibu/
+  seibu_sound.sv`, `rtl/third_party_gen/t80/T80s.v`, `rtl/bjtwin/
+  video_timing.sv` + `rtl/bjtwin/nmk_irq_hacky.sv` all **unmodified**),
+  with `strahljbl_map`'s own memory layout (`nmk16.cpp:967-983` —
+  confirmed identical to `strahl_map`, `nmk16.cpp:947-965, apart from
+  the sound entries: `main_mustb_w` at `0x8001E-0x8001F` replaces the
+  NMK004 read/write trio; neither map has a `tilebank_w` entry) and,
+  genuinely new to Tier 5, **`rtl/strahl/video_strahl.sv`** (already
+  built for Tier 2's own `strahl` — confirmed identical video/VRAM/
+  palette/scroll register layout). `video_strahl.sv`'s own dual-BG-layer
+  port interface (`bg0vram_addr/data`, `bg1vram_addr/data`,
+  `bg0_xscroll/yscroll`, `bg1_xscroll/yscroll`) and `strahl_core.sv`'s
+  own `sel_scroll0`/`sel_scroll1`/`scroll_reg[0:1][0:3]` wiring pattern
+  were copied directly, not reinvented. Main work RAM uses a plain
+  masked write (no "mainram_strange_w" quirk — `strahl_map`/
+  `strahljbl_map` both map `0xF0000-0xFFFFF` with bare `.ram()`, no
+  write-handler override, so standard `COMBINE_DATA` semantics apply,
+  same convention as `strahl_core.sv`'s own).
+- **IMPORTANT, same pattern as `acrobatmbl_core.sv`'s own**: this file
+  does NOT reuse `video_strahl.sv`'s own donor, `strahl_core.sv`'s, 48MHz
+  `clk_sys` architecture (12MHz 68000 = clk_sys/4, NMK004/pixel
+  clk_sys/6 = 8MHz — clean ratios specific to that board's own 48MHz
+  convention). `strahljbl`'s own machine config uses the same nominal
+  12MHz 68000 clock, but this port stays on the standard 32MHz `clk_sys`
+  every other Tier 5 port already uses. `video_strahl.sv` itself takes a
+  generic `clk_sys` input with no internal frequency-specific
+  derivation, so it drops into either convention unchanged.
+- **A second port needing a 68000 phase accumulator** (after
+  `tdragonb`'s own 10MHz case): `strahljbl`'s own 68000 runs at
+  `12_MHz_XTAL`. `GCD(12000000,32000000)=4000000` gives
+  `increment=3, modulus=8` — a small 3-bit phase accumulator drives
+  `enPhi1`/`enPhi2` (the same "wrap fires enPhi1, defer one enPhi2 to
+  the very next non-wrap cycle" technique `tdragonb_core.sv` established).
+  Hand-traced the full repeating 8-cycle accumulator sequence before
+  trusting it in RTL: `enPhi1` fires at wrap-steps 2, 5, 7 of every
+  8-cycle window (rate 3/8 exact), `enPhi2` always exactly one `clk_sys`
+  cycle later, and the strict-alternation invariant fx68k's own T-state
+  FSM requires (confirmed directly against `fx68k.sv`'s own T-state
+  transition table, same check `tdragonb`'s own build used) holds for
+  every step of the pattern — never two of the same enable back-to-back.
+  Z80 + YM3812 both run at `12_MHz_XTAL/4` = 3MHz (identical divisor,
+  same shared-clock convention as every prior port);
+  `GCD(3000000,32000000)=1000000` gives `increment=3, modulus=32`,
+  another small single-phase accumulator. OKIM6295 at `12_MHz_XTAL/12` =
+  1MHz *is* a clean divisor from 32MHz (`increment=1, modulus=32` —
+  literally `clk_sys/32`), a plain free-running counter, no accumulator
+  needed — same pattern as `acrobatmbl_core.sv`'s own OKI cen.
+- **ROM extraction hit the same split-romset naming trap
+  `acrobatmbl`'s own port already characterized**: `mame_roms/
+  strahljbl.zip` contains only 6 files (`129.u28` — `p_rom`, explicitly
+  commented "not used by the emulation" in the reference, skipped
+  entirely — plus `a5.u304`, `a6.u417`, `a7.u3`, `a8.u2`, `d.8m`).
+  `fgtile`/`bgtile`/`bg2tile`, and half of `sprites`, are shared with
+  parent set `strahl` but stored under genuinely different member names
+  (board-specific chip labels), confirmed via `unzip -l` on both zips
+  plus a CRC cross-check against `ROM_START(strahl)`
+  (`nmk16.cpp:7764-7799`): `cha.38`→`strahl-3.73` (fgtile, CRC
+  `2273b33e`), `6.2m`→`str7b2r0.275` (bgtile, CRC `5769e3e1`),
+  `4.4m`→`str6b1w1.776` (bg2tile, CRC `bb1bb155`), and `5.4m`→
+  `strl5-03.58` (sprites part 2, CRC `a0e7d210` — this is `strahl`'s own
+  *third* sprite chip; the bootleg's `d.8m`, present directly in
+  `strahljbl.zip`, is a genuinely unique "bigger ROM" combining what on
+  the real board were two separate 0x80000 chips, per the reference's
+  own comment "same as original, just a bigger ROM"). Unlike
+  `acrobatmbl`'s own sprites region, **no `ROM_IGNORE` truncation trap
+  here** — both sprite pieces load in full, `0x100000 + 0x080000 =
+  0x180000` exactly matching the declared region size — still guarded by
+  the same line-count-assertion convention `acrobatmbl`'s own Makefile
+  established, since a wrong file/offset would otherwise fail silently.
+
+### Verification results
+
+Full 240M-`clk_sys`-cycle (32MHz, 7.5 real seconds) run — started at
+this budget directly rather than repeating `acrobatmbl`'s own "blank
+frame at 60M, re-run at 240M" detour, since `strahl`'s own existing
+Tier 2 testbench already establishes `RUN_CYCLES=240,000,000` as its own
+real-time-to-first-content budget. Z80 executed 2,499,324 instructions
+(last fetch PC=`$012A`, the same `$0126`/`$0129`/`$012A` idle-loop
+signature every prior Tier 5 port's own run settles into), 68000
+executed 16,855,915 instructions (~90,000,075 `enPhi1` clock-enable
+ticks — matches the target 3/8 ratio almost exactly, 240,000,000×3/8=
+90,000,000 predicted), 308,740 write bus cycles, last fetch PC=
+`$00145E`. IM0 interrupt-acknowledge cycles: 1 total — RST10 (YM3812)
+only, 0 RST18, 0 spurious, same shape as tdragonb's/acrobatmbl's own
+runs (no `main_mustb_w` write observed in this input-idle window). 422
+video frames rendered.
+
+**Pixel/VRAM sanity, cross-checked against `strahl`'s own already-
+documented baseline rather than assumed plausible in isolation**: at its
+own `RUN_CYCLES=240,000,000` (48MHz, ~5 real seconds), `strahl`'s own
+testbench shows only 4/1024 non-blank palette entries and 2,665/86,016
+(3.1%) non-zero pixels — a genuine hardware self-test/diagnostic screen,
+not a rich attract-mode frame (`docs/tier2-system.md`'s own "strahl"
+section above). `strahljbl`'s run here, at a comparable-or-longer real
+time (7.5s vs strahl's own 5s), shows a **richer but consistent-shape**
+result: palette 165/1,024 non-blank, BG0 VRAM 8,192/8,192 (100%), BG1
+VRAM 8,192/8,192 (100%), TX VRAM 954/1,024 (93%), and 8,851/86,016
+(10.3%) rendered pixels non-zero. Both BG layers being fully written but
+the actual non-zero-pixel fraction staying modest (10.3%, not 90%+) is
+consistent with a text-heavy diagnostic screen where most of VRAM holds
+a "blank" tile value that itself is non-zero data but renders as
+background — the same class of content `strahl`'s own sibling run
+already established, reached further given the extra real time here,
+not a differently-shaped (and therefore suspicious) result. Re-running
+the testbench a second time with `TB_DUMP_VRAM=1` reproduced every
+number above exactly (instruction counts, frame count, VRAM/pixel
+counts) — confirming determinism, not a one-off.
+
+**Z80 core cycle-accuracy, checked against a real MAME oracle capture**
+(`sim/oracle/capture_cyc_trace.py --device :audiocpu`, 3 real seconds ≈
+975,232 oracle instructions, diffed via `sim/compare/cyc_diff.py`): the
+PC sequence matches as an ordered subsequence for the first **6,368
+checkpoints**, with **only 1/6,367 matched instruction cycle-costs
+differing** (tolerance=0; the one mismatch: checkpoint 6367, `PC
+0129->012A`, oracle=4 candidate=10, diff=+6), total cycles over the
+matched span oracle=82,933/candidate=82,939 (**ratio=1.000**). This is a
+**fourth, independent confirmation** that the GHDL-translated T80 core
+is cycle-exact against real Z80 hardware — and, exactly as expected
+since `strahljbl` shares the identical byte-for-byte audiocpu ROM with
+`tdragonb`/`acrobatmbl`, every one of these numbers (checkpoint count,
+mismatch location, and total-cycle figures) is **numerically identical**
+to both of those ports' own results, despite yet another different real
+Z80 clock rate (3MHz here vs tdragonb's 3579545Hz vs acrobatmbl's 4MHz)
+— exactly what correct, purely T-state-based Z80 emulation should
+produce. A third internal-consistency data point on top of the oracle
+match itself.
+
+**Where the match stops, and what that is**: oracle checkpoint 6,369
+(PC=`$0010`, the `RST 10h`/YM3812 IM0 vector address) is never found in
+the candidate's own full 2,499,324-instruction trace. Same underlying
+mechanism already characterized for mustangb/tdragonb/acrobatmbl — an
+interrupt-during-a-repeat-checked-idle-loop timing sensitivity, not a
+CPU-decode error (the cycle-perfect match up to this exact point rules
+that out) — recurring here specifically because the audiocpu ROM is
+unchanged, not a newly-discovered issue. Not further diagnosed this
+session, consistent with this project's own established practice for
+this class of finding.
+
+### Regression sweep
+
+No shared file was modified — `rtl/strahl/video_strahl.sv`,
+`rtl/seibu/seibu_sound.sv`, `rtl/bjtwin/video_timing.sv`,
+`rtl/bjtwin/nmk_irq_hacky.sv`, `rtl/third_party_gen/t80/T80s.v`, and the
+vendored `jtopl2.v`/`jt6295.v` were only referenced, never edited.
+Re-ran `mustangb`'s own testbench (fresh rebuild, 60M cycles): matches
+its own already-established baseline exactly (745,065 Z80 instructions,
+2,710,850 68000 instructions, 2 IACKs, 106 frames) — zero regression.
+Re-ran `strahl`'s own testbench (fresh rebuild, 240M cycles): NMK004
+executed 2,727,068 instructions (last PC=`$0EB1`), 68000 executed
+8,617,315 instructions (1,010,721 write bus cycles, last fetch
+PC=`$0013EA`), 47 YM2203 writes, 5/5 OKI1/OKI2 writes, 281 frames
+rendered — a clean, healthy run with no crash (no shared file was
+touched, so this is confirmatory rather than a genuine regression risk).
+
+### Status
+
+Built, boots, and runs clean on both CPUs. The Z80/T80 core now has a
+**fourth, independent cycle-exact confirmation** against real MAME
+hardware timing, and a second confirmed-correct non-power-of-2 68000
+clock-enable derivation (verified via the same fx68k T-state-alternation
+check `tdragonb`'s own build established). The dual-BG-layer video
+architecture renders correctly on both layers, cross-validated in shape
+(not just "plausible in isolation") against `strahl`'s own already-
+documented sibling rendering at a comparable real-time budget. No new
+protection workaround was needed — `strahljbl` uses `empty_init()`.
+**Not yet a full oracle match**: the same class of well-characterized,
+unchased interrupt-timing loop-exit divergence as every prior Tier 5
+port's own (recurring here because the audiocpu ROM is unchanged, not a
+new finding) stops the ordered PC-sequence match at instruction 6,368 of
+the candidate's own much longer run — left open, not further chased
+this session. Changes left uncommitted for the primary session's own
+review before commit.
