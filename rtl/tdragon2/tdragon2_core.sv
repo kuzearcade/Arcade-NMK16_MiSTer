@@ -440,12 +440,19 @@ module tdragon2_core #(
 		end
 	end
 	wire ym_wr_n = ~(ym_wr_hold != 6'd0);
+	// jt03 has no separate read-strobe input — dout always reflects whatever
+	// addr currently holds, so a status/busy read must see the live port
+	// decode, not the write-only latch (which would still show the previous
+	// write's offset, e.g. after a data-port write, breaking busy-flag polls).
+	// Fall back to the latched value only while a write-stretch is in flight,
+	// since ym_din_latch itself is only valid for that same window.
+	wire ym_addr_sel = (ym_wr_hold != 6'd0) ? ym_addr_latch : sel_io_ym_data;
 
 	wire [7:0] ym_chip_dout;
 	wire       ym_chip_irq_n;
 	jt03 ym_chip (
 		.rst(reset), .clk(clk_sys), .cen(ym_cen),
-		.din(ym_din_latch), .addr(ym_addr_latch), .cs_n(1'b0), .wr_n(ym_wr_n),
+		.din(ym_din_latch), .addr(ym_addr_sel), .cs_n(1'b0), .wr_n(ym_wr_n),
 		.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),
 		.IOA_in(8'hFF), .IOB_in(8'hFF), .IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
 		.psg_A(), .psg_B(), .psg_C(), .fm_snd(), .psg_snd(), .snd(), .snd_sample(),

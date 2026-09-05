@@ -4722,3 +4722,43 @@ flagged as unconfirmed rather than investigated further or claimed
 working. Regression sweep across all four sibling Tier 3/Tier 2
 testbenches is clean. Changes left uncommitted for the primary session's
 own review before commit.
+
+## jt03 read-latch fix applied to gunnailb/macross2/tdragon2/raphero
+
+Follow-up to `powerins`'s own fix above. Applied the identical
+`ym_addr_sel` mux (live port decode for reads, write-latched value only
+while a write-stretch is in flight) to the four already-committed ports
+that still had the write-only `ym_addr_latch` feeding `jt03` directly:
+`gunnailb_core.sv`, `macross2_core.sv`, `tdragon2_core.sv`,
+`raphero_core.sv` (`snd_addr[0]` instead of `sel_io_ym_data`, since
+raphero's own sound bus doesn't have a separate address/data-port
+decode wire). All four rebuilt from scratch and re-run at their exact
+established 300M-cycle testbench budget:
+
+- `gunnailb`: **bit-for-bit identical** to its pre-fix baseline (7,442,532
+  Z80 instructions, last PC=`$0AA5`, 9 YM2203 writes, 6 OKI writes) —
+  this port's own trace never happens to issue a status read
+  immediately after a data-port write in this run, so the fix is a
+  verified no-op here rather than a regression risk.
+- `macross2`: Z80 unstuck from `$0018` to `$05AA` (3,279,005
+  instructions, up from 3,037,725), YM2203 writes 165→22,774, OKI0/OKI1
+  writes 0/0→67/99 — first real NMK112 register writes this port has
+  ever produced in simulation.
+- `tdragon2`: YM2203 writes 604→3,910, OKI0/OKI1 writes 0/0→19/25,
+  68000 last fetch PC advances from `$00AED6` to the same address (video
+  pipeline unaffected, only the sound side changes as expected).
+- `raphero`: TLCS-90 YM2203 writes 7→3,073, OKI0/OKI1 writes 0/0→232/20
+  — matching the exact effect already seen in `powerins`.
+
+Confirms the bug was real and load-bearing in three of the four ports
+(not just a theoretical latent issue), and that the fix is safe: no
+port's video pipeline, 68000-side execution, or any other subsystem
+changed behavior — only the Z80/TLCS-90-side YM2203 traffic, which is
+exactly what the fix touches. `gunnailb`'s own unchanged result is
+itself useful evidence the fix doesn't alter behavior when it isn't
+needed. Oracle-diff re-runs against each port's own established MAME
+capture were not repeated in this pass (the Z80/TLCS-90 execution paths
+now genuinely diverge further than before, which is expected and
+desired — a fresh oracle capture past the old divergence point is a
+larger follow-up, not required to confirm this specific fix is correct
+and non-regressive).
