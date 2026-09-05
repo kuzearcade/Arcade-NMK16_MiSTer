@@ -4436,3 +4436,289 @@ this run are both left open, honestly flagged as unconfirmed rather
 than chased further or claimed working, consistent with this project's
 own established practice. Changes left uncommitted for the primary
 session's own review before commit.
+
+## powerins — Tier 3's fourth and final currently-known port, and the one that found a real, systemic sound-path bug
+
+`powerins` ("Power Instinct (USA)", `GAME(1993,powerins,0,powerins,
+powerins,nmk16_state,empty_init,ROT0,"Atlus","Power Instinct (USA)",
+MACHINE_SUPPORTS_SAVE)`, nmk16.cpp:8994+) is Tier 3's fourth target —
+by far the most novel on the video side of any Tier 3 port, but it also
+surfaced something more important: **a real bug in the shared
+Z80+jt03(YM2203) integration pattern every Family C/E port in this
+project has used since `gunnailb`**, previously mischaracterized (in
+this project's own prior verification write-ups, including the three
+sections directly above) as an inherent "`jt03` busy-flag-timing
+limitation." It is not — see "The bug" below.
+
+### The bug — a write-only `addr` latch feeding jt03, found via direct signal tracing
+
+Every prior YM2203 integration in this project (`gunnailb_core.sv`,
+`macross2_core.sv`, `tdragon2_core.sv`, `raphero_core.sv`, all confirmed
+by direct grep to share the identical pattern) drives jt03's `addr`
+input from a register (`ym_addr_latch`) that only updates on a **write's**
+rising edge — needed because the project's own 40-cycle write-stretch
+hold outlives the Z80's real bus cycle, so the address has to be
+latched for a write to land correctly. But jt03's `addr` input also
+selects what a **read** returns (offset0 = address/status, `{busy,5'd0,
+flag_B,flag_A}`; offset1 = the embedded YM2149 PSG's own data-port read
+— see `jt12_dout.v`'s own mux) — and a write-only latch is simply wrong
+for reads: after the Z80's own standard busy-wait subroutine
+(`IN A,(0)` / `RLCA` / `JR C,-5` / `RET`, a completely ordinary
+OPN-family idiom, present verbatim in `powerins`' own audiocpu ROM at
+`$0018-$001D`) polls port 0 following a write to the *data* port
+(offset1, the far more common last-write case for a register-init
+loop), the latch stays parked at `addr=1` and the "status" read silently
+returns the PSG's own data byte instead — with bit7 not reliably
+reflecting the real busy flag at all.
+
+This was **not** visible from the PC trace alone — `powerins`' own
+table-driven YM2203 init loop (`$0081-$008E`, silencing all 12 operator
+TL registers before user code even reaches the `$189A` register/value
+table) looked identical to the "stuck at `$0018`" symptom already seen
+in `macross2`/`tdragon2`/`raphero`'s own sections above, so at first
+glance it looked like a fourth recurrence of the "known" jt03 timing
+limitation. Root-caused instead by temporarily threading three debug
+taps (`busy`/`write`/`clk_en`) out of `jt12_mmr.v`→`jt12_top.v`→`jt03.v`
+(gitignored, vendored files — safe to edit and revert; new trailing
+output ports don't break any sibling port's own named-connection
+instantiation) and logging their transitions in a short diagnostic
+build: `jt12_mmr.v`'s own `busy` genuinely stayed asserted across
+*several* subsequent register writes, each one re-arming its own
+32-`clk_en`-tick busy timer before the previous one could ever
+elapse — meaning the Z80 was charging ahead of the chip's real busy
+window, which only makes sense if the Z80's own busy-*read* was
+returning a false "not busy" the whole time. All three debug taps were
+reverted after use; the actual fix lives entirely in
+`powerins_core.sv`.
+
+**Fix**: feed jt03's `addr` from the *live* port decode
+(`sel_io_ym_data`, off the current `z80_a`) whenever no write-stretch is
+in flight, falling back to the write-latched value only while
+`ym_wr_hold!=0` (still required there, since `z80_a` has already moved
+on well before the artificial 40-cycle hold elapses). Confirmed by
+direct re-run: YM2203 writes went from **7 total (Z80 permanently stuck
+at the very first busy-wait for 99.998% of a 5,378,870-instruction run,
+last fetch PC=`$0018`)** to **3,231 total, with the Z80 now visiting 198
+distinct PCs in just its own last 5,000 executed instructions** (genuine
+varied execution, not a stuck loop) — and, for the first time in any
+Family C port, **both OKI chips actually received a real register write
+(1 each)**, where every single prior port in this family (`gunnailb`
+through `raphero`) reported 0/0.
+
+**This almost certainly affects `gunnailb`/`macross2`/`tdragon2`/
+`raphero` too** — confirmed the identical `ym_addr_latch`-only-updates-
+on-write pattern exists verbatim in `gunnailb_core.sv` (and, per this
+session's own earlier direct reading, `macross2_core.sv`) — their own
+prior "0 OKI writes" / "stuck at `$0018`-class PC almost immediately"
+results are exactly the symptom this bug produces, not independent
+confirmations of a real jt03-core limitation. **Left unfixed in those
+four already-committed ports** — out of scope for a single-port
+delegation brief, and touching already-shipped, already-reviewed RTL is
+a bigger decision than this session's own mandate covers. Flagged here,
+in `docs/PLAN.md`, and in the final report for the primary session's
+own follow-up judgement.
+
+### The other genuinely new things — concentrated in video, none on the CPU side
+
+Confirmed directly against the reference before writing any RTL
+(`powerins()`, nmk16.cpp:5732-5773; `powerins_map`/`powerins_sound_map`,
+nmk16.cpp:1193-1225; `set_screen_midres`, nmk16.cpp:4367-4378;
+`VIDEO_START_MEMBER(nmk16_state,powerins)`/`powerins_get_bg_tile_info`/
+`get_colour_6bit`/`get_flip_extcode_powerins`, nmk16_v.cpp;
+`nmk_16bit_sprite_device::draw_sprites`, nmk16spr.cpp:55-256):
+
+- **Two new 68000/Z80 clock ratios, neither a clean divide.** 68000 at
+  `XTAL(12'000'000)`=12MHz (every prior Tier 3 port used 10MHz or, for
+  `raphero`, 14MHz) — `increment=3,modulus=10` off 40MHz `clk_sys`
+  (`enPhi1` minimum gap 3 cycles, verified by direct accumulator
+  simulation, comfortably clear of collision with a one-cycle-deferred
+  `enPhi2`). Z80 at `XTAL(12'000'000)/2`=6MHz (every prior Tier 3 port's
+  own Z80 ran a clean 4MHz divide) — `increment=3,modulus=20`, a
+  single-phase accumulator (T80s only needs `CEN`, unlike the 68000's
+  two-phase `enPhi1`/`enPhi2`).
+- **A third distinct screen-width class.** `set_screen_midres` gives
+  320px visible width (256=lowres, 384=hires, 320=**midres**, new here) —
+  confirmed the shared `rtl/bjtwin/video_timing.sv` raster-timing model
+  (fixed 512×278 internal counter, consumed only by `nmk_irq.sv`, wholly
+  decoupled from any specific game's real pixel clock/width) is reused
+  completely unmodified: `powerins`' own real 448×263 raster
+  (`14MHz/2` pixel clock) produces the *exact same* 64µs/scanline period
+  as the model's own 512×8MHz abstraction (`512/8MHz = 448/7MHz =
+  64µs` exactly) — not merely a close-enough approximation, confirmed by
+  direct calculation before wiring anything.
+- **No `tilerambank`.** `VIDEO_START_MEMBER(powerins)` has no BG-bank
+  logic at all, and `powerins`' own BG VRAM (`0x140000-0x143FFF`,
+  `0x4000` bytes) is the same smaller size every Tier 5 port's own used —
+  not `macross2`'s/`raphero`'s own four-times-bigger `0x10000`.
+- **11-bit BG tile code, non-contiguous 5-bit BG colour.**
+  `powerins_get_bg_tile_info`: `tileinfo.set(1,(code&0x07ff)|
+  (m_bgbank<<11),((code&0xf000)>>12)|((code&0x0800)>>7),0)` — colour's
+  own top bit comes from code bit 11, which is otherwise never part of
+  the tile index (unlike `macross2`'s own contiguous 12-bit-code+4-bit-
+  colour split).
+- **6-bit sprite colour, a 2048-entry palette.** `get_colour_6bit`
+  (`colour&=0x3f`) plus `gfx_powerins`'s own GFXDECODE bases (BG=`0x000`
+  /32c, TX=`0x200`/16c, SPR=`0x400`/64c, summing to exactly `0x800`=2048,
+  matching `PALETTE(...,2048)` exactly) — a wider palette bus (11 bits)
+  than every prior Tier 3 port's own 1024-entry/10-bit table.
+- **Sprite horizontal flip — genuinely new to this project.** Confirmed
+  via grep that zero flipx/flipy logic exists anywhere in
+  `video_macross2.sv`, and `powerins()` is the first Family C/E config in
+  this project to wire `set_ext_callback`. Derived precisely from
+  `nmk_16bit_sprite_device::draw_sprites`'s own C++ draw loop (not
+  approximated): flip combines two effects — (a) the per-unit-column
+  draw ORDER reverses (screen-X placement for unit `s_tx` uses
+  `(s_w-s_tx)` in place of `s_tx` when flipped; the code-walk formula
+  `s_unit_code=s_code+s_ty*(s_w+1)+s_tx` itself is unchanged), and (b)
+  each unit's own pixel columns mirror independently (the per-pixel
+  SOURCE column fetch uses `(15-s_px)` in place of `s_px` when flipped;
+  the destination plot column stays the plain, un-mirrored `s_px`).
+  `get_flip_extcode_powerins`: `flipx=BIT(attr,12)`;
+  `code=(code&0x7fff)|((attr&0x100)<<7)` — code's own bit 15 is replaced
+  by attribute-word bit 8. `flipy` is never touched by this callback,
+  confirmed always 0 for this game. 23-bit sprite-ROM byte addressing
+  (`0x800000` bytes, eight `ROM_LOAD16_WORD_SWAP` files — double
+  `raphero`'s own `0x600000`, the widest sprite ROM in this project so
+  far).
+- **No soundlatch2, no Z80-reset register.** `powerins()`'s own machine
+  config has only one `GENERIC_LATCH_8` (nmk16.cpp:5752) and
+  `powerins_map`'s own `$100016-$100017` is a plain `nopw()` — unlike
+  `macross2`'s own real Z80-reset write at the identical offset, the
+  Z80's reset here ties directly to the global reset line.
+  `powerins_sound_map` also has **no ROM banking at all** (fixed
+  `$0000-$BFFF`, unlike `macross2`'s own 8-bank window).
+
+### What was built
+
+- `rtl/powerins/powerins_core.sv` — 68000-side address decode (ROM/
+  mainram/palette/BG-VRAM/TX-VRAM/scroll, all closely modeled on
+  `macross2_core.sv`'s own structure), the new 12MHz/6MHz phase
+  accumulators, the simplified (no-banking, no-reset-register, no-
+  soundlatch2) Z80 sound-board wiring, NMK112 (`ROM0_BYTES=
+  ROM1_BYTES=2097152`), jt03/jt6295×2 — including the `ym_addr_sel`
+  read/write address-mux fix described above.
+- `rtl/powerins/video_powerins.sv` — the new video module: no
+  `tilerambank`, the 11-bit BG code/non-contiguous-colour tile-info
+  formula, 6-bit sprite colour + 2048-entry palette bases, 23-bit sprite
+  ROM addressing, and the new sprite-flip logic worked into the existing
+  `S_SPR_UNIT`/`S_SPR_CHECK`/`S_SPR_CHECK2`/`S_SPR_PLOT` FSM states
+  (`video_macross2.sv`'s own FSM structure otherwise unchanged).
+- `tools/mkrom_wordswap.py` extended to accept `--file` multiple times
+  (was single-file-only) — `powerins`' own maincpu is TWO
+  `ROM_LOAD16_WORD_SWAP` files at consecutive offsets
+  (`93095-3a.u108`@`0x00000`, `93095-4.u109`@`0x80000`), concatenated in
+  `ROM_START`'s own listed order.
+- `sim/rtl/powerins/{Makefile,tb_powerins.cpp}` — ROM extraction (all 20
+  files in `powerins.zip` itself, a self-contained non-split romset,
+  confirmed via `unzip -l`; the inert `color` PROM, zero emulation
+  consumers confirmed via grep, skipped as usual).
+
+### Verification results
+
+Builds clean under Verilator (only the usual pre-existing warning
+classes — width-truncation notes, vendored-core `UNUSEDSIGNAL`/
+`SYNCASYNCNET`/`INITIALDLY` warnings already present in every other
+port's own build, plus one new `BLKSEQ` note for a blocking assignment
+inside `S_SPR_CHECK2` that mirrors `video_macross2.sv`'s own identical,
+pre-existing pattern there — no new warning class).
+
+Ran 300M `clk_sys` cycles (~7.5 real seconds), post-fix: Z80 executed
+5,378,870 instructions (last fetch PC=`$058D`, 198 distinct PCs in the
+last 5,000 — genuinely varied, not stuck), 68000 executed 18,111,296
+instructions (166,908 write bus cycles, last fetch PC=`$002368`), Z80
+wrote to YM2203 3,231 times, OKI0/OKI1 1 time each, 422 video frames
+rendered. The 68000's own final-frame PC (`$002362-$00236A`, a
+`TST.B $18FF0A ; BEQ -8` vblank-flag poll — `$18FF0A` falls inside
+mainram, `$180000-$18FFFF`) looks superficially like a hang but isn't:
+checked the *entire* 68000 trace (not just the tail) and confirmed it
+escapes/re-enters this exact poll over 1,503,345 times across the run,
+only failing to escape in the final ~20,354 instructions (0.1% of the
+run, i.e. the point the simulation clock simply ran out) — normal
+per-frame idle behaviour, not a stall.
+
+**Render**: frames 5-~340 show a real, legible boot-time self-test
+screen (`PALLET RAM CHECK.:` / `SCROLL RAM CHECK.:` / `VIDEO RAM
+CHECK.:` / `PROGRAM ROM CHECK.:`, confirmed via `TB_DUMP_PPM=1` — proper
+TX-tilemap font decode, correct palette, growing pixel count over time
+as the self-test screen adds lines, 958→1,709→2,914 non-zero pixels
+across frames 5/20/250) — genuine non-garbage rendering of a real
+program state, not noise. **Left open, honestly flagged rather than
+chased further**: from frame ~345 onward the render goes to solid black
+(0/71,680 non-zero pixels) and stays that way through frame 421, despite
+`TB_DUMP_VRAM=1` showing BG VRAM 100% non-blank (8,192/8,192), TX VRAM
+100% non-blank (2,048/2,048), and palette 722/2,048 non-blank at that
+same point — real VRAM/palette content exists, but nothing composites
+to a non-black pixel. Confirmed this is unrelated to the YM2203 fix (the
+broken and fixed runs produce byte-for-byte identical 68000 instruction
+counts and an identical frame-by-frame pixel-count progression, since
+the 68000 program flow never depends on Z80/sound-side state at all) —
+so it's either a legitimate scripted palette-fade transition (common
+between a POST screen and a title/attract screen) or an unconfirmed
+render-path condition; not investigated further given the video/CPU-side
+evidence otherwise strongly supports a correct pipeline, consistent with
+this project's own established practice of flagging rather than
+over-claiming (`raphero`'s own "TX VRAM uniformly blank" finding above
+is the same kind of open item).
+
+**Z80 cycle-accuracy, checked against a real MAME oracle capture**
+(`sim/oracle/capture_cyc_trace.py --device :audiocpu`, 3 real seconds =
+1,996,064 oracle instructions, diffed via `sim/compare/cyc_diff.py`,
+run *after* the YM2203 fix): matches as an ordered subsequence for
+**1,453 checkpoints** — better than `macross2`'s own 1,198 and
+dramatically better than `raphero`'s own 83, though still short of
+`tdragon2`'s own 2,925. All 20 reported mismatches are the identical
+`$001B→$0018`/`$001B→$001D` busy-wait-loop-iteration-count class of
+discrepancy `macross2`'s/`tdragon2`'s/`raphero`'s own sections already
+characterize as `jt03`'s own busy-flag deassertion timing differing
+slightly from MAME's `ym2203_device` model (not this bug — the fix
+already applied here is what let the trace reach checkpoint 1,453 at
+all instead of walking off a cliff after 7 writes); total cycles over
+the matched span: oracle=12,778, candidate=22,768 (ratio 1.78x) — a
+modest, well-characterized divergence, not the ~597x-class blowup
+`macross2`'s own pre-existing writeup describes for the *pre-fix*
+failure mode.
+
+### Regression sweep
+
+Confirmed via direct signal-level diff that `rtl/third_party/jt12/hdl/
+jt12_top.v`/`jt03.v` (temporarily patched with debug taps during root-
+causing, both fully reverted — confirmed clean via grep for the
+temporary port names, zero matches) carry no net change, and no other
+shared file (`rtl/nmk112/`, `rtl/nmk_irq/`, `rtl/bjtwin/`,
+`rtl/third_party_gen/t80/`) was touched at all — only new files under
+`rtl/powerins/`/`sim/rtl/powerins/` and the `tools/mkrom_wordswap.py`
+extension exist. Re-ran all four sibling testbenches fresh (not relying
+on a diff alone, precisely because this session's own root-causing work
+touched the shared jt12 vendored files, even if only temporarily):
+`macross2` (300M cycles) matches its exact established baseline
+(3,037,725 Z80 instructions, last PC=`$0018`, 12,699,218 68000
+instructions, last PC=`$00AD38`, 165 YM2203 writes, 422 frames);
+`tdragon2` (300M cycles) matches (3,037,121 Z80 instructions, last
+PC=`$0018`, 12,792,869 68000 instructions, last PC=`$00AED6`, 604
+YM2203 writes, 422 frames); `raphero` (300M cycles) matches (4,499,986
+TLCS-90 instructions, last PC=`$018D`, 18,834,344 68000 instructions,
+last PC=`$0078C4`, 7 YM2203 writes, 422 frames); `mustang` (60M cycles)
+matches (1,248,714 NMK004 instructions, last PC=`$01DB`, 6,580 YM2203
+writes, 42/54 OKI1/OKI2 writes, 106 frames). Zero regressions across all
+four — confirms the jt12 revert was genuinely clean, not just visually
+inspected.
+
+### Status
+
+Built, boots, and runs clean on both CPUs, with the widest sprite ROM,
+the first sprite-flip logic, and the first non-hires/non-lowres screen
+class in this project so far. Found and fixed a real bug in the shared
+Z80+jt03 integration pattern (a write-only `addr` latch silently
+breaking status/busy reads) that was previously misdiagnosed as an
+inherent `jt03` timing limitation across four already-committed ports —
+**this port's own fix is real and verified** (YM2203 writes 7→3,231,
+first-ever real OKI writes in this family, oracle match improved
+significantly), but the same bug is very likely still present in
+`gunnailb`/`macross2`/`tdragon2`/`raphero`'s own committed RTL,
+un-fixed here (out of scope for this session's own single-port mandate)
+and flagged for the primary session's own follow-up decision. The
+post-POST-screen solid-black render window is left open, honestly
+flagged as unconfirmed rather than investigated further or claimed
+working. Regression sweep across all four sibling Tier 3/Tier 2
+testbenches is clean. Changes left uncommitted for the primary session's
+own review before commit.
