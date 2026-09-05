@@ -4220,3 +4220,219 @@ same already-documented `jt03` busy-flag-timing limitation. **Not yet a
 full oracle match**: left open, not further chased, consistent with
 this project's own established practice. Changes left uncommitted for
 the primary session's own review before commit.
+
+## raphero — Tier 3's third port, TLCS-90 as a bare sound CPU for the first time
+
+`raphero` ("Rapid Hero (NMK)", also released as `arcadian`/"Arcadia
+(NMK)" and `rapheroa`, all sharing the identical `raphero()` machine
+config, `nmk16.cpp:5554-5597`) is Tier 3's third target — bigger in
+scope than `tdragon2`'s own near-verbatim reuse, closer to `macross2`'s
+own scope. Two genuinely new things, both confirmed directly against
+MAME's own source before writing any RTL.
+
+### The one genuinely new thing — TLCS-90 as a bare sound CPU
+
+`raphero()` uses `TMP90841(config,m_audiocpu,XTAL(16'000'000)/2)`
+(nmk16.cpp:5561), not Z80. This is the SAME TLCS-90 core family already
+built for the NMK004 sound-board-MCU role (`rtl/tlcs90/nmk004_core.sv`)
+and the protection-MCU role (`rtl/tlcs90/nmk_prot_core.sv`) — but wired
+here, for the first time, as a bare sound CPU with its own direct
+memory-mapped bus to YM2203/dual-OKI/NMK112
+(`raphero_sound_mem_map`, nmk16.cpp:1134-1145), not through NMK004's
+host-latch handshake or the protection-MCU's shared-RAM scheme.
+
+Confirmed directly from `mame/src/devices/cpu/tlcs90/tlcs90.cpp`:
+`tmp90841_mem()` (lines 80-84) is "rom-less" (no internal boot ROM,
+unlike TMP90840's own 8KB) but uses the IDENTICAL internal 256B RAM
+(`0xFEC0-0xFFBF`) and peripheral register block (`tmp90840_regs()`,
+`0xFFC0-0xFFEF`) as TMP90840 — the SAME register map
+`rtl/tlcs90/nmk004_periph.sv` already implements. **Reused here
+completely unmodified** (`p5/p6/p7_ext_en` tied low for "plain"
+behavior, matching `nmk004_core.sv`'s own instantiation pattern
+exactly) — no new peripheral block was needed. YM2203's own IRQ (MAME's
+`ymsnd.irq_handler().set_inputline(m_audiocpu,0)`, nmk16.cpp:5580) maps
+to INT0 = `irq_req` bit 0 per `nmk004_periph.sv`'s own documented bit
+ordering, OR'd in exactly like `nmk004_core.sv`'s own `irq_req_to_cpu`
+pattern.
+
+A subtlety the delegation brief itself didn't spell out, found by
+reading `tlcs90.cpp` directly: `raphero_sound_mem_map`'s own
+`map(0xe000,0xffff).ram()` declaration does NOT mean the whole
+`0x2000`-byte range is external RAM. The TLCS-90 device's own fixed
+internal memory map (`tmp90841_mem()`, installed on the CPU's own
+internal address space) intercepts `0xFEC0-0xFFBF` and `0xFFC0-0xFFEF`
+before MAME's own board-level driver map ever sees those addresses —
+same reasoning `nmk004_core.sv`'s own header already documents for
+NMK004's case, just not previously stated for a bare-sound-CPU board.
+So the real external RAM only backs `0xE000-0xFEBF` (7,872 bytes);
+`raphero_core.sv` implements this as two separate arrays
+(`snd_ext_ram`/`snd_int_ram`) rather than trusting the literal
+`ROM_START` text. Also confirmed: `raphero_map`'s own
+`map(0x100016,0x100017).nopw()` (nmk16.cpp:1122, "IRQ enable or z80
+sound reset like in Macross 2?") is a genuine no-op here — unlike
+`macross2`'s/`tdragon2`'s own sound-reset at the identical address,
+`raphero`'s TLCS-90 has no software-triggered reset from the 68000 at
+all; it just runs continuously off the shared global reset.
+
+Clock: 68000 at `XTAL(14'000'000)`=14MHz — a genuinely new ratio (every
+prior Tier 3 port used 10MHz). From 40MHz `clk_sys`:
+`increment=7,modulus=20` (40MHz*7/20=14MHz exact), the same phase-
+accumulator "wrap fires enPhi1, defer one enPhi2 to the very next
+non-wrap cycle" technique `tdragon2_core.sv`/`strahljbl_core.sv` already
+use — verified by direct simulation that the minimum gap between
+consecutive `enPhi1` pulses is 2 cycles (never 1), so strict
+`enPhi1`/`enPhi2` alternation holds with zero violations across the
+whole repeating 20-cycle pattern. TLCS-90 at `XTAL(16'000'000)/2`=8MHz —
+unlike T80s/jt03/jt6295 (`clk`=full-rate `clk_sys` + a separate `cen`),
+`tlcs90.sv`/`nmk004_periph.sv` need a REAL divided clock edge on their
+own `clk` port (confirmed directly from `rtl/mustang/mustang_core.sv`'s
+own `.clk(nmk004_clk_r)` wiring) — implemented as a clean `clk_sys/5`
+divide (one rising edge every 5 `clk_sys` cycles).
+
+NMK112: instantiated with `ROM0_BYTES=ROM1_BYTES=4194304` (raphero's
+own oki1/oki2 are each `0x400000` bytes — double `tdragon2`'s own oki1,
+quadruple `macross2`'s own oki2). Verified this sits exactly at, not
+past, `nmk112.sv`'s own 22-bit output-width boundary (page 63 << 16 =
+`0x3F0000`, the largest representable page before truncation, with zero
+slack) — confirmed by direct calculation, not assumed safe by
+resemblance to a smaller prior case.
+
+Video is a genuine hybrid — see `rtl/raphero/video_raphero.sv`'s own
+header for the full derivation: per-scanline raster X+Y scroll reused
+from `video_gunnail.sv`'s own already-solved approach, and `tilerambank`
+BG-VRAM banking reused from `video_macross2.sv`'s own already-solved
+approach, re-sourced from a 16-bit word register's bits `[13:12]`
+instead of `video_macross2.sv`'s own 8-bit byte register bits `[5:4]`
+(verified independently against `nmk16_v.cpp:295-311`'s own
+`raphero_scroll_w`, not pattern-matched from the byte-register bit
+positions). The sprite ROM (`0x600000` bytes, three
+`ROM_LOAD16_WORD_SWAP` files) is wider than any prior port's own —
+23-bit byte addressing, versus `macross2`'s own 22-bit `0x400000`.
+
+### What was built
+
+- `rtl/raphero/raphero_core.sv` — 68000-side address decode
+  (ROM/mainram/palette/BG-VRAM/TX-VRAM/scrollram/scrollramy/a plain
+  unnamed `0x400`-byte RAM block at `0x130400-0x1307FF` with no named
+  purpose in the reference, implemented faithfully as inert storage),
+  the mainram address-line swap (identical formula to
+  `tdragon2_core.sv`'s own, video tap deliberately left unswapped), the
+  new TLCS-90 external bus decode (`raphero_sound_mem_map`), NMK112, jt03
+  (YM2203), jt6295 x2 (OKI), and `nmk004_periph.sv` reused unmodified
+  with every override tied inert.
+- `rtl/raphero/video_raphero.sv` — the new hybrid video module described
+  above.
+- `sim/rtl/raphero/{Makefile,tb_raphero.cpp}` — ROM extraction (raphero
+  is a clone of `arcadian`, its own `GAME()` parent field; this local
+  dump's split-romset convention means most regions live in
+  `arcadian.zip` under the same member names, not `raphero.zip` itself —
+  confirmed via `unzip -l`, both zips passed to every `mkgfxrom.py` call).
+  A real trap handled correctly: `rhp94099.6` is byte-identical (CRC
+  `f1a80e5a`) between oki1's own first file and oki2's own second file —
+  extracted independently per each region's own `ROM_LOAD` order, not
+  deduplicated. `color` (`prom3.u60`) skipped entirely (zero consumers
+  in the emulation, matching every prior port). TLCS-90 PC/cycle tracking
+  uses `dbg_snd_pc`/`dbg_snd_valid` (tlcs90.sv's own direct debug pins,
+  the same rising-edge-of-`dbg_valid` technique
+  `sim/rtl/mustang/tb_mustang.cpp`'s own `dbg_nmk004_valid` tracking
+  already established) rather than T80s.v's own M1_n-edge trick.
+
+### Verification results
+
+Builds clean under Verilator (only the usual pre-existing warning classes
+— width-truncation/expansion notes and vendored-core `UNUSEDSIGNAL`/
+`SYNCASYNCNET` warnings already present in every other port's own build,
+no new warning class). One real build-time bug found and fixed before
+this: `video_timing.sv` was missing from the `Makefile`'s own `SOURCES`
+list (copy-paste gap versus `tdragon2`'s own Makefile, which pulls it
+from `BJTWIN_DIR`) — caught immediately as a "cannot find module"
+Verilator error, not a silent gap.
+
+Ran 300M `clk_sys` cycles (~7.5 real seconds): 68000 executed 18,834,344
+instructions (last fetch PC=`$0078C4`, 484,412 write bus cycles),
+TLCS-90 executed 4,499,986 instructions (last fetch PC=`$018D`), 7
+YM2203 writes, 0 OKI0/OKI1 writes, 422 video frames rendered with real
+CRC variety (no single frame CRC dominates — the most common of 423
+lines appears 50 times, the rest are much rarer), not a frozen/garbage
+image. `TB_DUMP_VRAM=1`: palette 793/1,024 (77.4%) non-blank, BG VRAM
+6,750/32,768 (20.6%) non-blank, **TX VRAM 0/2,048 non-blank** (every
+entry reads exactly the "space" tile code `0x0020` — i.e. actively
+cleared by the program, not simply zero-initialized-and-never-touched;
+left open as a benign, unconfirmed "hasn't reached score-digit rendering
+yet in this window" explanation rather than investigated further, same
+honesty bar `tdragon2`'s section above applies to its own lower render
+percentage), 23,212/86,016 (27.0%) rendered pixels non-zero — a real,
+non-garbage render.
+
+**TLCS-90 cycle-accuracy, checked against a real MAME oracle capture**
+(`sim/oracle/capture_cyc_trace.py --device :audiocpu`, 3 real seconds =
+2,270,728 oracle instructions, diffed via `sim/compare/cyc_diff.py`):
+this is the first TLCS-90-based sound-CPU oracle comparison outside its
+NMK004/protection-MCU roles. The PC sequence matches as an ordered
+subsequence for only **83 checkpoints** before the oracle moves on to a
+PC (`$0194`) the candidate trace never reaches again — clearly weaker
+than either `macross2`'s own (1,198) or `tdragon2`'s own (2,925), but
+for a well-characterized reason, not a mystery: **disassembled the
+actual divergence site directly against the extracted ROM** (bytes at
+`$018D-$0192`: `E3 00 C0 2E` / `A0` / `C7`). `tlcs90.sv`'s own opcode
+table (line 507) confirms `E3` decodes as `PFX_MN_SRC` — a
+memory-direct-source-operand prefix — with the following two bytes
+(`00 C0`) forming the 16-bit address `0xC000`, exactly YM2203's own
+status/address port; `C7` falls in the `0xC0-0xCF` range `tlcs90.sv`'s
+own cycle table gives a `taken ? X : Y` cost split (i.e. a conditional
+branch). This is the exact same YM2203 busy-flag polling idiom
+`macross2`'s/`tdragon2`'s own reviews already characterized as a `jt03`
+busy-flag-timing limitation, recurring here — confirmed by disassembly,
+not assumed from a coincidentally-matching PC address (`raphero`'s own
+audiocpu ROM is an entirely different file from either prior port's own
+Z80 program). Of the 82 matched cycle-cost deltas, 2 differ (first at
+checkpoint 56, both instances of the candidate looping extra iterations
+inside the busy-wait before the oracle's own timing lets it escape
+sooner); total cycles over the matched span: oracle=1,244,
+candidate=2,092 (ratio 1.682x). Because the TLCS-90 falls into this
+wait loop within its own first ~70 instructions and never durably
+escapes it in this run (spending 3,332,873 of its 4,499,986 total
+instructions across the loop's own three PCs), **NMK112 was very likely
+not exercised through a real register write in this run either** —
+flagged honestly as unconfirmed rather than claimed verified, the same
+disclosure `macross2`'s own section above already established the
+convention for.
+
+### Regression sweep
+
+Confirmed via `git status --short`/`git diff --stat` that no tracked
+file under `rtl/macross2/`, `rtl/tdragon2/`, `rtl/nmk112/`,
+`rtl/nmk_irq/`, `rtl/tlcs90/`, `rtl/bjtwin/`, or the vendored `jt12`/
+`jt6295` directories has any change at all — only new files under
+`rtl/raphero/`/`sim/rtl/raphero/` exist. Re-ran three testbenches fresh
+(not relying on the diff alone): `macross2`'s own (300M cycles) matches
+its exact established baseline (3,037,725 Z80 instructions, last
+PC=`$0018`, 12,699,218 68000 instructions, last PC=`$00AD38`, 165
+YM2203 writes, 422 frames); `tdragon2`'s own (300M cycles) likewise
+matches (604 YM2203 writes, last Z80 PC=`$0018`, 422 frames);
+`mustang`'s own (60M cycles) matches too (NMK004 1,248,714 instructions,
+last PC=`$01DB`, 6,580 YM2203 writes, 42/54 OKI1/OKI2 writes, 106
+frames) — confirming `tlcs90.sv`/`nmk004_periph.sv` are genuinely
+unmodified in practice, not just by diff. Zero regressions across all
+three.
+
+### Status
+
+Built, boots, and runs clean on both CPUs. `nmk004_periph.sv` reused as
+a bare-sound-CPU peripheral block for the first time with zero
+modification, and the internal-SFR-address-carve-out subtlety (real
+external RAM ends at `0xFEBF`, not the literal `0xFFFF` the board-level
+map's own text suggests) was found and correctly handled by direct
+`tlcs90.cpp` source inspection before it could silently corrupt the
+internal-RAM/peripheral-register split. `video_raphero.sv`'s own hybrid
+(gunnail's per-scanline scroll + macross2's tilerambank, re-sourced from
+new word-register bit positions) renders real, varied, non-garbage
+frames. The TLCS-90 oracle comparison reaches fewer checkpoints than
+either prior Tier 3 port's own Z80 comparison, but for the identical,
+already-documented `jt03` busy-flag-timing reason, confirmed by direct
+disassembly rather than assumed — **not a new bug in this port's own
+RTL**. TX VRAM reading uniformly blank and NMK112 going unexercised in
+this run are both left open, honestly flagged as unconfirmed rather
+than chased further or claimed working, consistent with this project's
+own established practice. Changes left uncommitted for the primary
+session's own review before commit.
