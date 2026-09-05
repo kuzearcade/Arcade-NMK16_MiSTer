@@ -4093,3 +4093,130 @@ ruled out directly rather than left unexamined, but the underlying `jt03`
 timing gap itself remains open, consistent with this project's own
 established practice for this class of finding. Changes left uncommitted
 for the primary session's own review before commit.
+
+## tdragon2 — Tier 3's second port, an unusually direct reuse of macross2's own
+
+`tdragon2` ("Thunder Dragon 2 (9th Nov. 1993)") is Tier 3's second
+target. `tdragon2()`'s own machine config (`nmk16.cpp:5490-5533`) is
+confirmed **byte-for-byte identical** to `macross2()`'s own in every
+respect — same 68000/Z80 clocks, the literal same `macross2_sound_map`/
+`macross2_sound_io_map` functions (not just the same shape),
+`gfx_macross2`, and `MCFG_VIDEO_START_OVERRIDE(nmk16_state, macross2)`
+(the identical video-start function name — not a new one). This means
+**`rtl/macross2/video_macross2.sv` and `rtl/nmk112/nmk112.sv` are both
+reused completely unmodified** — not even a new derivative file this
+time, referenced directly (confirmed via `git diff --stat` on both
+directories showing zero changes).
+
+### The one genuinely new thing — and a subtlety the delegation brief itself missed
+
+`tdragon2_map` (`nmk16.cpp:1100-1104`) is `macross2_map(map)` plus one
+override: `mainram_swapped_r`/`_w` (`nmk16.cpp:280-288`) apply
+`bitswap<16>(offset,15,14,13,12,11,7,9,8,10,6,5,4,3,2,1,0)` to the WORD
+OFFSET before indexing `m_mainram` — a real PCB address-line miswiring
+(only bits 7 and 10 are actually swapped with each other; every other
+bit passes through unchanged, verified independently rather than trusted
+from the bit-list alone), faithfully replicated, not a data-bit scramble.
+
+**Verifying this against the reference surfaced something the primary
+session's own delegation brief did not anticipate**: this swap applies
+ONLY to the 68000 CPU-facing bus handler, not to MAME's own sprite-DMA
+snapshot mechanism. `sprite_dma()` (`nmk16.cpp:4518-4524` — the same
+shared function every game in this driver uses, tdragon2 included) does
+a raw C++ `memcpy(m_spriteram_old.get(), m_mainram + m_sprdma_base/2,
+0x1000)`, bypassing MAME's own address-map dispatch entirely (a direct
+pointer read of the array member, not a call through the swapped
+handler). `video_macross2.sv`'s own `mainram_addr`/`mainram_data` tap
+(already existing, unmodified, used for exactly this sprite-snapshot
+mechanism — see that module's own body) therefore had to stay
+**unswapped**, reading the same raw array the CPU-facing accessor
+indexes into. Getting this backwards (swapping both paths, or neither)
+would have silently corrupted sprite draw order without necessarily
+breaking anything else visible in a quick render check — implemented
+correctly in `rtl/tdragon2/tdragon2_core.sv` (the CPU-facing
+`mainram_addr_cpu` computation is the only address affected; the
+existing `vid_mainram_addr` tap is untouched).
+
+The only other real difference: tdragon2's own `oki2` ROM
+(`ww930915.3`) is `0x200000` bytes — double macross2's own `oki2`
+(`0x100000`) — while `oki1` stays the same `0x200000` both games share.
+`nmk112`'s own `ROM1_BYTES` parameter and the backing array/addressing
+width were sized accordingly (confirmed via the actual extracted ROM's
+own byte count, `2097152`, matching the source exactly).
+
+### What was built
+
+- **`rtl/tdragon2/tdragon2_core.sv`** (new system top-level, closely
+  derived from `macross2_core.sv`): identical clock/address-decode/
+  sound-path/video-pipeline wiring, with the mainram address-swap
+  (CPU-facing path only) and the `oki2`/`ROM1_BYTES` size difference
+  described above as the only real changes.
+- **`sim/rtl/tdragon2/{Makefile,tb_tdragon2.cpp}`** (new) — same
+  structure as macross2's own testbench; ROM extraction reuses
+  `tools/mkrom_wordswap.py` (maincpu, single `ROM_LOAD16_WORD_SWAP`
+  file) and `tools/mkgfxrom.py` (everything else) unchanged.
+
+### Verification results
+
+Full 300M-`clk_sys`-cycle (40MHz) run: Z80 executed 3,037,121
+instructions (last fetch PC=`$0018`), 68000 executed 12,792,869
+instructions (674,675 write bus cycles, last fetch PC=`$00AED6`), Z80
+wrote to YM2203 604 times (real sound-side activity, well above
+macross2's own 165), OKI0/OKI1 writes: 0 each — same input-idle
+NMK112-not-exercised caveat as macross2's own run, flagged honestly
+rather than claimed verified.
+
+**Pixel/VRAM sanity**: palette 181/1,024 non-blank, BG VRAM 256/32,768
+non-blank, TX VRAM 1,536/2,048 (75%) non-blank, and 14,692/86,016
+(17.1%) rendered pixels non-zero — a real, TX-heavy (consistent with a
+title/attract-text screen), non-garbage render. Lower overall
+non-zero-pixel percentage than macross2's own (59.5%) but not a red
+flag on its own — different game content at a different point in its
+own boot sequence, and the much higher TX-vs-BG population ratio here
+is internally consistent with that explanation rather than looking like
+scrambled/garbage output.
+
+**Z80 cycle-accuracy, checked against a real MAME oracle capture**
+(`sim/oracle/capture_cyc_trace.py --device :audiocpu`, 3 real seconds ≈
+1,390,341 oracle instructions, diffed via `sim/compare/cyc_diff.py`):
+the PC sequence matches as an ordered subsequence for the first
+**2,925 checkpoints** — better than macross2's own 1,198 — with
+478/2,924 matched instruction cycle-costs differing (candidate/oracle
+total-cycle ratio ~234x over the matched span). **Disassembled the
+actual divergence site directly against the extracted ROM** (bytes at
+`$0018-$001D`: `DB 00` / `07` / `38 FB` / `C9`, decoding to `IN A,(0)` /
+`RLCA` / `JR C,$0018` / `RET`) — the exact same YM2203 busy-flag polling
+idiom macross2's own divergence hit, confirmed by disassembly rather
+than assumed from the coincidentally-matching PC address alone (the two
+games' own audiocpu ROMs are entirely different files). Same underlying
+`jt03` busy-flag-timing limitation `gunnailb`'s and `macross2`'s own
+reviews already characterized, recurring here (hit repeatedly through
+this game's own longer boot sequence, hence the higher mismatch count),
+not a new bug in this port's own RTL.
+
+### Regression sweep
+
+Confirmed via `git diff --stat` that no file under `rtl/macross2/`,
+`rtl/nmk112/`, `rtl/nmk_irq/`, `rtl/third_party_gen/`, or the vendored
+`jt12`/`jt6295` directories has any changes at all — this port only
+added new files under `rtl/tdragon2/`/`sim/rtl/tdragon2/`. Re-ran
+`macross2`'s own testbench fresh (300M cycles) as a real confirmatory
+run rather than relying on the diff alone: matches its own
+already-established baseline exactly (3,037,725 Z80 instructions, last
+PC=`$0018`, 12,699,218 68000 instructions, last PC=`$00AD38`, 165
+YM2203 writes, 422 frames) — zero regression.
+
+### Status
+
+Built, boots, and runs clean on both CPUs, reusing `video_macross2.sv`/
+`nmk112.sv` completely unmodified. Found and correctly implemented a
+real, non-obvious subtlety the delegation brief itself didn't
+anticipate — the mainram address-swap applies only to the CPU-facing
+bus path, not the sprite-DMA-snapshot video tap, which needed to stay
+reading the same raw array MAME's own `sprite_dma()` does. The Z80 core
+gets a sixth independent partial confirmation against a real MAME
+oracle capture, reaching further than macross2's own before hitting the
+same already-documented `jt03` busy-flag-timing limitation. **Not yet a
+full oracle match**: left open, not further chased, consistent with
+this project's own established practice. Changes left uncommitted for
+the primary session's own review before commit.
