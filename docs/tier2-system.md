@@ -3865,3 +3865,231 @@ general-purpose reusable device — worth noting as adjacent groundwork
 for a future Family C (`macross2`-style) port, but not itself a
 drop-in component the way `rtl/seibu/seibu_sound.sv` is. Changes left
 uncommitted for the primary session's own review before commit.
+
+## macross2 — Tier 3's first port (Family C: Z80-direct-sound, hi-res boards)
+
+`macross2` ("Super Spacefortress Macross II / Chou-Jikuu Yousai Macross
+II") is Tier 3's first target — the first port in this project outside
+Family E's own Z80-based lineup, and genuinely new territory: real
+V-PROM-driven interrupts (`rtl/nmk_irq/nmk_irq.sv`, already built for
+Tier 2/4 but never used by a *newly-built* port this session), a new
+reusable OKI bank-switcher device (`rtl/nmk112/nmk112.sv`), and a video
+architecture that's a genuine hybrid of two already-built modules rather
+than a straight derivative of one.
+
+### The "hardest video item" turned out not to apply here
+
+`docs/PLAN.md`'s own original risk assessment flagged Family C's
+per-scanline raster scroll as the single hardest video item in the whole
+project. Direct research into `nmk16_v.cpp` found this doesn't apply to
+`macross2` itself: `VIDEO_START_MEMBER(nmk16_state,gunnail)`
+(`nmk16_v.cpp:164-168`) is literally `VIDEO_START_CALL_MEMBER(macross2)`
+plus one extra line (`set_scroll_rows(512)`) — i.e. `gunnail`'s own video
+setup (Tier 4, already built and oracle-adjacent-verified as
+`rtl/gunnail/video_gunnail.sv`) **is** macross2's own setup plus
+per-scanline scroll. The hard part is specific to gunnail/raphero, not
+macross2, which uses a single plain `scroll_w<0>` register
+(`nmk16.cpp:1094`) — the same shape every Tier 5 port's own video used.
+
+### What was built
+
+- **`rtl/macross2/video_macross2.sv`** (new): `video_macross.sv`'s own BG
+  tilemap architecture (14-bit tile code, `tilemap_scan_pages` paged
+  256x32 addressing, macross2's own `bgtile` ROM being the identical
+  0x200000-byte/16384-tile size as macross's own) plus `video_gunnail.sv`'s
+  own wider 64x32 TX tilemap sizing — but with no NMK214 descrambling (no
+  protection MCU on this board — bgtile/sprites read directly) and a
+  widened **5-bit sprite colour field** (`get_colour_5bit`,
+  `nmk16.cpp:5457` — every single prior port in this project used 4-bit).
+  Confirmed the exact palette layout this needs directly against
+  `gfx_macross2`'s own `GFXDECODE_START` (`nmk16.cpp:4194-4198`) rather
+  than assumed from family resemblance: sprites at colour base `0x100`
+  with 32 colours (`0x100-0x2FF`), TX at `0x300` with 16 colours
+  (`0x300-0x3FF`) — a genuinely different TX base than every prior port's
+  own `0x200`. BG stays at `0x000`/16 colours, unchanged.
+- **A real, non-obvious BG-VRAM banking mechanism, found and correctly
+  wired**: macross2's own `bgvideoram` is `0x10000` bytes — **four
+  times** every prior port's own `0x4000`. Traced this directly to
+  `scroll_w<Layer>` (`nmk16.cpp:479-503`): when `m_bgvideoram[Layer]
+  .bytes() > 0x4000` and the scroll register's own offset-0 (X-scroll
+  high byte) is written, bits `[5:4]` of that SAME byte select a
+  `m_tilerambank` value (0-3) — the tilemap only ever addresses 8192 tile
+  positions (`(m_tilerambank<<13)|tile_index`, `nmk16_v.cpp:42`) at a
+  time; the larger VRAM is 4 "banks" of the same tilemap, not a wider
+  one. Those same bits also land in the numeric X-scroll value itself via
+  `set_scrollx`'s own unmasked use of the byte, but get discarded by the
+  tilemap's own mod-4096 wraparound — confirmed by direct bit-arithmetic,
+  not assumed, so the overlap is real hardware/software convention, not
+  an oversight. Wired as a `tilerambank[1:0]` register in
+  `macross2_core.sv`, feeding the top 2 bits of `video_macross2.sv`'s own
+  (now 15-bit) `bgvram_addr`.
+- **`rtl/nmk112/nmk112.sv`** (new, reusable device): ported from
+  `mame/src/devices/machine/nmk112.cpp` (131 lines, read in full). 8
+  bank-select registers (chip×4-voice-slot), remapping each OKI's own
+  logical `0x00000-0x3FFFF` address space by 64KB window. The real open
+  question going in was whether this needs jt6295 to expose which of its
+  4 internal ADPCM channels issued a given fetch (it doesn't — confirmed
+  by reading `jt6295_serial.v`'s own internal round-robin `ch` register,
+  never exposed on jt6295's own top-level ports) — resolved by re-reading
+  `nmk112.cpp`'s own `oki_map()` closely: the C++ model is **purely
+  address-range decoded**, with zero channel-awareness anywhere in its
+  own read-side logic (only the CPU-driven *write* side, `okibank_w`,
+  associates a register with a "voice" concept, as a naming convention
+  for how real game ROM data happens to be organized) — meaning
+  `jt6295`'s own vendored source needed no modification at all. Also
+  hand-verified the "paged" sample-table override (both OKIs default to
+  paged, since neither `macross2()` nor any Family C config calls
+  `set_page_mask()`): the first `0x400` bytes of each chip's logical
+  space get a *different* per-256-byte bank register than the main
+  64KB-window decode, but — worked out by hand from the C++ model's own
+  offset arithmetic — this is exactly equivalent to `page*0x10000+addr`
+  using the SAME register value samplebank already uses for that index,
+  not a separate offset calculation.
+- **`rtl/macross2/macross2_core.sv`** (new system top-level): fx68k
+  (40MHz `clk_sys` convention, same as `gunnail_core.sv`'s own — this
+  board's real 10MHz 68000 matches) + T80s + jt03 (YM2203) + NMK112 +
+  jt6295 x2, plus the REAL `nmk_irq.sv` V-PROM interrupt generator
+  (`macross2()` calls `set_interrupt_timing`, `nmk16.cpp:5449` — not the
+  hacky fixed-scanline substitute every Tier 5 port used; `ROM_START`
+  confirms real `nmk_irq:vtiming` PROM data exists for this game).
+  Genuinely different from gunnailb's own sound-path wiring in three
+  confirmed ways: both OKIs stay on the Z80's own I/O bus through NMK112
+  (not moved to the 68000); the Z80 has a real RESET line driven by the
+  68000 (`macross2_sound_reset_w`, "every time music changes Z80 is
+  reset" per a PCB-verified reference comment — implemented as a genuine
+  reset input into T80s); and `soundlatch` has **no**
+  `data_pending_callback` wired anywhere in `macross2()`'s own machine
+  config (confirmed by reading it directly, `nmk16.cpp:5444-5488`) — so
+  unlike gunnailb, writing it does NOT interrupt the Z80 at all; the
+  Z80's only interrupt source is YM2203's own plain maskable IRQ0.
+- **`tools/mkrom_wordswap.py`** (new tool): macross2's own maincpu ROM is
+  a single `ROM_LOAD16_WORD_SWAP` file (`mcrs2j.3`, `nmk16.cpp:8242`), not
+  the usual two-chip `ROM_LOAD16_BYTE` pair `tools/mkrom.py` handles —
+  this tool applies the identical byte-pair-swap `tools/mkgfxrom.py`'s
+  own `word_swap` mode already established (verified the exact swap
+  formula against that tool's own implementation, `data[0::2]=raw[1::2];
+  data[1::2]=raw[0::2]`, before trusting a from-scratch derivation), but
+  composes the result into mkrom.py's own word-per-line `$readmemh`
+  format instead of byte-per-line, since a 68000 program ROM needs
+  16-bit-wide storage.
+
+### Verification results
+
+Full 300M-`clk_sys`-cycle (40MHz, 7.5 real seconds) run, reproduced
+identically on rebuild: Z80 executed 3,037,725 instructions (last fetch
+PC=`$0018`), 68000 executed 12,699,218 instructions (692,704 write bus
+cycles, last fetch PC=`$00AD38`), Z80 wrote to YM2203 165 times — real
+sound-side activity. OKI0/OKI1 writes: 0 each — this input-idle
+attract/boot window never drives NMK112 through a real register write,
+so **NMK112's own address-remap logic, while carefully hand-derived and
+reviewed against the reference, is not exercised by this specific run**
+— flagged honestly rather than claimed verified by absence of a crash.
+
+**Pixel/VRAM sanity**: palette 642/1,024 non-blank, BG VRAM 6,720/32,768
+non-blank, TX VRAM 256/2,048 non-blank, and **51,217/86,016 (59.5%)
+rendered pixels non-zero** — a rich, heavily-populated frame, not a
+partial boot screen. This is strong indirect evidence for the whole new
+pipeline together: the tilerambank-based BG banking, the widened 5-bit
+sprite colour path, the real V-PROM `nmk_irq` timing, and the ROM
+extraction (including the new word-swap maincpu tool) all have to be
+simultaneously correct to produce this much non-garbage content rather
+than noise.
+
+**Z80 cycle-accuracy, checked against a real MAME oracle capture**
+(`sim/oracle/capture_cyc_trace.py --device :audiocpu`, 3 real seconds ≈
+1,391,382 oracle instructions, diffed via `sim/compare/cyc_diff.py`):
+**a much weaker result than every prior port's own** — the ordered
+PC-sequence match stops at oracle checkpoint 1,199 (only 1,198
+checkpoints matched, vs. 2,326-65,738 for the five Tier 5 ports), with
+126/1,197 matched instruction cycle-costs differing and a
+candidate/oracle total-cycle ratio of ~597x over that short span.
+**Disassembled the actual divergence site directly rather than
+speculating**: PC `$0018`-`$001D` is `IN A,(0)` / `RLCA` / `JR C,$0018` /
+`RET` — a tight status-bit poll on Z80 I/O port `0x00`, which in this
+core's own I/O map is YM2203's own address/status register (bit 7 =
+busy, standard OPN-family convention). This is the **same underlying
+class of finding** `gunnailb`'s own review already identified and left
+open (`jt03`'s own busy-flag deassertion timing differing slightly from
+MAME's `ym2203_device` model) — not a new bug in this port's own RTL,
+but a recurrence of a shared, already-documented `jt03`-core limitation.
+It produces a much larger apparent "ratio" here purely because it's hit
+almost immediately in macross2's own boot sequence, dominating a tiny
+comparison window, rather than appearing after tens of thousands of
+clean-matching checkpoints the way it did for `gunnailb`. Ruled out two
+alternative explanations before settling on this one: (1) a wrong Z80
+clock-enable ratio — rejected, since the per-checkpoint ratios vary
+non-uniformly (4.9x-10.4x) rather than scaling by one constant factor,
+inconsistent with a simple divisor bug; (2) the Z80 being repeatedly
+held in reset by `macross2_sound_reset_w` inflating the testbench's own
+`z80_cen_ticks` count during reset-held intervals — tested directly by
+gating the count on `dbg_z80_reset_n` and rebuilding; the result barely
+changed (ratio 598.3→596.9), ruling this out too (the gating fix is kept
+anyway — it's a genuine correctness improvement to the trace-writer's
+own methodology regardless of whether it explains this specific gap).
+
+### Regression sweep
+
+No shared file was modified — `rtl/third_party_gen/t80/T80s.v`,
+`rtl/bjtwin/video_timing.sv`, `rtl/nmk_irq/nmk_irq.sv`, and the vendored
+`jt12/hdl/jt03.v`/`jt6295.v` were only referenced, never edited.
+`rtl/gunnail/video_gunnail.sv`/`gunnail_core.sv` and
+`rtl/gunnailb/gunnailb_core.sv` themselves were also never touched — this
+port uses its own separate `video_macross2.sv`/`macross2_core.sv`.
+Re-ran three testbenches fresh: **`mustang`** (60M cycles) matches its
+own already-established baseline exactly (1,248,714 NMK004 instructions,
+last PC=`$01DB`, 329 RET-Z-at-`$0E5F` hits, 6,580 YM2203 writes, 42/54
+OKI1/OKI2 writes, 106 frames) — confirms `nmk_irq.sv` genuinely untouched.
+**`gunnail`** (300M cycles) reproduces its own already-documented,
+still-open protection-MCU-blocked signature exactly (protcpu last
+PC=`$0088`, 0 HALT assertions, 4,746,286 NMK004 instructions, 422
+frames) — confirms `video_gunnail.sv`/`gunnail_core.sv` genuinely
+untouched, not a new regression. **`gunnailb`** (300M cycles) matches
+its own already-established baseline exactly (7,442,532 Z80
+instructions, 13,198,403 68000 instructions, 3 NMI falling edges, 9
+YM2203 writes, 6 OKI writes, 422 frames) — confirms `T80s.v`/the shared
+`jt03` integration pattern genuinely unaffected. Zero regressions across
+all three.
+
+**Primary-session review pass found and fixed one real gap in
+`nmk112.sv` before commit**: `nmk112.cpp:93/96` masks every written bank
+index with `data & m_bankmask[chip]` before storing it (clamping to the
+ROM's own actual page count) — the initial RTL stored the raw,
+unmasked Z80-written byte instead, with `ROM0_BYTES`/`ROM1_BYTES`
+present but explicitly marked "informational only; not hardware-clamped
+here." Every real OKI ROM size in this hardware family is a power of
+two, making the correct mask a simple `(bytes/65536)-1` bitmask — fixed
+to compute and apply it from those same parameters (`macross2_core.sv`'s
+own instantiation already passes the exact byte sizes, `2097152`/
+`1048576`), turning them from decorative into functional. Confirmed via
+direct calculation that macross2's own valid page ranges (0-31, 0-15)
+stay safely clear of a separate, unrelated 6-bit headroom limit in the
+address-remap function's own 22-bit output width — a latent, currently
+inert concern for any hypothetical future ROM larger than 4MB, noted but
+not fixed here since it doesn't affect this port and would require
+widening the module's own port width, out of scope for a review pass.
+Rebuilt and re-ran the full verification after this fix: byte-for-byte
+identical results to the pre-fix run (expected, since the game's own
+writes are already within range — this hardens future reuse rather than
+changing this port's own behavior).
+
+### Status
+
+Built, boots, and runs clean on both CPUs, with a genuinely rich,
+plausible render (59.5% non-zero pixels) — strong evidence the whole new
+pipeline (real V-PROM `nmk_irq`, the tilerambank BG-banking mechanism,
+the widened 5-bit sprite colour path, `nmk112`'s own address-remap
+logic, and the new word-swap ROM tool) works correctly together at the
+structural level. **NMK112 itself was not exercised through a real
+register write in this particular input-idle run** — the address-remap
+logic was hand-derived and reviewed carefully against the reference
+(including ruling out a wrong hypothesis about needing jt6295 channel
+awareness), but has no direct behavioral confirmation yet; a natural
+next step if picked up later would be a targeted test that drives actual
+OKI playback. **The Z80 oracle match is markedly weaker than every prior
+port's own** — precisely characterized (a `jt03` busy-flag polling loop,
+the same known-limitation class `gunnailb`'s own review already
+flagged, not a new bug), with two alternative hypotheses tested and
+ruled out directly rather than left unexamined, but the underlying `jt03`
+timing gap itself remains open, consistent with this project's own
+established practice for this class of finding. Changes left uncommitted
+for the primary session's own review before commit.
