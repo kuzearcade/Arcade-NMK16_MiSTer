@@ -390,28 +390,42 @@ module tdragon2_core #(
 		{byte_addr[15:12], byte_addr[8], byte_addr[10:9], byte_addr[11], byte_addr[7:1]};
 	reg [15:0] mainram_dout;
 	reg        mainram_ready;
-	always @(posedge clk_sys) begin
-		if (sel_mainram & cpu_write) begin
-			if (~UDSn) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
-			if (~LDSn) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
-		end
-	end
-	// HW_ROMS=1 only: registered (synchronous) CPU-side read — required
-	// for Quartus to infer real block RAM instead of ~524K flip-flops
-	// (32768 x 16); see the sprite-plane fix in video_macross2.sv for the
-	// full story on why an async read of an array this size explodes at
-	// synthesis. mainram_ready holds DTACKn off for the one extra
+	// HW_ROMS=1 only: registered (synchronous) CPU-side read, AND the
+	// write folded into the SAME always block as that read (one port,
+	// one address, matching idiom to sprite_plane's own working fix) —
+	// required for Quartus to infer real block RAM instead of ~524K
+	// flip-flops (32768 x 16). Confirmed directly: keeping the write in
+	// its own separate always block (a 3rd independent array access
+	// alongside this CPU-read port and the video-read port below) left
+	// Quartus not even attempting RAM inference for mainram at all — no
+	// "uninferred" diagnostic, nothing, just silent flip-flop fallback.
+	// Cyclone V M10K blocks support at most 2 independent ports; folding
+	// the CPU's write and read (same address, mutually exclusive in
+	// time) into one port keeps mainram within that limit (CPU port +
+	// video port = 2). mainram_ready holds DTACKn off for the one extra
 	// clk_sys cycle the registered read needs, mirroring rom_wait/
 	// rom_ready's own existing mechanism (see DTACKn below). HW_ROMS=0
 	// (every existing sim testbench, unchanged): stays fully
-	// combinational/zero-latency.
+	// combinational/zero-latency — the write-side text below is
+	// byte-for-byte identical to what a plain always block outside any
+	// generate would have contained.
 	generate
-	if (!HW_ROMS) begin : g_mainram_read_sim
+	if (!HW_ROMS) begin : g_mainram_cpu_sim
+		always @(posedge clk_sys) begin
+			if (sel_mainram & cpu_write) begin
+				if (~UDSn) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
+				if (~LDSn) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
+			end
+		end
 		always @(*) mainram_dout  = mainram[mainram_addr_cpu];
 		always @(*) mainram_ready = 1'b1;
-	end else begin : g_mainram_read_hw
+	end else begin : g_mainram_cpu_hw
 		reg [14:0] mainram_addr_cpu_r;
 		always @(posedge clk_sys) begin
+			if (sel_mainram & cpu_write) begin
+				if (~UDSn) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
+				if (~LDSn) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
+			end
 			mainram_dout       <= mainram[mainram_addr_cpu];
 			mainram_addr_cpu_r <= mainram_addr_cpu;
 			mainram_ready      <= (mainram_addr_cpu_r == mainram_addr_cpu);
@@ -438,23 +452,30 @@ module tdragon2_core #(
 	// ------------------------------------------------------------------
 	reg [15:0] bgvram [0:32767];
 	wire [14:0] bgvram_addr = byte_addr[15:1];
-	always @(posedge clk_sys) begin
-		if (sel_bgvram & cpu_write) begin
-			if (~UDSn) bgvram[bgvram_addr][15:8] <= oEdb[15:8];
-			if (~LDSn) bgvram[bgvram_addr][7:0]  <= oEdb[7:0];
-		end
-	end
-	// Same reasoning/mechanism as mainram above.
+	// Same reasoning/mechanism as mainram above — CPU write folded into
+	// the same always block as the CPU read, keeping bgvram within
+	// Cyclone V's 2-independent-port-per-M10K limit (CPU port + video
+	// port).
 	wire [15:0] bgvram_dout;
 	reg  [15:0] bgvram_dout_r;
 	reg         bgvram_ready;
 	generate
-	if (!HW_ROMS) begin : g_bgvram_read_sim
+	if (!HW_ROMS) begin : g_bgvram_cpu_sim
+		always @(posedge clk_sys) begin
+			if (sel_bgvram & cpu_write) begin
+				if (~UDSn) bgvram[bgvram_addr][15:8] <= oEdb[15:8];
+				if (~LDSn) bgvram[bgvram_addr][7:0]  <= oEdb[7:0];
+			end
+		end
 		assign bgvram_dout = bgvram[bgvram_addr];
 		always @(*) bgvram_ready = 1'b1;
-	end else begin : g_bgvram_read_hw
+	end else begin : g_bgvram_cpu_hw
 		reg [14:0] bgvram_addr_r;
 		always @(posedge clk_sys) begin
+			if (sel_bgvram & cpu_write) begin
+				if (~UDSn) bgvram[bgvram_addr][15:8] <= oEdb[15:8];
+				if (~LDSn) bgvram[bgvram_addr][7:0]  <= oEdb[7:0];
+			end
 			bgvram_dout_r <= bgvram[bgvram_addr];
 			bgvram_addr_r <= bgvram_addr;
 			bgvram_ready  <= (bgvram_addr_r == bgvram_addr);
@@ -516,11 +537,10 @@ module tdragon2_core #(
 		assign vid_mainram_ready = 1'b1;
 	end else begin : g_vidram_read_hw
 		reg [15:0] vid_bgvram_dout_r, vid_mainram_dout_r;
-		reg [14:0] vid_bgvram_addr_r, vid_mainram_addr_r;
+		reg [14:0] vid_mainram_addr_r;
 		reg        vid_mainram_ready_r;
 		always @(posedge clk_sys) begin
 			vid_bgvram_dout_r   <= bgvram[vid_bgvram_addr];
-			vid_bgvram_addr_r   <= vid_bgvram_addr;
 			vid_mainram_dout_r  <= mainram[vid_mainram_addr];
 			vid_mainram_addr_r  <= vid_mainram_addr;
 			vid_mainram_ready_r <= (vid_mainram_addr_r == vid_mainram_addr);
