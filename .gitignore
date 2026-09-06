@@ -24,6 +24,14 @@ sim/rtl/*/*.mem
 # not seen in any other sim/rtl/*/ build directory.
 sim/rtl/*/*.raw
 
+# fx68k's own microcode ROM tables, copied to the project root (same
+# directory Quartus invokes from) so its bare $readmemb("microrom.mem")/
+# $readmemb("nanorom.mem") calls resolve during synthesis — the real
+# files live under the already-gitignored /rtl/third_party/fx68k/, this
+# is just a build-time copy, same as every sim Makefile already does.
+/microrom.mem
+/nanorom.mem
+
 # Vendored third-party cores and the MiSTer sys/ framework are fetched by
 # tools/bootstrap.sh at pinned commits (see deps.lock), not committed here.
 /sys/
@@ -35,6 +43,10 @@ output_files/
 db/
 incremental_db/
 greybox_tmp/
+/build_id.v
+/jtag.cdf
+sim/rtl/*/.cnxerr
+sim/rtl/*/qmegawiz_errors_log.txt
 *.qws
 *.qdb
 *.rpt

@@ -168,7 +168,36 @@ module tdragon2_core #(
 	output [15:0] dbg_bgvram_data,
 	input  [10:0] dbg_txvram_addr,
 	output [15:0] dbg_txvram_data,
-	output        frame_done
+	output        frame_done,
+
+	output signed [15:0] audio_l,
+	output signed [15:0] audio_r,
+
+	// Real raster timing, for the hardware top-level's own video sync
+	// generation — video_timing.sv lives inside this module (shared
+	// with the CPU interrupt generator below), so this is the only way
+	// a real top-level can derive HSync/VSync from the same counters
+	// nmk_irq.sv itself uses. Unused by every existing sim testbench.
+	output        ce_pix_o,
+	output [9:0]  hcount_o,
+	output [9:0]  vcount_o,
+	output        hblank_o,
+	output        vblank_o,
+
+	// Real inputs (HW_ROMS=1 top-level only — see the HW_ROMS-gated mux
+	// below, which falls back to the exact same fixed 0xFFFF "idle"
+	// constant every existing sim testbench already implicitly relies on
+	// at HW_ROMS=0, so leaving these unconnected there is exactly
+	// byte-for-byte unchanged; Verilator doesn't accept ANSI default
+	// values on plain `input` ports in this module's own port-list
+	// style, hence the explicit generate-gated fallback instead of a
+	// port default). IN0 (nmk16.cpp tdragon2/macross2 INPUT_PORTS):
+	// coin/start/service, active low, low byte only. IN1: 2-player
+	// 8-way joystick + 2 buttons each, active low, full word.
+	input  [15:0] in0_i,
+	input  [15:0] in1_i,
+	input  [15:0] dsw1_i,
+	input  [15:0] dsw2_i
 );
 
 	// ------------------------------------------------------------------
@@ -242,12 +271,18 @@ module tdragon2_core #(
 	wire VPAn = ~iack_cycle;
 	// HW_ROMS=1 only: hold DTACKn off while the maincpu ROM cache hasn't
 	// yet produced data for the current address (see rom_cache1/sd0
-	// wiring below) — every other region stays real 0-wait on-chip work
-	// RAM, unaffected. At HW_ROMS=0, rom_ready is tied to 1'b1 (see
-	// g_rom_sim above), so this composite reduces to the original
-	// DTACKn exactly, byte-for-byte, for every existing sim testbench.
-	wire rom_wait = sel_rom & cpu_read & ~rom_ready;
-	wire DTACKn = ASn | iack_cycle | rom_wait;
+	// wiring below), or while the mainram/bgvram registered read (see
+	// g_mainram_read_hw/g_bgvram_read_hw below — needed for RAM
+	// inference, same reasoning as the ROM cache) hasn't settled yet for
+	// the current address — every other region stays real 0-wait on-chip
+	// work RAM, unaffected. At HW_ROMS=0, rom_ready/mainram_ready/
+	// bgvram_ready are all tied to 1'b1 (see each region's own g_*_sim
+	// branch), so this composite reduces to the original DTACKn exactly,
+	// byte-for-byte, for every existing sim testbench.
+	wire rom_wait     = sel_rom     & cpu_read & ~rom_ready;
+	wire mainram_wait = sel_mainram & cpu_read & ~mainram_ready;
+	wire bgvram_wait  = sel_bgvram  & cpu_read & ~bgvram_ready;
+	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | bgvram_wait;
 
 	fx68k fx68k_inst (
 		.clk(clk_sys),
@@ -354,13 +389,35 @@ module tdragon2_core #(
 	wire [14:0] mainram_addr_cpu =
 		{byte_addr[15:12], byte_addr[8], byte_addr[10:9], byte_addr[11], byte_addr[7:1]};
 	reg [15:0] mainram_dout;
+	reg        mainram_ready;
 	always @(posedge clk_sys) begin
 		if (sel_mainram & cpu_write) begin
 			if (~UDSn) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
 			if (~LDSn) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
 		end
 	end
-	always @(*) mainram_dout = mainram[mainram_addr_cpu];
+	// HW_ROMS=1 only: registered (synchronous) CPU-side read — required
+	// for Quartus to infer real block RAM instead of ~524K flip-flops
+	// (32768 x 16); see the sprite-plane fix in video_macross2.sv for the
+	// full story on why an async read of an array this size explodes at
+	// synthesis. mainram_ready holds DTACKn off for the one extra
+	// clk_sys cycle the registered read needs, mirroring rom_wait/
+	// rom_ready's own existing mechanism (see DTACKn below). HW_ROMS=0
+	// (every existing sim testbench, unchanged): stays fully
+	// combinational/zero-latency.
+	generate
+	if (!HW_ROMS) begin : g_mainram_read_sim
+		always @(*) mainram_dout  = mainram[mainram_addr_cpu];
+		always @(*) mainram_ready = 1'b1;
+	end else begin : g_mainram_read_hw
+		reg [14:0] mainram_addr_cpu_r;
+		always @(posedge clk_sys) begin
+			mainram_dout       <= mainram[mainram_addr_cpu];
+			mainram_addr_cpu_r <= mainram_addr_cpu;
+			mainram_ready      <= (mainram_addr_cpu_r == mainram_addr_cpu);
+		end
+	end
+	endgenerate
 
 	// ------------------------------------------------------------------
 	// Palette RAM (1024 x 16)
@@ -387,7 +444,24 @@ module tdragon2_core #(
 			if (~LDSn) bgvram[bgvram_addr][7:0]  <= oEdb[7:0];
 		end
 	end
-	wire [15:0] bgvram_dout = bgvram[bgvram_addr];
+	// Same reasoning/mechanism as mainram above.
+	wire [15:0] bgvram_dout;
+	reg  [15:0] bgvram_dout_r;
+	reg         bgvram_ready;
+	generate
+	if (!HW_ROMS) begin : g_bgvram_read_sim
+		assign bgvram_dout = bgvram[bgvram_addr];
+		always @(*) bgvram_ready = 1'b1;
+	end else begin : g_bgvram_read_hw
+		reg [14:0] bgvram_addr_r;
+		always @(posedge clk_sys) begin
+			bgvram_dout_r <= bgvram[bgvram_addr];
+			bgvram_addr_r <= bgvram_addr;
+			bgvram_ready  <= (bgvram_addr_r == bgvram_addr);
+		end
+		assign bgvram_dout = bgvram_dout_r;
+	end
+	endgenerate
 
 	// ------------------------------------------------------------------
 	// TX tilemap VRAM (2048 x 16)
@@ -409,7 +483,7 @@ module tdragon2_core #(
 	// which bypasses the swapped bus handler entirely.
 	// ------------------------------------------------------------------
 	wire [14:0] vid_bgvram_addr;
-	wire [15:0] vid_bgvram_dout = bgvram[vid_bgvram_addr];
+	wire [15:0] vid_bgvram_dout;
 	wire [10:0] vid_txvram_addr;
 	wire [15:0] vid_txvram_dout = txvram[vid_txvram_addr];
 	wire [9:0]  vid_palette_addr;
@@ -417,11 +491,62 @@ module tdragon2_core #(
 	wire [9:0]  vid_spr_palette_addr;
 	wire [15:0] vid_spr_palette_dout = palette[vid_spr_palette_addr];
 	wire [14:0] vid_mainram_addr;
-	wire [15:0] vid_mainram_dout = mainram[vid_mainram_addr];
+	wire [15:0] vid_mainram_dout;
+	wire        vid_mainram_ready;
 
-	assign dbg_pal_data = palette[dbg_pal_addr];
-	assign dbg_bgvram_data = bgvram[dbg_bgvram_addr[14:0]];
-	assign dbg_txvram_data = txvram[dbg_txvram_addr];
+	// HW_ROMS=1 only: registered (synchronous) reads on both video-side
+	// dual-port taps, needed for the SAME RAM-inference reason as the
+	// CPU-side ports above (both ports of a shared array must be
+	// synchronous, or Quartus won't infer real block RAM for any of it).
+	// bgvram_addr only changes once per 16-pixel tile column in
+	// video_macross2.sv's own combinational chain, so the 1-cycle lag
+	// this introduces self-resolves within that same tile — a rare,
+	// single-pixel-at-the-tile-boundary artifact, the same class already
+	// accepted (and documented) for external bgtile ROM cache misses, so
+	// no further change is needed in video_macross2.sv itself for BG.
+	// mainram, by contrast, is read every cycle by the sprite-snapshot
+	// FSM (S_SNAP_REQ/S_SNAP_WAIT/S_SNAP_LATCH) with byte-exact
+	// requirements — that FSM now blocks on vid_mainram_ready (mirrors
+	// sprites_ready/S_SPR_WAIT) via video_macross2's own mainram_ready
+	// port instead.
+	generate
+	if (!HW_ROMS) begin : g_vidram_read_sim
+		assign vid_bgvram_dout  = bgvram[vid_bgvram_addr];
+		assign vid_mainram_dout = mainram[vid_mainram_addr];
+		assign vid_mainram_ready = 1'b1;
+	end else begin : g_vidram_read_hw
+		reg [15:0] vid_bgvram_dout_r, vid_mainram_dout_r;
+		reg [14:0] vid_bgvram_addr_r, vid_mainram_addr_r;
+		reg        vid_mainram_ready_r;
+		always @(posedge clk_sys) begin
+			vid_bgvram_dout_r   <= bgvram[vid_bgvram_addr];
+			vid_bgvram_addr_r   <= vid_bgvram_addr;
+			vid_mainram_dout_r  <= mainram[vid_mainram_addr];
+			vid_mainram_addr_r  <= vid_mainram_addr;
+			vid_mainram_ready_r <= (vid_mainram_addr_r == vid_mainram_addr);
+		end
+		assign vid_bgvram_dout   = vid_bgvram_dout_r;
+		assign vid_mainram_dout  = vid_mainram_dout_r;
+		assign vid_mainram_ready = vid_mainram_ready_r;
+	end
+	endgenerate
+
+	// dbg_* taps are a testbench-only third read port (TB_DUMP_VRAM) —
+	// not wired to anything in the real hardware top (Macross2.sv), and
+	// a third port would complicate dual-port RAM inference for no
+	// benefit, so they're tied off at HW_ROMS=1 instead of adding real
+	// read logic for them.
+	generate
+	if (!HW_ROMS) begin : g_dbgram_sim
+		assign dbg_pal_data = palette[dbg_pal_addr];
+		assign dbg_bgvram_data = bgvram[dbg_bgvram_addr[14:0]];
+		assign dbg_txvram_data = txvram[dbg_txvram_addr];
+	end else begin : g_dbgram_hw
+		assign dbg_pal_data = 16'd0;
+		assign dbg_bgvram_data = 16'd0;
+		assign dbg_txvram_data = 16'd0;
+	end
+	endgenerate
 
 	// ------------------------------------------------------------------
 	// I/O registers — identical to macross2_core.sv's own.
@@ -457,10 +582,6 @@ module tdragon2_core #(
 		end
 	end
 
-	localparam [15:0] IN0_IDLE  = 16'hFFFF;
-	localparam [15:0] IN1_IDLE  = 16'hFFFF;
-	localparam [15:0] DSW1_IDLE = 16'hFFFF;
-	localparam [15:0] DSW2_IDLE = 16'hFFFF;
 
 	// ------------------------------------------------------------------
 	// soundlatch (68000->Z80, main2sub) / soundlatch2 (Z80->68000,
@@ -621,12 +742,13 @@ module tdragon2_core #(
 
 	wire [7:0] ym_chip_dout;
 	wire       ym_chip_irq_n;
+	wire signed [15:0] ym_snd;
 	jt03 ym_chip (
 		.rst(reset), .clk(clk_sys), .cen(ym_cen),
 		.din(ym_din_latch), .addr(ym_addr_sel), .cs_n(1'b0), .wr_n(ym_wr_n),
 		.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),
 		.IOA_in(8'hFF), .IOB_in(8'hFF), .IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
-		.psg_A(), .psg_B(), .psg_C(), .fm_snd(), .psg_snd(), .snd(), .snd_sample(),
+		.psg_A(), .psg_B(), .psg_C(), .fm_snd(), .psg_snd(), .snd(ym_snd), .snd_sample(),
 		.debug_view()
 	);
 
@@ -735,18 +857,37 @@ module tdragon2_core #(
 	wire oki1_wr_n = ~(oki1_wr_hold != 6'd0);
 
 	wire [7:0] oki0_chip_dout, oki1_chip_dout;
+	wire signed [13:0] oki0_snd, oki1_snd;
 	jt6295 oki0_chip (
 		.rst(reset), .clk(clk_sys), .cen(oki_cen), .ss(1'b0),
 		.wrn(oki0_wr_n), .din(oki0_din_latch), .dout(oki0_chip_dout),
 		.rom_addr(oki0_rom_addr_raw), .rom_data(oki0_rom_data), .rom_ok(oki0_rom_ok),
-		.sound(), .sample()
+		.sound(oki0_snd), .sample()
 	);
 	jt6295 oki1_chip (
 		.rst(reset), .clk(clk_sys), .cen(oki_cen), .ss(1'b0),
 		.wrn(oki1_wr_n), .din(oki1_din_latch), .dout(oki1_chip_dout),
 		.rom_addr(oki1_rom_addr_raw), .rom_data(oki1_rom_data), .rom_ok(oki1_rom_ok),
-		.sound(), .sample()
+		.sound(oki1_snd), .sample()
 	);
+
+	// ------------------------------------------------------------------
+	// Audio mix — mono (no separate panning info anywhere in this
+	// driver): jt03's own already-mixed FM+PSG `snd` (16-bit) plus both
+	// OKI chips' own 14-bit `sound`, sign-extended and modestly
+	// upscaled to keep the OKI channels audible against the wider FM
+	// range, summed in a wider accumulator then saturated to 16 bits
+	// rather than allowed to silently wrap on overflow.
+	// ------------------------------------------------------------------
+	wire signed [17:0] audio_sum = {{2{ym_snd[15]}}, ym_snd} +
+	                                {{2{oki0_snd[13]}}, oki0_snd, 2'b00} +
+	                                {{2{oki1_snd[13]}}, oki1_snd, 2'b00};
+	wire signed [15:0] audio_mix =
+		(audio_sum > 18'sd32767)  ? 16'sd32767  :
+		(audio_sum < -18'sd32768) ? -16'sd32768 :
+		audio_sum[15:0];
+	assign audio_l = audio_mix;
+	assign audio_r = audio_mix;
 
 	// ------------------------------------------------------------------
 	// Z80 read-data mux
@@ -775,10 +916,10 @@ module tdragon2_core #(
 		else if (sel_bgvram)  rdata = bgvram_dout;
 		else if (sel_txvram)  rdata = txvram_dout;
 		else if (sel_soundlatch2_r) rdata = {8'h00, soundlatch2_data};
-		else if (sel_in0)     rdata = IN0_IDLE;
-		else if (sel_in1)     rdata = IN1_IDLE;
-		else if (sel_dsw1)    rdata = DSW1_IDLE;
-		else if (sel_dsw2)    rdata = DSW2_IDLE;
+		else if (sel_in0)     rdata = HW_ROMS ? in0_i  : 16'hFFFF;
+		else if (sel_in1)     rdata = HW_ROMS ? in1_i  : 16'hFFFF;
+		else if (sel_dsw1)    rdata = HW_ROMS ? dsw1_i : 16'hFFFF;
+		else if (sel_dsw2)    rdata = HW_ROMS ? dsw2_i : 16'hFFFF;
 		else                  rdata = 16'hFFFF; // unmapped
 	end
 	assign iEdb = rdata;
@@ -794,6 +935,11 @@ module tdragon2_core #(
 		.hcount(vt_hcount), .vcount(vt_vcount),
 		.line_start(vt_line_start), .hblank(vt_hblank), .vblank(vt_vblank)
 	);
+	assign ce_pix_o = ce_pix;
+	assign hcount_o = vt_hcount;
+	assign vcount_o = vt_vcount;
+	assign hblank_o = vt_hblank;
+	assign vblank_o = vt_vblank;
 
 	wire sprite_dma_trigger;
 	nmk_irq #(
@@ -828,7 +974,7 @@ module tdragon2_core #(
 		.txvram_addr(vid_txvram_addr), .txvram_data(vid_txvram_dout),
 		.palette_addr(vid_palette_addr), .palette_data(vid_palette_dout),
 		.spr_palette_addr(vid_spr_palette_addr), .spr_palette_data(vid_spr_palette_dout),
-		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout),
+		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout), .mainram_ready(vid_mainram_ready),
 		.bg_xscroll(bg_xscroll), .bg_yscroll(bg_yscroll),
 		.bg_bank(bgbank_reg),
 		.tilerambank(tilerambank_reg),

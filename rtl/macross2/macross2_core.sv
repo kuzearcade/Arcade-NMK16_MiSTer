@@ -693,7 +693,7 @@ module macross2_core #(
 		.txvram_addr(vid_txvram_addr), .txvram_data(vid_txvram_dout),
 		.palette_addr(vid_palette_addr), .palette_data(vid_palette_dout),
 		.spr_palette_addr(vid_spr_palette_addr), .spr_palette_data(vid_spr_palette_dout),
-		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout),
+		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout), .mainram_ready(1'b1),
 		.bg_xscroll(bg_xscroll), .bg_yscroll(bg_yscroll),
 		.bg_bank(bgbank_reg),
 		.tilerambank(tilerambank_reg),

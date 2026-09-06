@@ -1,0 +1,36 @@
+# Family C "Macross2" RBF — file list. See docs/hw-bringup.md.
+#
+# The jt12/jt6295 vendored cores are each ~10-40 files deep; rather than
+# enumerate every transitive dependency (jt03.v/jt6295.v are the only
+# ones this design instantiates directly), SEARCH_PATH lets Quartus
+# resolve the rest by module-name-to-filename matching, the same way
+# Verilator's own -y flag already does for every sim Makefile in this
+# project.
+set_global_assignment -name SEARCH_PATH rtl/third_party/jt12/hdl
+set_global_assignment -name SEARCH_PATH rtl/third_party/jt12/jt49/hdl
+set_global_assignment -name SEARCH_PATH rtl/third_party/jt6295/hdl
+
+set_global_assignment -name SYSTEMVERILOG_FILE Macross2.sv
+set_global_assignment -name VERILOG_FILE rtl/pll.v
+
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tdragon2/tdragon2_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/macross2/video_macross2.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/nmk112/nmk112.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/bjtwin/video_timing.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/nmk_irq/nmk_irq.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_req.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_arb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache1.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache1_byte.sv
+
+set_global_assignment -name VERILOG_FILE rtl/third_party_gen/t80/T80s.v
+
+set_global_assignment -name VERILOG_FILE rtl/third_party/jt12/hdl/jt03.v
+set_global_assignment -name VERILOG_FILE rtl/third_party/jt6295/hdl/jt6295.v
+
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/third_party/fx68k/fx68k.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/third_party/fx68k/fx68kAlu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/third_party/fx68k/uaddrPla.sv
+
+set_global_assignment -name SDC_FILE Macross2.sdc

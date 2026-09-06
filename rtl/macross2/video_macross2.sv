@@ -94,6 +94,13 @@ module video_macross2 #(
 	input  [15:0] spr_palette_data,
 	output reg [14:0] mainram_addr,
 	input      [15:0] mainram_data,
+	// HW_ROMS=1 only: real block until the wrapper's registered mainram
+	// read has settled for the current mainram_addr (that read is needed
+	// for RAM inference — see mainram_ready's own definition in
+	// tdragon2_core.sv). At HW_ROMS=0 the wrapper ties this to 1'b1, so
+	// S_SNAP_WAIT below is a single pass-through cycle, matching the
+	// pre-existing snapshot timing exactly.
+	input              mainram_ready,
 
 	input [15:0] bg_xscroll, bg_yscroll,
 	input [7:0]  bg_bank,
@@ -283,7 +290,15 @@ module video_macross2 #(
 	// Sprite RAM double-buffered snapshot — unchanged from
 	// video_macross.sv's own (ping-ponging 2048-entry buffers).
 	// ------------------------------------------------------------------
-	reg [15:0] snap_buf [0:1][0:2047];
+	// Two separate named arrays, not one 2D array with a dynamic outer
+	// index (snap_buf[snap_cur][...]) — Quartus 17.0's own Verilog
+	// elaborator segfaults on that construct when the write also sits
+	// inside a `case` statement (confirmed directly: this exact crash
+	// signature, VeriCaseStatement -> VeriNonBlockingAssign -> AssignRam,
+	// appeared during Macross2's own first synthesis attempt). Simulation
+	// (Verilator) has never had any issue with the original 2D form.
+	reg [15:0] snap_buf_0 [0:2047];
+	reg [15:0] snap_buf_1 [0:2047];
 	reg        snap_cur; // buffer index the NEXT trigger will overwrite
 	reg        snap_pending;
 	reg [11:0] snap_idx;
@@ -293,19 +308,91 @@ module video_macross2 #(
 	// field, sprite GFXDECODE colour base 0x100 (see header, NOT 4-bit/
 	// 0x100-as-16-colours like every prior port's own).
 	// ------------------------------------------------------------------
-	reg [9:0] sprite_plane [0:1][0:SCREEN_W*SCREEN_H-1]; // {valid,colour[4:0],pix[3:0]} = 1+5+4=10 bits
+	// Single flat array addressed by {buffer_select, position} — NOT two
+	// separate named arrays chosen by a mux. Two attempts at that shape
+	// were each tried and rejected directly: a `sprite_plane[draw_buf]
+	// [...]` 2D array with a dynamic outer index inside a `case`
+	// statement segfaults Quartus 17.0's own Verilog elaborator
+	// (confirmed: this exact crash signature, VeriCaseStatement ->
+	// VeriNonBlockingAssign -> AssignRam, during Macross2's own first
+	// synthesis attempt); splitting into two named arrays
+	// (sprite_plane_0/sprite_plane_1) dodges that segfault but hits a
+	// DIFFERENT wall at the next synthesis attempt — Quartus's RAM
+	// inference flatly refuses to infer two separate array declarations
+	// selected by a runtime control signal as one RAM, regardless of
+	// read/write idiom (ternary vs. if/else, wire vs. direct-in-
+	// always-block were each tried), reporting "uninferred due to
+	// asynchronous read logic" and then building an ~1.7M-flip-flop
+	// netlist for the two 86016-entry arrays combined — the whole
+	// 5CSEBA6 fabric has under 84K registers — which is what actually
+	// drove Timing-Driven Synthesis into a multi-GB, effectively-
+	// unbounded runtime. Confirmed directly in a minimal standalone
+	// repro (two arrays -> uninferred error; one array with a
+	// concatenated select bit -> "210 RAM segments", 0 errors) before
+	// applying here. snap_buf_0/snap_buf_1 above keep the two-named-
+	// arrays shape: at 2048 entries each they're small enough to
+	// implement as flip-flops outright (no RAM inference needed), so
+	// they don't hit this wall and are left as they were.
+	reg [9:0] sprite_plane [0:2*SCREEN_W*SCREEN_H-1]; // {valid,colour[4:0],pix[3:0]} = 1+5+4=10 bits; index = {buffer_select, y*SCREEN_W+x}
 	reg        disp_buf;
 
 	wire [16:0] rd_addr = rd_y * SCREEN_W + rd_x;
 	wire        rd_in_range = (rd_x < SCREEN_W) && (rd_y < SCREEN_H);
-	wire [9:0] spr_entry = rd_in_range ? sprite_plane[disp_buf][rd_addr] : 10'd0;
+
+	// HW_ROMS=1 (real hardware) only: registered (synchronous) sprite-
+	// plane read, plus a matching 1-cycle delay on the TX/BG composite
+	// inputs it's mixed with. An asynchronous read of this 86016-deep x2
+	// array cannot be implemented as flip-flops on real hardware —
+	// confirmed directly: Quartus 17.0's quartus_map, synthesizing
+	// Macross2/tdragon2 (HW_ROMS=1) for the first time, tried exactly
+	// that (the "uninferred RAM due to asynchronous read logic" warning
+	// it emits for sprite_plane_0/1) and built a netlist needing ~1.7M
+	// flip-flops for these two arrays alone — the whole 5CSEBA6 fabric
+	// has under 84K registers total — which drove Timing-Driven
+	// Synthesis into a multi-GB, effectively-unbounded runtime rather
+	// than a clean out-of-resources error. Registering the read lets
+	// Quartus infer real block RAM (M10K) instead. HW_ROMS=0 (every
+	// existing sim testbench, unchanged): stays fully combinational/
+	// zero-latency — those testbenches' own post-frame scan
+	// (top.rd_x=x; top.eval(); read top.rd_rgb) never steps clk_sys, so
+	// a registered read would never produce new data there, and
+	// simulation has no real-BRAM constraint to satisfy in the first
+	// place.
+	wire       tx_opaque_al;
+	wire [23:0] tile_rgb_al;
+	wire       rd_in_range_al;
+	wire [9:0] spr_entry;
+	generate
+	if (!HW_ROMS) begin : g_composite_sim
+		wire [9:0] spr_entry_raw = sprite_plane[{disp_buf, rd_addr}];
+		assign spr_entry      = !rd_in_range ? 10'd0 : spr_entry_raw;
+		assign tx_opaque_al   = tx_opaque;
+		assign tile_rgb_al    = tile_rgb;
+		assign rd_in_range_al = rd_in_range;
+	end else begin : g_composite_hw
+		reg [9:0] spr_entry_r;
+		always @(posedge clk_sys) spr_entry_r <= sprite_plane[{disp_buf, rd_addr}];
+		reg        tx_opaque_r;
+		reg [23:0] tile_rgb_r;
+		reg        rd_in_range_r;
+		always @(posedge clk_sys) begin
+			tx_opaque_r   <= tx_opaque;
+			tile_rgb_r    <= tile_rgb;
+			rd_in_range_r <= rd_in_range;
+		end
+		assign spr_entry      = rd_in_range_r ? spr_entry_r : 10'd0;
+		assign tx_opaque_al   = tx_opaque_r;
+		assign tile_rgb_al    = tile_rgb_r;
+		assign rd_in_range_al = rd_in_range_r;
+	end
+	endgenerate
 	wire        spr_valid = spr_entry[9];
 
 	assign spr_palette_addr = SPR_PAL_BASE + {1'd0, spr_entry[8:0]};
 	wire [23:0] spr_rgb = decode_rgb(spr_palette_data);
 
 	// Composite, top to bottom: TX (opaque) > sprite (opaque) > BG.
-	assign rd_rgb = !rd_in_range ? 24'h0 : (tx_opaque ? tile_rgb : (spr_valid ? spr_rgb : tile_rgb));
+	assign rd_rgb = !rd_in_range_al ? 24'h0 : (tx_opaque_al ? tile_rgb_al : (spr_valid ? spr_rgb : tile_rgb_al));
 
 	// ------------------------------------------------------------------
 	// Sprite draw FSM — unchanged from video_macross.sv's own, except
@@ -327,7 +414,8 @@ module video_macross2 #(
 		S_SPR_CHECK2  = 9,
 		S_SPR_PLOT    = 10,
 		S_SPR_NEXT    = 11,
-		S_DONE        = 12;
+		S_DONE        = 12,
+		S_SNAP_WAIT   = 14; // HW_ROMS=1 only: real block until mainram_ready (mirrors S_SPR_WAIT — see mainram_ready's own port declaration above); at HW_ROMS=0, mainram_ready is tied 1'b1, so this is a single pass-through cycle
 
 	reg [3:0]  state;
 	reg [16:0] clr_idx;
@@ -355,14 +443,14 @@ module video_macross2 #(
 
 			case (state)
 				S_RESET_CLR0: begin
-					sprite_plane[0][clr_idx] <= 10'd0;
+					sprite_plane[{1'b0, clr_idx}] <= 10'd0;
 					if (clr_idx == SCREEN_W*SCREEN_H-1) begin
 						clr_idx <= 17'd0;
 						state <= S_RESET_CLR1;
 					end else clr_idx <= clr_idx + 17'd1;
 				end
 				S_RESET_CLR1: begin
-					sprite_plane[1][clr_idx] <= 10'd0;
+					sprite_plane[{1'b1, clr_idx}] <= 10'd0;
 					if (clr_idx == SCREEN_W*SCREEN_H-1) state <= S_IDLE;
 					else clr_idx <= clr_idx + 17'd1;
 				end
@@ -378,10 +466,14 @@ module video_macross2 #(
 				// snapshot mainram[0x8000+i] -> snap_buf[snap_cur][i], i=0..2047
 				S_SNAP_REQ: begin
 					mainram_addr <= 15'h4000 + snap_idx[10:0]; // 0x8000 bytes / 2 = 0x4000 word offset
-					state <= S_SNAP_LATCH;
+					state <= S_SNAP_WAIT;
+				end
+				S_SNAP_WAIT: begin
+					if (mainram_ready) state <= S_SNAP_LATCH;
 				end
 				S_SNAP_LATCH: begin
-					snap_buf[snap_cur][snap_idx] <= mainram_data;
+					if (snap_cur) snap_buf_1[snap_idx] <= mainram_data;
+					else          snap_buf_0[snap_idx] <= mainram_data;
 					if (snap_idx == 12'd2047) begin
 						draw_buf <= ~disp_buf;
 						draw_snap_idx <= ~snap_cur;
@@ -394,7 +486,7 @@ module video_macross2 #(
 				end
 
 				S_CLEAR: begin
-					sprite_plane[draw_buf][clr_idx] <= 10'd0;
+					sprite_plane[{draw_buf, clr_idx}] <= 10'd0;
 					if (clr_idx == SCREEN_W*SCREEN_H-1) begin
 						s_slot <= 0;
 						clk_budget <= 0;
@@ -411,12 +503,21 @@ module video_macross2 #(
 						integer w, h;
 
 						offs = s_slot * 8;
-						w0 = snap_buf[draw_snap_idx][offs + 0];
-						w1 = snap_buf[draw_snap_idx][offs + 1];
-						w3 = snap_buf[draw_snap_idx][offs + 3];
-						w4 = snap_buf[draw_snap_idx][offs + 4];
-						w6 = snap_buf[draw_snap_idx][offs + 6];
-						w7 = snap_buf[draw_snap_idx][offs + 7];
+						if (draw_snap_idx) begin
+							w0 = snap_buf_1[offs + 0];
+							w1 = snap_buf_1[offs + 1];
+							w3 = snap_buf_1[offs + 3];
+							w4 = snap_buf_1[offs + 4];
+							w6 = snap_buf_1[offs + 6];
+							w7 = snap_buf_1[offs + 7];
+						end else begin
+							w0 = snap_buf_0[offs + 0];
+							w1 = snap_buf_0[offs + 1];
+							w3 = snap_buf_0[offs + 3];
+							w4 = snap_buf_0[offs + 4];
+							w6 = snap_buf_0[offs + 6];
+							w7 = snap_buf_0[offs + 7];
+						end
 						w = w1[3:0];
 						h = w1[7:4];
 
@@ -479,10 +580,13 @@ module video_macross2 #(
 				S_SPR_PLOT: begin
 					begin : spr_plot_blk
 						integer sx, sy;
+						reg [16:0] plot_addr;
 						sx = s_pixel_x_base + s_px;
 						sy = s_pixel_y_base + s_py;
-						if (sx < SCREEN_W && sy < SCREEN_H)
-							sprite_plane[draw_buf][sy * SCREEN_W + sx] <= {1'b1, s_colour[4:0], s_pix_nib[3:0]};
+						plot_addr = sy * SCREEN_W + sx;
+						if (sx < SCREEN_W && sy < SCREEN_H) begin
+							sprite_plane[{draw_buf, plot_addr}] <= {1'b1, s_colour[4:0], s_pix_nib[3:0]};
+						end
 					end
 					state <= S_SPR_NEXT;
 				end
