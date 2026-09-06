@@ -282,7 +282,8 @@ module tdragon2_core #(
 	wire rom_wait     = sel_rom     & cpu_read & ~rom_ready;
 	wire mainram_wait = sel_mainram & cpu_read & ~mainram_ready;
 	wire bgvram_wait  = sel_bgvram  & cpu_read & ~bgvram_ready;
-	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | bgvram_wait;
+	wire txvram_wait  = sel_txvram  & cpu_read & ~txvram_ready;
+	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | bgvram_wait | txvram_wait;
 
 	fx68k fx68k_inst (
 		.clk(clk_sys),
@@ -500,13 +501,40 @@ module tdragon2_core #(
 	// ------------------------------------------------------------------
 	reg [15:0] txvram [0:2047];
 	wire [10:0] txvram_addr = byte_addr[11:1];
-	always @(posedge clk_sys) begin
-		if (sel_txvram & cpu_write) begin
-			if (~UDSn) txvram[txvram_addr][15:8] <= oEdb[15:8];
-			if (~LDSn) txvram[txvram_addr][7:0]  <= oEdb[7:0];
+	// Despite its modest 32,768-bit storage, an asynchronous read of a
+	// 2048-entry array still costs real logic: Quartus's own multiplexer
+	// restructuring reported a bare "2048:1" mux for this exact
+	// combinational read at 16,380 LEs — comparable to sprite_plane's
+	// own footprint before ITS fix, just spent on read-select logic
+	// instead of storage registers. Same fix, same reasoning as mainram/
+	// bgvram above (registered read + write folded into the same
+	// always block, flattened byte-enable ifs — see mainram's own
+	// comment for the full byte-enable story).
+	wire [15:0] txvram_dout;
+	reg  [15:0] txvram_dout_r;
+	reg         txvram_ready;
+	generate
+	if (!HW_ROMS) begin : g_txvram_cpu_sim
+		always @(posedge clk_sys) begin
+			if (sel_txvram & cpu_write) begin
+				if (~UDSn) txvram[txvram_addr][15:8] <= oEdb[15:8];
+				if (~LDSn) txvram[txvram_addr][7:0]  <= oEdb[7:0];
+			end
 		end
+		assign txvram_dout = txvram[txvram_addr];
+		always @(*) txvram_ready = 1'b1;
+	end else begin : g_txvram_cpu_hw
+		reg [10:0] txvram_addr_r;
+		always @(posedge clk_sys) begin
+			if (sel_txvram & cpu_write & ~UDSn) txvram[txvram_addr][15:8] <= oEdb[15:8];
+			if (sel_txvram & cpu_write & ~LDSn) txvram[txvram_addr][7:0]  <= oEdb[7:0];
+			txvram_dout_r <= txvram[txvram_addr];
+			txvram_addr_r <= txvram_addr;
+			txvram_ready  <= (txvram_addr_r == txvram_addr);
+		end
+		assign txvram_dout = txvram_dout_r;
 	end
-	wire [15:0] txvram_dout = txvram[txvram_addr];
+	endgenerate
 
 	// ------------------------------------------------------------------
 	// Dual-port video read taps (video_macross2.sv's own live reads).
@@ -517,7 +545,7 @@ module tdragon2_core #(
 	wire [14:0] vid_bgvram_addr;
 	wire [15:0] vid_bgvram_dout;
 	wire [10:0] vid_txvram_addr;
-	wire [15:0] vid_txvram_dout = txvram[vid_txvram_addr];
+	wire [15:0] vid_txvram_dout;
 	wire [9:0]  vid_palette_addr;
 	wire [15:0] vid_palette_dout = palette[vid_palette_addr];
 	wire [9:0]  vid_spr_palette_addr;
@@ -540,23 +568,27 @@ module tdragon2_core #(
 	// FSM (S_SNAP_REQ/S_SNAP_WAIT/S_SNAP_LATCH) with byte-exact
 	// requirements — that FSM now blocks on vid_mainram_ready (mirrors
 	// sprites_ready/S_SPR_WAIT) via video_macross2's own mainram_ready
-	// port instead.
+	// port instead. txvram_addr is tile-quantized (once per 8-pixel TX
+	// column) same as bgvram, same tolerance applies.
 	generate
 	if (!HW_ROMS) begin : g_vidram_read_sim
 		assign vid_bgvram_dout  = bgvram[vid_bgvram_addr];
+		assign vid_txvram_dout  = txvram[vid_txvram_addr];
 		assign vid_mainram_dout = mainram[vid_mainram_addr];
 		assign vid_mainram_ready = 1'b1;
 	end else begin : g_vidram_read_hw
-		reg [15:0] vid_bgvram_dout_r, vid_mainram_dout_r;
+		reg [15:0] vid_bgvram_dout_r, vid_txvram_dout_r, vid_mainram_dout_r;
 		reg [14:0] vid_mainram_addr_r;
 		reg        vid_mainram_ready_r;
 		always @(posedge clk_sys) begin
 			vid_bgvram_dout_r   <= bgvram[vid_bgvram_addr];
+			vid_txvram_dout_r   <= txvram[vid_txvram_addr];
 			vid_mainram_dout_r  <= mainram[vid_mainram_addr];
 			vid_mainram_addr_r  <= vid_mainram_addr;
 			vid_mainram_ready_r <= (vid_mainram_addr_r == vid_mainram_addr);
 		end
 		assign vid_bgvram_dout   = vid_bgvram_dout_r;
+		assign vid_txvram_dout   = vid_txvram_dout_r;
 		assign vid_mainram_dout  = vid_mainram_dout_r;
 		assign vid_mainram_ready = vid_mainram_ready_r;
 	end

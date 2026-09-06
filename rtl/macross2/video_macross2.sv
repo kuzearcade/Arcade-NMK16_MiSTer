@@ -415,9 +415,11 @@ module video_macross2 #(
 		S_SPR_PLOT    = 10,
 		S_SPR_NEXT    = 11,
 		S_DONE        = 12,
-		S_SNAP_WAIT   = 14; // HW_ROMS=1 only: real block until mainram_ready (mirrors S_SPR_WAIT — see mainram_ready's own port declaration above); at HW_ROMS=0, mainram_ready is tied 1'b1, so this is a single pass-through cycle
+		S_SNAP_WAIT   = 14, // HW_ROMS=1 only: real block until mainram_ready (mirrors S_SPR_WAIT — see mainram_ready's own port declaration above); at HW_ROMS=0, mainram_ready is tied 1'b1, so this is a single pass-through cycle
+		S_SPR_HEAD_RD     = 15, // read snap_buf's 6 needed words for this slot one at a time (see snap_rd_addr/snap_rd_data below) instead of all 6 combinationally in one cycle — that shape synthesized into a bare "1024:1" mux (Quartus's own multiplexer-restructuring report), ~21K LEs, before this fix
+		S_SPR_HEAD_DECIDE = 16; // same decision logic S_SPR_HEAD used to run directly, now using the fully-latched w0/w1/w3/w4/w6/w7
 
-	reg [3:0]  state;
+	reg [4:0]  state;
 	reg [16:0] clr_idx;
 	reg        draw_buf;      // = ~disp_buf for the duration of one draw pass
 	reg        draw_snap_idx; // = ~snap_cur, latched for the duration of one draw pass
@@ -430,6 +432,38 @@ module video_macross2 #(
 	integer s_pix_nib;
 	reg [21:0] s_byte_addr;
 	assign spr_byte_addr = s_byte_addr;
+
+	// S_SPR_HEAD_RD: read snap_buf's 6 needed words (offsets 0,1,3,4,6,7
+	// within the current slot's 8-word record) for one sprite slot,
+	// spread one word per clk_sys cycle over a dedicated, unconditional
+	// registered read port — mirrors sprite_plane's own working read fix
+	// (see its header comment). Presenting all 6 offsets combinationally
+	// in a single cycle (as this used to) left Quartus's own
+	// multiplexer-restructuring report showing a bare "1024:1" mux for
+	// the result, ~21K LEs, roughly on par with sprite_plane's own
+	// footprint before ITS fix — same root cause (an async read of a
+	// runtime-indexed array), just costing logic instead of registers
+	// since snap_buf itself (2048 x 16 x 2) is small enough to stay
+	// flip-flop-based. offs+7 (max slot 255) fits in 11 bits, matching
+	// snap_idx's own width.
+	reg  [10:0] snap_rd_addr;
+	reg  [15:0] snap_rd_data;
+	always @(posedge clk_sys)
+		snap_rd_data <= draw_snap_idx ? snap_buf_1[snap_rd_addr] : snap_buf_0[snap_rd_addr];
+
+	function automatic [10:0] head_rd_offset(input [2:0] idx);
+		case (idx)
+			3'd0: head_rd_offset = 11'd0;
+			3'd1: head_rd_offset = 11'd1;
+			3'd2: head_rd_offset = 11'd3;
+			3'd3: head_rd_offset = 11'd4;
+			3'd4: head_rd_offset = 11'd6;
+			default: head_rd_offset = 11'd7;
+		endcase
+	endfunction
+
+	reg [2:0]  head_rd_idx;
+	reg [15:0] head_w0, head_w1, head_w3, head_w4, head_w6, head_w7;
 
 	always @(posedge clk_sys) begin
 		if (reset) begin
@@ -495,38 +529,46 @@ module video_macross2 #(
 				end
 
 				// ---------------- sprites ----------------
+				// S_SPR_HEAD kicks off the sequential snap_buf read for
+				// this slot's 6 needed words (see snap_rd_addr/
+				// head_rd_offset above); S_SPR_HEAD_RD walks the other 5;
+				// S_SPR_HEAD_DECIDE runs the original decision logic once
+				// they're all latched.
 				S_SPR_HEAD: begin
-					begin : spr_head_blk
-						integer offs;
-						reg [15:0] w0, w1, w3, w4, w6, w7;
+					snap_rd_addr <= s_slot * 11'd8 + head_rd_offset(3'd0);
+					head_rd_idx  <= 3'd0;
+					state <= S_SPR_HEAD_RD;
+				end
+				S_SPR_HEAD_RD: begin
+					case (head_rd_idx)
+						3'd0: head_w0 <= snap_rd_data;
+						3'd1: head_w1 <= snap_rd_data;
+						3'd2: head_w3 <= snap_rd_data;
+						3'd3: head_w4 <= snap_rd_data;
+						3'd4: head_w6 <= snap_rd_data;
+						default: head_w7 <= snap_rd_data; // head_rd_idx == 5
+					endcase
+					if (head_rd_idx == 3'd5) begin
+						state <= S_SPR_HEAD_DECIDE;
+					end else begin
+						snap_rd_addr <= s_slot * 11'd8 + head_rd_offset(head_rd_idx + 3'd1);
+						head_rd_idx  <= head_rd_idx + 3'd1;
+					end
+				end
+				S_SPR_HEAD_DECIDE: begin
+					begin : spr_head_decide_blk
 						integer budget_after_scan, budget_after_draw;
 						integer w, h;
 
-						offs = s_slot * 8;
-						if (draw_snap_idx) begin
-							w0 = snap_buf_1[offs + 0];
-							w1 = snap_buf_1[offs + 1];
-							w3 = snap_buf_1[offs + 3];
-							w4 = snap_buf_1[offs + 4];
-							w6 = snap_buf_1[offs + 6];
-							w7 = snap_buf_1[offs + 7];
-						end else begin
-							w0 = snap_buf_0[offs + 0];
-							w1 = snap_buf_0[offs + 1];
-							w3 = snap_buf_0[offs + 3];
-							w4 = snap_buf_0[offs + 4];
-							w6 = snap_buf_0[offs + 6];
-							w7 = snap_buf_0[offs + 7];
-						end
-						w = w1[3:0];
-						h = w1[7:4];
+						w = head_w1[3:0];
+						h = head_w1[7:4];
 
 						budget_after_scan = clk_budget + 16;
 						budget_after_draw = budget_after_scan + 128 * w * h;
 
 						if (budget_after_scan >= MAX_SPRITE_CLOCK) begin
 							state <= S_DONE;
-						end else if (!w0[0]) begin
+						end else if (!head_w0[0]) begin
 							clk_budget <= budget_after_scan;
 							if (s_slot == 255) state <= S_DONE;
 							else begin s_slot <= s_slot + 1; state <= S_SPR_HEAD; end
@@ -536,10 +578,10 @@ module video_macross2 #(
 							clk_budget <= budget_after_draw;
 							s_w <= w;
 							s_h <= h;
-							s_code <= w3;
-							s_colour <= w7[4:0];
-							s_sx <= (int'(w4) & 9'h1ff) + VIDEOSHIFT;
-							s_sy <= (int'(w6) & 9'h1ff);
+							s_code <= head_w3;
+							s_colour <= head_w7[4:0];
+							s_sx <= (int'(head_w4) & 9'h1ff) + VIDEOSHIFT;
+							s_sy <= (int'(head_w6) & 9'h1ff);
 							s_ty <= 0; s_tx <= 0; s_py <= 0; s_px <= 0;
 							state <= S_SPR_UNIT;
 						end
