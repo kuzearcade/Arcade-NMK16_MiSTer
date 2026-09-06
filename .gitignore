@@ -12,9 +12,17 @@
 # regenerated locally (see docs/sim-harness.md) rather than committed,
 # even though they are not literal ROM copies.
 **/roms/*.hex
+# Same reasoning applies to the raw ioctl-download byte streams
+# tools/mk_ioctl_stream.py builds for hardware-mode testbenches (see
+# docs/hw-bringup.md) — literal, undecoded ROM zip bytes.
+**/roms/*.bin
 sim/oracle/traces/
 sim/rtl/*/*.trace
 sim/rtl/*/*.mem
+# Undocumented debug-dump artifacts the vendored jt12/jt6295 cores
+# apparently emit under some simulation configurations — not source,
+# not seen in any other sim/rtl/*/ build directory.
+sim/rtl/*/*.raw
 
 # Vendored third-party cores and the MiSTer sys/ framework are fetched by
 # tools/bootstrap.sh at pinned commits (see deps.lock), not committed here.

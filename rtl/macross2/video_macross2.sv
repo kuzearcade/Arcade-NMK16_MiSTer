@@ -43,10 +43,32 @@
 module video_macross2 #(
 	parameter FGTILE_FILE  = "",
 	parameter BGTILE_FILE  = "",
-	parameter SPRITES_FILE = ""
+	parameter SPRITES_FILE = "",
+	// See docs/hw-bringup.md. HW_ROMS=0 (default, every existing sim
+	// testbench, including macross2's own — unchanged): $readmemh
+	// 0-latency arrays exactly as before this parameter existed.
+	// HW_ROMS=1 (tdragon2's real hardware top-level only): fgtile/
+	// bgtile/sprites all read through rom_cache1_byte, sharing one
+	// physical SDRAM port via a 3-way sdram_arb.
+	parameter HW_ROMS = 0,
+	parameter [22:0] BASE_WORD_FGTILE  = 23'd0,
+	parameter [22:0] BASE_WORD_BGTILE  = 23'd0,
+	parameter [22:0] BASE_WORD_SPRITES = 23'd0
 ) (
 	input clk_sys,
 	input reset,
+
+	// Hardware-mode-only (HW_ROMS=1): one physical SDRAM port, shared
+	// 3 ways (fgtile/bgtile/sprites) via an internal sdram_arb. Unused
+	// at HW_ROMS=0 — every existing sim testbench (macross2's own and
+	// tdragon2's own) instantiates this module without connecting them.
+	output     [24:1] sd_addr,
+	output            sd_wrl,
+	output            sd_wrh,
+	output     [15:0] sd_din,
+	input      [15:0] sd_dout,
+	output            sd_req,
+	input             sd_ack,
 
 	input sprite_dma_trigger, // from nmk_irq: snapshot sprite RAM now
 
@@ -96,25 +118,80 @@ module video_macross2 #(
 	// Graphics ROMs (byte-addressed, see tools/mkgfxrom.py). No
 	// descrambling — read directly (see header).
 	// ------------------------------------------------------------------
-	reg [7:0] fgtile_rom  [0:131071];  // mcrs2j.1, 8x8x4bpp packed_msb, 32B/tile
-	reg [7:0] bgtile_rom  [0:2097151]; // bp932an.a04, 16x16 col_2x2_group, 128B/tile — 16384 tiles (14-bit code, see header)
-	reg [7:0] sprites_rom [0:4194303]; // bp932an.a07+a08, word_swap-extracted, 128B/16x16-unit
-	initial if (FGTILE_FILE  != "") $readmemh(FGTILE_FILE,  fgtile_rom);
-	initial if (BGTILE_FILE  != "") $readmemh(BGTILE_FILE,  bgtile_rom);
-	initial if (SPRITES_FILE != "") $readmemh(SPRITES_FILE, sprites_rom);
+	// HW_ROMS=0: unchanged $readmemh 0-latency sim arrays. HW_ROMS=1: all
+	// three share one physical SDRAM port via a 3-way sdram_arb, each
+	// behind its own rom_cache1_byte. See docs/hw-bringup.md — BG/TX
+	// (fgtile) fetch is per-pixel/real-time (tied to ce_pix) and NOT
+	// gated on cache-ready: a cache miss just serves the last-cached
+	// byte for one extra pixel or two rather than stalling the whole
+	// raster pipeline out of sync with real-time video timing, an
+	// honest, documented, un-chased risk of a rare single-pixel visual
+	// artifact under worst-case SDRAM contention (never a functional
+	// hang — rom_cache1 itself is proven to always converge to the
+	// correct value, see its own standalone verification). Sprite fetch
+	// is different: it's an FSM-paced background compositing pass, not
+	// tied to ce_pix at all, so it gets a REAL blocking wait instead
+	// (see the sprite draw FSM below, S_SPR_WAIT).
+	wire [7:0] fgtile_rom_byte;
+	wire [7:0] bgtile_rom_byte;
+	wire [7:0] sprites_rom_byte;
+	wire       sprites_ready;
+	generate
+	if (!HW_ROMS) begin : g_video_rom_sim
+		reg [7:0] fgtile_rom  [0:131071];  // mcrs2j.1, 8x8x4bpp packed_msb, 32B/tile
+		reg [7:0] bgtile_rom  [0:2097151]; // bp932an.a04, 16x16 col_2x2_group, 128B/tile — 16384 tiles (14-bit code, see header)
+		reg [7:0] sprites_rom [0:4194303]; // bp932an.a07+a08, word_swap-extracted, 128B/16x16-unit
+		initial if (FGTILE_FILE  != "") $readmemh(FGTILE_FILE,  fgtile_rom);
+		initial if (BGTILE_FILE  != "") $readmemh(BGTILE_FILE,  bgtile_rom);
+		initial if (SPRITES_FILE != "") $readmemh(SPRITES_FILE, sprites_rom);
+		assign fgtile_rom_byte  = fgtile_rom[fg_byte_addr_sim[16:0]];
+		assign bgtile_rom_byte  = bgtile_rom[bg_byte_addr];
+		assign sprites_rom_byte = sprites_rom[spr_byte_addr[21:0]];
+		assign sprites_ready = 1'b1;
+		assign sd_addr = 24'd0; assign sd_wrl = 1'b0; assign sd_wrh = 1'b0; assign sd_din = 16'd0; assign sd_req = 1'b0;
+	end else begin : g_video_rom_hw
+		wire        arb_busy [0:2];
+		wire        arb_valid[0:2];
+		wire [24:1] arb_addr [0:2];
+		wire        arb_req  [0:2];
+		wire [15:0] arb_dout [0:2];
+
+		sdram_arb #(.N(3)) video_arb_inst (
+			.clk(clk_sys), .reset(reset),
+			.i_addr(arb_addr), .i_we('{1'b0,1'b0,1'b0}), .i_wrl('{1'b0,1'b0,1'b0}), .i_wrh('{1'b0,1'b0,1'b0}), .i_din('{16'd0,16'd0,16'd0}),
+			.i_req(arb_req), .i_busy(arb_busy), .i_valid(arb_valid), .i_dout(arb_dout),
+			.sdram_addr(sd_addr), .sdram_wrl(sd_wrl), .sdram_wrh(sd_wrh), .sdram_din(sd_din),
+			.sdram_dout(sd_dout), .sdram_req(sd_req), .sdram_ack(sd_ack)
+		);
+		wire fgtile_ready;
+		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_FGTILE)) fgtile_cache_inst (
+			.clk(clk_sys), .reset(reset),
+			.byte_addr({7'd0, fg_byte_addr_sim}), .data(fgtile_rom_byte), .ready(fgtile_ready),
+			.sd_addr(arb_addr[0]), .sd_req(arb_req[0]), .sd_busy(arb_busy[0]), .sd_valid(arb_valid[0]), .sd_dout(arb_dout[0])
+		);
+		wire bgtile_ready;
+		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_BGTILE)) bgtile_cache_inst (
+			.clk(clk_sys), .reset(reset),
+			.byte_addr({3'd0, bg_byte_addr}), .data(bgtile_rom_byte), .ready(bgtile_ready),
+			.sd_addr(arb_addr[1]), .sd_req(arb_req[1]), .sd_busy(arb_busy[1]), .sd_valid(arb_valid[1]), .sd_dout(arb_dout[1])
+		);
+		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_SPRITES)) sprites_cache_inst (
+			.clk(clk_sys), .reset(reset),
+			.byte_addr({2'd0, spr_byte_addr}), .data(sprites_rom_byte), .ready(sprites_ready),
+			.sd_addr(arb_addr[2]), .sd_req(arb_req[2]), .sd_busy(arb_busy[2]), .sd_valid(arb_valid[2]), .sd_dout(arb_dout[2])
+		);
+	end
+	endgenerate
 
 	// 8x8x4bpp packed_msb: 32 bytes/tile, hi nibble = even column first.
 	function automatic [3:0] tile_nibble(input [7:0] byte_val, input col_odd);
 		tile_nibble = col_odd ? byte_val[3:0] : byte_val[7:4];
 	endfunction
 
-	function automatic [3:0] fgtile_pixel(input integer code, input integer row, input integer col);
-		integer byte_addr;
-		begin
-			byte_addr = code * 32 + row * 4 + (col >> 1);
-			fgtile_pixel = tile_nibble(fgtile_rom[byte_addr[16:0]], col[0]);
-		end
-	endfunction
+	// fgtile (TX layer) byte address — code*32 + row*4 + (col>>1). See
+	// g_video_rom_sim/g_video_rom_hw above for the actual byte lookup
+	// (fgtile_rom_byte) this address feeds.
+	wire [16:0] fg_byte_addr_sim = {txvram_data[11:0], 5'd0} + {12'd0, tx_py, 2'd0} + {15'd0, tx_px[2:1]};
 
 	// ------------------------------------------------------------------
 	// BG tile-fetch address — gfx_8x8x4_col_2x2_group_packed_msb layout:
@@ -122,7 +199,7 @@ module video_macross2 #(
 	// (col 8-15) at +64, same as video_macross.sv's own derivation.
 	// ------------------------------------------------------------------
 	wire [20:0] bg_byte_addr;
-	wire [7:0]  bgtile_byte = bgtile_rom[bg_byte_addr];
+	wire [7:0]  bgtile_byte = bgtile_rom_byte;
 
 	function automatic [3:0] bg_tile_pixel_nib(input [7:0] byte_val, input integer col_local);
 		bg_tile_pixel_nib = tile_nibble(byte_val, col_local[0]);
@@ -132,7 +209,7 @@ module video_macross2 #(
 	// Sprite tile-fetch address — plain byte read, no descrambling.
 	// ------------------------------------------------------------------
 	wire [21:0] spr_byte_addr;
-	wire [7:0] sprites_byte = sprites_rom[spr_byte_addr[21:0]];
+	wire [7:0] sprites_byte = sprites_rom_byte;
 
 	// ------------------------------------------------------------------
 	// Palette decode: RRRRGGGGBBBBRGBx (emupal.cpp RRRRGGGGBBBBRGBx_decoder)
@@ -191,7 +268,7 @@ module video_macross2 #(
 	// TILEMAP_SCAN_COLS, 64x32: tile_index = col*32 + row (11 bits, 0-2047)
 	assign txvram_addr = {tx_col, 5'd0} + {6'd0, tx_row};
 
-	wire [3:0] tx_pix_nib = fgtile_pixel(int'(txvram_data[11:0]), int'(tx_py), int'(tx_px));
+	wire [3:0] tx_pix_nib = tile_nibble(fgtile_rom_byte, tx_px[0]);
 	wire       tx_opaque = (tx_pix_nib != 4'hF);
 	wire [9:0] tx_pal_addr = TX_PAL_BASE + {2'd0, txvram_data[15:12], tx_pix_nib};
 
@@ -246,6 +323,7 @@ module video_macross2 #(
 		S_SPR_HEAD    = 6,
 		S_SPR_UNIT    = 7,
 		S_SPR_CHECK   = 8,
+		S_SPR_WAIT    = 13, // HW_ROMS=1 only: real block until sprites_ready (see rom_cache1_byte above); at HW_ROMS=0, sprites_ready is tied 1'b1, so this is a single pass-through cycle, unchanged from before this state existed
 		S_SPR_CHECK2  = 9,
 		S_SPR_PLOT    = 10,
 		S_SPR_NEXT    = 11,
@@ -383,11 +461,15 @@ module video_macross2 #(
 						byte_addr = s_unit_code * 128 + half_offset + s_py * 4 + (col_local >> 1);
 						s_byte_addr <= byte_addr[21:0];
 					end
-					state <= S_SPR_CHECK2;
+					state <= S_SPR_WAIT;
 				end
-				// One extra cycle so `spr_byte_addr`/`sprites_byte` (combinational,
-				// downstream of a registered `s_byte_addr`) has settled before
-				// this state reads it.
+				// Real blocking wait for the fetched byte (see rom_cache1_byte
+				// above) — at HW_ROMS=0 sprites_ready is tied 1'b1, so this
+				// exits after exactly one cycle, the same single settle cycle
+				// this FSM already had before HW_ROMS existed.
+				S_SPR_WAIT: begin
+					if (sprites_ready) state <= S_SPR_CHECK2;
+				end
 				S_SPR_CHECK2: begin
 					s_pix_nib = tile_nibble(sprites_byte, s_px[0]);
 					if (s_pix_nib != 15) state <= S_SPR_PLOT;
