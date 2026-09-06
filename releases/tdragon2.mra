@@ -23,9 +23,10 @@
   Known limitations, not yet resolved (see Macross2.sv's own header):
     - HSync/VSync timing is a documented placeholder, not yet tuned
       against real hardware.
-    - Player input bit mapping (joystick_0/1 -> IN0/IN1) is a
-      documented placeholder, not yet independently cross-checked
-      bit-for-bit against the INPUT_PORTS block below.
+    - Player input bit mapping (joystick_0/1 -> IN0/IN1) is now
+      cross-checked bit-for-bit against the INPUT_PORTS block below
+      (see Macross2.sv's own in0_i/in1_i comment) — not yet confirmed
+      against real hardware, only that it compiles.
     - dsw1_i/dsw2_i are now wired to status[7:0]/status[15:8] in
       Macross2.sv, matching this file's own <dip bits="N"> bit
       positions (the MiSTer .mra loader writes each dip's configured

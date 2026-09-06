@@ -11,13 +11,15 @@
 //   - HSync/VSync timing below is a reasonable placeholder (this
 //     board's real CRT sync timing isn't documented anywhere this
 //     project has sourced) — needs tuning against real hardware.
-//   - Player input bit mapping (joystick_0/1 -> IN0/IN1) is a
-//     reasonable placeholder, not yet cross-checked bit-for-bit against
-//     nmk16.cpp's own tdragon2 INPUT_PORTS beyond the directions/
-//     buttons/coin/start groupings already confirmed when in0_i/in1_i
-//     were added to tdragon2_core.sv.
-//   - DSW1/DSW2 are tied to the idle default (all switches off);  no
-//     OSD DIP-switch menu yet.
+//   - Player input bit mapping (joystick_0/1 -> IN0/IN1) is now
+//     cross-checked bit-for-bit against nmk16.cpp's own
+//     INPUT_PORTS_START(tdragon2) (see in0_i/in1_i's own comment
+//     below) and DSW1/DSW2 are wired to hps_io's real status[] bus
+//     (see dsw1_i/dsw2_i's own comment below and releases/tdragon2.mra's
+//     own <switches>) — neither has been confirmed against real
+//     hardware, since no JTAG/SD-card access exists in this
+//     environment, only that they compile and the bit/bus math is
+//     internally consistent with the source they were derived from.
 module emu
 (
 	`include "sys/emu_ports.vh"
@@ -55,7 +57,7 @@ localparam CONF_STR = {
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"-;",
 	"R[0],Reset;",
-	"J1,Button 1,Button 2,Start,Coin;",
+	"J1,Button 1,Button 2,Button 3,Start,Coin;",
 	"V,v",`BUILD_DATE
 };
 
@@ -112,17 +114,25 @@ pll pll
 wire reset = RESET | status[0] | buttons[1] | ioctl_download;
 
 // ------------------------------------------------------------------
-// Player inputs — see this file's own header for the "not yet
-// bit-verified against nmk16.cpp" caveat. Active-low at the core
-// (matches nmk16.cpp's own IPT_* convention); joystick_0/1 bit
-// convention follows MiSTer's own standard d-pad+4-button mapping
-// (bits[3:0]=up/down/left/right, [4]=A/button1, [5]=B/button2,
-// [8]=start, [9]=coin — the latter two per this core's own CONF_STR
-// "J1,...,Start,Coin" mapping order).
+// Player inputs — cross-checked bit-for-bit against
+// INPUT_PORTS_START(tdragon2) (nmk16.cpp:2890-2917):
+//   IN0: bit0=COIN1 bit1=COIN2 bit2=SERVICE1 bit3=START1 bit4=START2
+//        bits[7:5]=unused
+//   IN1: bit0=P1_RIGHT bit1=P1_LEFT bit2=P1_DOWN bit3=P1_UP
+//        bit4=P1_BUTTON1 bit5=P1_BUTTON2 bit6=P1_BUTTON3 bit7=unused
+//        bits[14:8]=same 7-bit pattern for P2, bit15=unused
+// Both active-low at the core (matches nmk16.cpp's own IPT_* IP_ACTIVE_LOW).
+//
+// joystick_0/1 bit convention (MiSTer standard): [0]=Right [1]=Left
+// [2]=Down [3]=Up, then buttons assigned sequentially starting at [4]
+// in the SAME order CONF_STR's own "J1,..." list declares them above
+// (Button1=[4], Button2=[5], Button3=[6], Start=[7], Coin=[8]) — this
+// is why in1_i needs no bit reordering at all: MAME's own IN1 layout
+// (R,L,D,U,then 3 buttons starting at bit4) already matches
+// joystick_0/1[6:0] directly, bit for bit.
 // ------------------------------------------------------------------
-wire [15:0] in0_i = ~{5'd0, joystick_1[9], joystick_0[9], 1'b0, joystick_1[8], joystick_0[8]};
-wire [15:0] in1_i = ~{2'd0, joystick_1[5:4], joystick_1[0], joystick_1[1], joystick_1[2], joystick_1[3],
-                      2'd0, joystick_0[5:4], joystick_0[0], joystick_0[1], joystick_0[2], joystick_0[3]};
+wire [15:0] in0_i = ~{11'd0, joystick_1[7], joystick_0[7], 1'b0, joystick_1[8], joystick_0[8]};
+wire [15:0] in1_i = ~{1'b0, joystick_1[6:0], 1'b0, joystick_0[6:0]};
 // DIP switches — the MiSTer .mra loader auto-generates its own "DIP
 // Switches" OSD submenu directly from releases/tdragon2.mra's own
 // <switches>/<dip bits="N" .../> declarations (no CONF_STR "O" entry
