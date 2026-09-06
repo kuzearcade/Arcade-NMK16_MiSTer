@@ -81,7 +81,13 @@ module tdragon2_hw_top
 		.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_CKE(SDRAM_CKE)
 	);
 
-	tdragon2_core #(.HW_ROMS(1)) core_inst (
+	// VTIMING_FILE: nmk_irq.sv's own V-PROM has no HW_ROMS gating at
+	// all — always loaded via $readmemh regardless — so this must be
+	// wired here too, matching Macross2.sv's own real hardware top,
+	// or this testbench would silently run with an uninitialized (all
+	// zero) interrupt-timing table despite otherwise exercising the
+	// real HW_ROMS=1 path.
+	tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex")) core_inst (
 		.clk_sys(clk_sys), .reset(reset),
 		.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
 		.sd0_addr(p0_addr), .sd0_wrl(p0_wrl), .sd0_wrh(p0_wrh), .sd0_din(p0_din), .sd0_dout(p0_dout), .sd0_req(p0_req), .sd0_ack(p0_ack),

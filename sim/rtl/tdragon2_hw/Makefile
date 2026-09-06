@@ -29,7 +29,9 @@ SOURCES := tdragon2_hw_top.sv $(CORE_DIR)/tdragon2_core.sv $(MACROSS2_DIR)/video
 
 all: run
 
-roms:
+roms: ioctl-rom vtiming-rom
+
+ioctl-rom:
 	python3 ../../../tools/mk_ioctl_stream.py --zip $(Z1) \
 		--region 0x000000:6.rom \
 		--region 0x080000:5.bin \
@@ -40,7 +42,13 @@ roms:
 		--region 0x8C0000:ww930915.3 \
 		--out roms/tdragon2_ioctl.bin
 
-$(OBJ_DIR)/V$(TOP): $(SOURCES) tb_tdragon2_hw.cpp $(FX68K_DIR)/fx68k.sv roms/tdragon2_ioctl.bin
+# nmk_irq's own real V-PROM (10.bpr) — has no HW_ROMS gating, always
+# loaded via $readmemh regardless of the ioctl/SDRAM path above (see
+# tdragon2_hw_top.sv's own instantiation).
+vtiming-rom:
+	python3 ../../../tools/mkgfxrom.py --zip $(Z1) --mode concat --files 10.bpr --out roms/tdragon2_vtiming.hex
+
+$(OBJ_DIR)/V$(TOP): $(SOURCES) tb_tdragon2_hw.cpp $(FX68K_DIR)/fx68k.sv roms/tdragon2_ioctl.bin roms/tdragon2_vtiming.hex
 	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --top-module $(TOP) \
 		+define+SIMULATION \
 		-y $(FX68K_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl \

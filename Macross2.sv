@@ -172,7 +172,19 @@ wire signed [15:0] audio_l, audio_r;
 assign rd_x_screen = hcount_core[8:0] - 9'd28;
 assign rd_y_screen = vcount_core[7:0] - 8'd16;
 
-tdragon2_core #(.HW_ROMS(1)) core
+// VTIMING_FILE: nmk_irq.sv's own V-PROM (10.bpr, ROM_START(tdragon2),
+// nmk16.cpp:8357-8358) has no HW_ROMS gating at all — it's always
+// loaded via $readmemh, baked into the bitstream at synthesis time
+// rather than through ioctl_download like every other ROM region here.
+// Without this, vtiming_prom is never initialized (stays all-zeros),
+// silently breaking frame-IRQ/sprite-DMA-trigger timing on real
+// hardware despite a clean compile — this file must exist locally at
+// quartus_map time (generated the same way the sim testbenches do:
+// python3 tools/mkgfxrom.py --zip mame_roms/tdragon2.zip --mode concat
+// --files 10.bpr --out roms/tdragon2_vtiming.hex) since, like every
+// other ROM file in this project, its content is copyrighted MAME dump
+// data and is never committed (see .gitignore's **/roms/*.hex).
+tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex")) core
 (
 	.clk_sys(clk_sys), .reset(reset),
 
