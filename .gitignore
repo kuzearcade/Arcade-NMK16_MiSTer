@@ -43,6 +43,10 @@ output_files/
 db/
 incremental_db/
 greybox_tmp/
+# .rbf bitstreams are regenerable build artifacts (quartus_map/fit/asm
+# from committed source) — releases/ keeps a local copy for actual use
+# on hardware, but only the hand-authored .mra files are committed.
+releases/*.rbf
 /build_id.v
 /jtag.cdf
 sim/rtl/*/.cnxerr
