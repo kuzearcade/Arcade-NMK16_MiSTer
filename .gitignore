@@ -51,6 +51,10 @@ releases/*.rbf
 /jtag.cdf
 sim/rtl/*/.cnxerr
 sim/rtl/*/qmegawiz_errors_log.txt
+# Quartus programming-tool state (quartus_pgm/System Console) generated
+# alongside quartus_asm/sta runs — not source.
+/cfg/
+/snap/
 *.qws
 *.qdb
 *.rpt
