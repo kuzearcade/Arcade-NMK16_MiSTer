@@ -123,8 +123,23 @@ wire reset = RESET | status[0] | buttons[1] | ioctl_download;
 wire [15:0] in0_i = ~{5'd0, joystick_1[9], joystick_0[9], 1'b0, joystick_1[8], joystick_0[8]};
 wire [15:0] in1_i = ~{2'd0, joystick_1[5:4], joystick_1[0], joystick_1[1], joystick_1[2], joystick_1[3],
                       2'd0, joystick_0[5:4], joystick_0[0], joystick_0[1], joystick_0[2], joystick_0[3]};
-wire [15:0] dsw1_i = 16'hFFFF;
-wire [15:0] dsw2_i = 16'hFFFF;
+// DIP switches — the MiSTer .mra loader auto-generates its own "DIP
+// Switches" OSD submenu directly from releases/tdragon2.mra's own
+// <switches>/<dip bits="N" .../> declarations (no CONF_STR "O" entry
+// needed for these — that's only for the standard/video-mode options
+// above), and writes each dip's configured value straight into
+// hps_io's own status[] bus at the exact bit position its own "bits"
+// attribute names. tdragon2.mra packs DSW1 at status[7:0] and DSW2 at
+// status[15:8] (byte order matches tdragon2_core.sv's own address
+// decode, sel_dsw1 before sel_dsw2 — see that .mra's own header for
+// the derivation), so this is a direct, unmodified read — no
+// inversion needed, since MAME's own dsw bit encoding is already
+// exactly what PORT_DIPNAME/PORT_DIPSETTING's raw mask/value pairs
+// specify. Upper byte of each 16-bit CPU-bus word is don't-care (DSW1/
+// DSW2 are 8-bit hardware switch banks) and idles high, matching in0_i/
+// in1_i's own convention for their own unused bits.
+wire [15:0] dsw1_i = {8'hFF, status[7:0]};
+wire [15:0] dsw2_i = {8'hFF, status[15:8]};
 
 // ------------------------------------------------------------------
 // SDRAM — single physical rtl/sdram.sv instance, 4 ports, all running

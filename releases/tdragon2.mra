@@ -26,11 +26,14 @@
     - Player input bit mapping (joystick_0/1 -> IN0/IN1) is a
       documented placeholder, not yet independently cross-checked
       bit-for-bit against the INPUT_PORTS block below.
-    - dsw1_i/dsw2_i are hardcoded to 16'hFFFF in Macross2.sv — NOT yet
-      wired to hps_io's own real DIP-switch delivery mechanism, so the
-      <switches>/<dip> data below, while transcribed correctly from the
-      driver, currently has no effect on the running game (it will
-      always behave as if every switch were left at its default).
+    - dsw1_i/dsw2_i are now wired to status[7:0]/status[15:8] in
+      Macross2.sv, matching this file's own <dip bits="N"> bit
+      positions (the MiSTer .mra loader writes each dip's configured
+      value directly into status[] at that same bit index — no
+      CONF_STR reservation needed). Not yet confirmed against real
+      hardware (no JTAG/SD-card access in this environment), only that
+      it compiles and the bit-position math is internally consistent
+      with this file's own <switches> byte order.
     - <rotation> below is this project's best understanding of the
       MiSTer .mra convention for a MAME ROT270 flag (see
       docs/game-inventory.md's own "vertical" orientation note for this
