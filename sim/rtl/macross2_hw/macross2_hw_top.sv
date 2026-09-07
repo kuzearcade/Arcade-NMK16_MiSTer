@@ -9,6 +9,12 @@
 // wired to all four sd0-sd3 ports (sd2 forwarded internally to
 // video_macross2.sv's own arbiter), driven by a real ioctl_download byte
 // stream instead of $readmemh. See docs/hw-bringup.md.
+//
+// rd_x/rd_y are driven INTERNALLY from the core's own live hcount_o/
+// vcount_o raster counters, exactly as Macross2.sv's own real hardware
+// top does — see tdragon2_hw_top.sv's own header for why a raw
+// testbench-controlled sweep is not a faithful model of video_macross2.sv's
+// HW_ROMS=1 real-time tile-byte SDRAM fetch pacing.
 module macross2_hw_top
 (
 	input  clk_sys,
@@ -48,12 +54,18 @@ module macross2_hw_top
 	output [7:0]  dbg_oki0_chip_dout,
 	output [7:0]  dbg_oki1_chip_dout,
 
-	input  [8:0]  rd_x,
-	input  [7:0]  rd_y,
 	output [23:0] rd_rgb,
+	output        ce_pix_o,
+	output        hblank_o,
+	output        vblank_o,
+	output [9:0]  hcount_o,
+	output [9:0]  vcount_o,
 
 	output        frame_done
 );
+
+	wire [8:0] rd_x_screen = hcount_o[8:0] - 9'd28;
+	wire [7:0] rd_y_screen = vcount_o[7:0] - 8'd16;
 
 	wire [15:0] SDRAM_DQ;
 	wire [12:0] SDRAM_A;
@@ -104,10 +116,14 @@ module macross2_hw_top
 		.dbg_z80_iorq_n(dbg_z80_iorq_n), .dbg_z80_int_n(dbg_z80_int_n), .dbg_z80_reset_n(dbg_z80_reset_n), .dbg_z80_cen(dbg_z80_cen),
 		.dbg_ym_we(dbg_ym_we), .dbg_ym_cs(dbg_ym_cs), .dbg_ym_chip_dout(dbg_ym_chip_dout), .dbg_ym_irq_n(dbg_ym_irq_n),
 		.dbg_oki0_we(dbg_oki0_we), .dbg_oki1_we(dbg_oki1_we), .dbg_oki0_chip_dout(dbg_oki0_chip_dout), .dbg_oki1_chip_dout(dbg_oki1_chip_dout),
-		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
+		.rd_x(rd_x_screen), .rd_y(rd_y_screen), .rd_rgb(rd_rgb),
 		.dbg_pal_addr(10'd0), .dbg_pal_data(), .dbg_bgvram_addr(15'd0), .dbg_bgvram_data(),
 		.dbg_txvram_addr(11'd0), .dbg_txvram_data(),
-		.frame_done(frame_done)
+		.frame_done(frame_done),
+
+		.audio_l(), .audio_r(),
+		.ce_pix_o(ce_pix_o), .hcount_o(hcount_o), .vcount_o(vcount_o), .hblank_o(hblank_o), .vblank_o(vblank_o),
+		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF)
 	);
 
 endmodule

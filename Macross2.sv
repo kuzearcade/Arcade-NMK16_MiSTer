@@ -133,7 +133,16 @@ pll pll
 	.locked(pll_locked)
 );
 
-wire reset = RESET | status[0] | buttons[1] | ioctl_download;
+// ~pll_locked was previously NOT part of this gate — only the SDRAM
+// controller's own .init(~pll_locked) accounted for PLL lock at all.
+// That left every other clk_sys-domain block (the whole core, both
+// SDRAM req/arb instances via tdragon2_core.sv's own por_rst, hps_io's
+// own clk_sys-domain logic) free to start operating the instant
+// `reset` first deasserts, even if clk_sys itself hadn't yet settled to
+// a stable 40MHz (a genuine race at FPGA configuration time, before the
+// PLL has locked) — a real, if hard-to-observe-without-hardware,
+// omission fixed here defensively.
+wire reset = RESET | status[0] | buttons[1] | ioctl_download | ~pll_locked;
 
 // ------------------------------------------------------------------
 // Player inputs — cross-checked bit-for-bit against
@@ -256,6 +265,7 @@ assign rd_y_screen = vcount_core[7:0] - 8'd16;
 tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex")) core
 (
 	.clk_sys(clk_sys), .reset(reset), .game_macross2(game_macross2),
+	.extra_por_hold(~pll_locked),
 
 	.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),

@@ -9,6 +9,27 @@
 // real SDRAM wait states), just confirmation that the real hardware
 // ROM-loading/wait-state path produces a CPU that boots and runs
 // real, varied instructions rather than getting stuck or crashing.
+//
+// Also checks actual RENDERED VIDEO CONTENT, unlike this testbench's own
+// original shape — added after real hardware bring-up showed a solid
+// black screen on both tdragon2 and macross2 despite this testbench's
+// own CPU-instruction checks passing; that gap (never having actually
+// sampled rd_rgb under HW_ROMS=1 at all) is exactly the kind of thing
+// that class of check can't catch, so this closes it directly.
+//
+// Pixels are sampled CONTINUOUSLY during the main run loop, gated by
+// ce_pix_o/hblank_o/vblank_o, from rd_rgb driven by macross2_hw_top.sv's
+// own internally-computed rd_x/rd_y (tracking the core's live hcount_o/
+// vcount_o raster counters, exactly as Macross2.sv's own real hardware
+// top does) — NOT a post-frame sweep setting rd_x/rd_y directly (an
+// earlier version of this testbench did that, matching the plain
+// HW_ROMS=0 sim testbenches' own long-established technique, but that
+// changes rd_x every 1-2 clk_sys cycles versus real hardware's own
+// 5-cycles-per-pixel ce_pix pacing — a strictly harsher, faster
+// address-change rate for video_macross2.sv's own HW_ROMS=1 real-time
+// BG/TX tile-byte SDRAM fetch than real hardware ever produces, which
+// would overstate any tile-fetch-staleness symptom rather than reproduce
+// what real hardware actually shows).
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -17,6 +38,9 @@
 
 #include "Vmacross2_hw_top.h"
 #include "verilated.h"
+
+static constexpr int SCREEN_W = 384;
+static constexpr int SCREEN_H = 224;
 
 static uint64_t g_run_cycles = 300000000; // same clk_sys budget as the sim testbench, override via argv[1]
 
@@ -98,8 +122,58 @@ int main(int argc, char **argv) {
 	std::set<uint32_t> recent_pcs;
 	uint64_t last_quarter_start = g_run_cycles - g_run_cycles / 4;
 
+	uint32_t frame_count = 0;
+	bool prev_frame_done = false;
+	long last_frame_nonzero_px = -1;
+	bool dump_ppm = std::getenv("TB_DUMP_PPM") != nullptr;
+
+	// Live framebuffer, continuously overwritten pixel-by-pixel as the
+	// core's own real-time raster scan produces them (ce_pix_o-gated,
+	// like a real capture device would sample the analog output) —
+	// filled in over the course of each frame, then read out (nonzero
+	// count + optional PPM) at that frame's own frame_done.
+	static uint32_t framebuf[SCREEN_H][SCREEN_W];
+
 	for (; clk_sys_ticks < g_run_cycles; clk_sys_ticks++) {
 		tick();
+
+		if (top.ce_pix_o && !top.hblank_o && !top.vblank_o) {
+			int x = (int)top.hcount_o - 28;
+			int y = (int)top.vcount_o - 16;
+			if (x >= 0 && x < SCREEN_W && y >= 0 && y < SCREEN_H) framebuf[y][x] = top.rd_rgb;
+		}
+
+		bool frame_done_now = top.frame_done;
+		if (!prev_frame_done && frame_done_now) {
+			long nonzero_px = 0;
+			FILE *ppm = nullptr;
+			if (dump_ppm) {
+				char fname[64];
+				std::snprintf(fname, sizeof(fname), "macross2_hw_frame_%02u.ppm", frame_count);
+				ppm = std::fopen(fname, "wb");
+				std::fprintf(ppm, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
+			}
+			for (int y = 0; y < SCREEN_H; y++) {
+				for (int x = 0; x < SCREEN_W; x++) {
+					uint32_t rgb = framebuf[y][x];
+					if (rgb != 0) nonzero_px++;
+					if (ppm) {
+						uint8_t rgb_bytes[3] = {
+							(uint8_t)((rgb >> 16) & 0xFF),
+							(uint8_t)((rgb >> 8) & 0xFF),
+							(uint8_t)(rgb & 0xFF)
+						};
+						std::fwrite(rgb_bytes, 1, 3, ppm);
+					}
+				}
+			}
+			if (ppm) std::fclose(ppm);
+			last_frame_nonzero_px = nonzero_px;
+			if (frame_count < 5 || frame_count % 50 == 0)
+				printf("tb_macross2_hw: frame %u: %ld/%d nonzero pixels\n", frame_count, nonzero_px, SCREEN_W * SCREEN_H);
+			frame_count++;
+		}
+		prev_frame_done = frame_done_now;
 
 		bool m1_n_now = top.dbg_z80_m1_n;
 		if (top.dbg_z80_reset_n && prev_m1_n && !m1_n_now) {
@@ -143,6 +217,8 @@ int main(int argc, char **argv) {
 	printf("tb_macross2_hw: Z80 wrote to YM2203 %ld times, OKI0 %ld times, OKI1 %ld times\n", ym_writes, oki0_writes, oki1_writes);
 	printf("tb_macross2_hw: final dbg_z80_reset_n=%d dbg_z80_m1_n=%d dbg_z80_mreq_n=%d\n",
 	       top.dbg_z80_reset_n, top.dbg_z80_m1_n, top.dbg_z80_mreq_n);
+	printf("tb_macross2_hw: rendered %u video frame(s); last frame had %ld/%d nonzero pixels\n",
+	       frame_count, last_frame_nonzero_px, SCREEN_W * SCREEN_H);
 	if (m68k_trace) fclose(m68k_trace);
 
 	return 0;

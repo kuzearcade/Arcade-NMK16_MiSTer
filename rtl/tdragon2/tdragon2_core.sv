@@ -215,7 +215,16 @@ module tdragon2_core #(
 	input  [15:0] in0_i,
 	input  [15:0] in1_i,
 	input  [15:0] dsw1_i,
-	input  [15:0] dsw2_i
+	input  [15:0] dsw2_i,
+
+	// HW_ROMS=1 real hardware top only: hold por_rst's own countdown at
+	// 0 while this is asserted (Macross2.sv drives it with ~pll_locked
+	// — see por_rst's own comment below for why). Every existing sim
+	// testbench leaves this floating; Verilator/Quartus both default an
+	// unconnected input to 0, which is "no extra hold" — por_rst's own
+	// countdown then behaves exactly as it did before this port existed,
+	// so this is a byte-for-byte no-op everywhere except Macross2.sv.
+	input extra_por_hold
 );
 
 	// ------------------------------------------------------------------
@@ -232,11 +241,29 @@ module tdragon2_core #(
 	// this). Real MiSTer cores make the same distinction — the SDRAM
 	// controller resets once at FPGA configuration (or PLL lock), not on
 	// every user-triggered "soft" game reset.
+	//
+	// extra_por_hold (real hardware only — see port declaration above):
+	// this countdown's own 16 clk_sys cycles (400ns at 40MHz) can easily
+	// complete before a real altpll has actually locked (lock time is
+	// typically tens of microseconds) — por_rst has no dependency on
+	// pll_locked at all otherwise, unlike the game-level `reset` input
+	// (which Macross2.sv does gate with ~pll_locked), so this countdown
+	// could complete on a not-yet-stable/wrong-frequency clock right
+	// after FPGA configuration, latching sd0_inst/sd1_inst/oki_arb_inst
+	// into a corrupted internal state that never gets a second chance to
+	// reset once clk_sys later stabilizes (nothing else ever resets
+	// them again). Holding the countdown at 0 while extra_por_hold is
+	// asserted defers it until the clock is genuinely trustworthy.
 	reg [3:0] por_cnt = 4'd0;
 	reg       por_rst = 1'b1;
-	always @(posedge clk_sys) if (por_rst) begin
-		if (por_cnt == 4'd15) por_rst <= 1'b0;
-		else por_cnt <= por_cnt + 4'd1;
+	always @(posedge clk_sys) begin
+		if (extra_por_hold) begin
+			por_cnt <= 4'd0;
+			por_rst <= 1'b1;
+		end else if (por_rst) begin
+			if (por_cnt == 4'd15) por_rst <= 1'b0;
+			else por_cnt <= por_cnt + 4'd1;
+		end
 	end
 
 	// ------------------------------------------------------------------

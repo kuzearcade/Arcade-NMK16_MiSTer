@@ -6,6 +6,26 @@
 // docs/hw-bringup.md. Reuses the same debug/trace ports as
 // sim/rtl/tdragon2/tb_tdragon2.cpp's own oracle-verified sim testbench
 // (unaffected by HW_ROMS — same tdragon2_core.sv module, same ports).
+//
+// rd_x/rd_y are now driven INTERNALLY from the core's own live
+// hcount_o/vcount_o raster counters, computed the exact same way
+// Macross2.sv's own real hardware top does (rd_x_screen/rd_y_screen) —
+// NOT left as raw testbench-controlled inputs. This matters: a
+// testbench that instead sweeps rd_x/rd_y through a post-frame scan
+// (this file's own original shape, and the plain HW_ROMS=0 sim
+// testbenches' own long-established technique) works fine against
+// video_macross2.sv's HW_ROMS=0 composite path (purely combinational,
+// zero-latency) but is NOT a faithful model of video_macross2.sv's own
+// HW_ROMS=1 real-time BG/TX tile-byte SDRAM fetch, which is paced
+// against the REAL, continuously-advancing raster position (rd_x only
+// advances once every 5 clk_sys cycles in real hardware, via ce_pix)
+// — a post-frame sweep that changes rd_x every 1-2 clk_sys cycles
+// exercises a strictly harsher, faster address-change rate than real
+// hardware ever does, which would overstate any tile-fetch-staleness
+// symptom. Sampling the ACTUAL rd_rgb this module produces, continuously,
+// gated by hblank_o/vblank_o/ce_pix_o exactly as real hardware's own
+// video sync logic would, is the only way to see what real hardware
+// truly outputs.
 module tdragon2_hw_top
 (
 	input  clk_sys,
@@ -45,12 +65,21 @@ module tdragon2_hw_top
 	output [7:0]  dbg_oki0_chip_dout,
 	output [7:0]  dbg_oki1_chip_dout,
 
-	input  [8:0]  rd_x,
-	input  [7:0]  rd_y,
 	output [23:0] rd_rgb,
+	output        ce_pix_o,
+	output        hblank_o,
+	output        vblank_o,
+	output [9:0]  hcount_o,
+	output [9:0]  vcount_o,
 
 	output        frame_done
 );
+
+	// Same computation as Macross2.sv's own rd_x_screen/rd_y_screen —
+	// see that file's own header for the underflow-during-blanking
+	// derivation.
+	wire [8:0] rd_x_screen = hcount_o[8:0] - 9'd28;
+	wire [7:0] rd_y_screen = vcount_o[7:0] - 8'd16;
 
 	wire [15:0] SDRAM_DQ;
 	wire [12:0] SDRAM_A;
@@ -101,10 +130,14 @@ module tdragon2_hw_top
 		.dbg_z80_iorq_n(dbg_z80_iorq_n), .dbg_z80_int_n(dbg_z80_int_n), .dbg_z80_reset_n(dbg_z80_reset_n), .dbg_z80_cen(dbg_z80_cen),
 		.dbg_ym_we(dbg_ym_we), .dbg_ym_cs(dbg_ym_cs), .dbg_ym_chip_dout(dbg_ym_chip_dout), .dbg_ym_irq_n(dbg_ym_irq_n),
 		.dbg_oki0_we(dbg_oki0_we), .dbg_oki1_we(dbg_oki1_we), .dbg_oki0_chip_dout(dbg_oki0_chip_dout), .dbg_oki1_chip_dout(dbg_oki1_chip_dout),
-		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
+		.rd_x(rd_x_screen), .rd_y(rd_y_screen), .rd_rgb(rd_rgb),
 		.dbg_pal_addr(10'd0), .dbg_pal_data(), .dbg_bgvram_addr(15'd0), .dbg_bgvram_data(),
 		.dbg_txvram_addr(11'd0), .dbg_txvram_data(),
-		.frame_done(frame_done)
+		.frame_done(frame_done),
+
+		.audio_l(), .audio_r(),
+		.ce_pix_o(ce_pix_o), .hcount_o(hcount_o), .vcount_o(vcount_o), .hblank_o(hblank_o), .vblank_o(vblank_o),
+		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF)
 	);
 
 endmodule
