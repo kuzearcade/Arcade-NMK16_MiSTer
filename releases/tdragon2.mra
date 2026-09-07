@@ -20,6 +20,17 @@
   directly against mkrom_wordswap.py's own formula — see
   tools/mk_ioctl_stream.py's own header comment).
 
+  Game select: this Macross2.rbf is now SHARED between tdragon2 and
+  macross2 (rtl/tdragon2/tdragon2_core.sv was merged to serve both games
+  at runtime — see that file's own header). <switches default="F7,FF,00">
+  below's third byte sets status[16]=0 (tdragon2) — a HIDDEN bit, no
+  corresponding <dip> entry, so it never appears in the OSD and can't be
+  accidentally toggled (see docs/mra-workflow.md's own Donkey Kong
+  reference example for the precedent: an undeclared bit in a <switches
+  default="..."> byte just stays fixed at that raw value). This is bit0
+  of status[16] specifically because Macross2.sv reads status[16] as
+  game_macross2 — see that file's own header.
+
   Known limitations, not yet resolved (see Macross2.sv's own header):
     - HSync/VSync timing is a documented placeholder, not yet tuned
       against real hardware.
@@ -58,8 +69,10 @@
   <!-- DSW1 default 0xF7, DSW2 default 0xFF — see individual <dip>
        entries below for the bit-by-bit derivation. Byte order matches
        tdragon2_core.sv's own address decode (sel_dsw1 at 0x100008,
-       sel_dsw2 at 0x10000A — DSW1 first). -->
-  <switches default="F7,FF">
+       sel_dsw2 at 0x10000A — DSW1 first). Third byte 0x00 sets the
+       HIDDEN game-select bit (status[16]=0 -> tdragon2, no <dip> entry
+       declares it — see this file's own header). -->
+  <switches default="F7,FF,00">
     <dip bits="0" name="Service Mode" ids="Off,On"/>
     <dip bits="1" name="Demo Sounds" ids="Off,On"/>
     <dip bits="2" name="Flip Screen" ids="On,Off"/>

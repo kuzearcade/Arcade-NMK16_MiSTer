@@ -21,30 +21,23 @@
   stream this produces is correct regardless of that internal gap
   (nothing reads the unused tail).
 
-  IMPORTANT — STILL NOT YET FUNCTIONAL, but the gap has narrowed:
-  rtl/macross2/macross2_core.sv now has its own real HW_ROMS=1 port
-  (SDRAM-backed ROM loading, RAM-inference-safe mainram/bgvram/txvram,
-  real audio mix, real DSW1/DSW2/IN0/IN1 ports — mirroring
-  tdragon2_core.sv's own already-hardware-proven implementation
-  line-for-line, including this game's own two structural differences:
-  no mainram address-line swap, and OKI2 is 0x100000 not tdragon2's own
-  0x200000). Verified in simulation both ways: HW_ROMS=0 against the
-  pre-port RTL (bit-identical trace files — zero regression) and
-  HW_ROMS=1 against a real sdram.sv+sdram_model.sv harness (sim/rtl/
-  macross2_hw/, mirroring sim/rtl/tdragon2_hw/'s own) — a full 10.2MB
-  ioctl-download completes and both CPUs execute real, varied
-  instructions afterward.
-
-  What's STILL missing before this .mra can actually boot: this .mra's
-  own <rbf> (Macross2) is CURRENTLY WIRED, in Macross2.sv, to a FIXED
-  tdragon2_core instance — macross2_core.sv's own new HW_ROMS=1 port
-  above has no way to actually get INTO the Macross2.rbf yet. Bringing
-  this game up on real hardware still needs either a second, dedicated
-  rbf built around macross2_core.sv, or a game-select mechanism inside
-  Macross2.sv (or a new shared top) that can instantiate either core.
-  This file exists now as a correctness-verified ROM-loading/DIP/input
-  transcription AND a hardware-ready core, waiting only on that
-  top-level wiring.
+  Hardware status: rtl/tdragon2/tdragon2_core.sv is now a SHARED Family C
+  core serving both tdragon2 and macross2 at runtime (merged rather than
+  built as two separate cores — a real ALM-budget constraint: two nearly-
+  identical ~60%-utilization cores could not both fit as separate
+  instances in one bitstream — see that file's own header for the full
+  derivation, including why the V-PROM and NMK112 sizing turned out not
+  to need per-game switching at all, and why the mainram address-line
+  swap does). This Macross2.rbf is selected per-game by a HIDDEN
+  status[16] bit (game_macross2) this .mra's own <switches default="...">
+  third byte sets below — see Macross2.sv's own header for the full
+  mechanism. Verified in simulation: HW_ROMS=0 against the pre-merge RTL
+  (bit-identical trace files — zero regression) and HW_ROMS=1 against a
+  real sdram.sv+sdram_model.sv harness (sim/rtl/macross2_hw/, mirroring
+  sim/rtl/tdragon2_hw/'s own) — a full 10.2MB ioctl-download completes
+  and both CPUs execute real, varied instructions afterward. Not yet
+  confirmed against real hardware (no JTAG/SD-card access in this
+  environment).
 
   Other known limitations, not yet resolved:
     - <rotation> — macross2 is ROT0 (horizontal), unlike tdragon2's own
@@ -63,10 +56,13 @@
   <rbf>Macross2</rbf>
 
   <!-- DSW1 default 0xF7, DSW2 default 0xFF — see individual <dip>
-       entries below. Byte order matches macross2_core.sv's own address
+       entries below. Byte order matches the shared core's own address
        decode (sel_dsw1 at 0x100008, sel_dsw2 at 0x10000A — DSW1
-       first), same convention as tdragon2.mra's own. -->
-  <switches default="F7,FF">
+       first), same convention as tdragon2.mra's own. Third byte 0x01
+       sets the HIDDEN game-select bit (status[16]=1 -> macross2, no
+       <dip> entry declares it — see this file's own header and
+       Macross2.sv's own header for the mechanism). -->
+  <switches default="F7,FF,01">
     <dip bits="0" name="Service Mode" ids="Off,On"/>
     <dip bits="1" name="Demo Sounds" ids="Off,On"/>
     <dip bits="2" name="Flip Screen" ids="On,Off"/>

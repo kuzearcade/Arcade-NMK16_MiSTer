@@ -30,6 +30,7 @@ int main(int argc, char **argv) {
 	contextp.commandArgs(argc, argv);
 
 	Vtdragon2_core top{&contextp};
+	top.game_macross2 = 0; // shared Family C core (see tdragon2_core.sv's own header) — tdragon2 behavior
 
 	FILE *z80_trace = std::fopen("tdragon2_z80.trace", "w");
 	FILE *z80_cyc_trace = std::fopen("z80_cyc.trace", "w");

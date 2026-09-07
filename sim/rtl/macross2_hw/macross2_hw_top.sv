@@ -1,12 +1,14 @@
-// Hardware-mode verification harness for macross2_core (HW_ROMS=1) —
-// mirrors sim/rtl/tdragon2_hw/tdragon2_hw_top.sv exactly (see that file's
-// own header): a real rtl/sdram.sv + sim/models/sdram_model.sv wired to
-// all four of macross2_core's own sd0-sd3 ports (sd2 forwarded internally
-// to video_macross2.sv's own arbiter), driven by a real ioctl_download
-// byte stream instead of $readmemh. See docs/hw-bringup.md. Reuses the
-// same debug/trace ports as sim/rtl/macross2/tb_macross2.cpp's own sim
-// testbench (unaffected by HW_ROMS — same macross2_core.sv module, same
-// ports).
+// Hardware-mode verification harness for the macross2 game running on the
+// SHARED Family C core (rtl/tdragon2/tdragon2_core.sv, HW_ROMS=1,
+// game_macross2=1 — see that file's own header: it now serves both
+// tdragon2 and macross2 from one module). Originally instantiated a
+// separate rtl/macross2/macross2_core.sv; retired once the two games'
+// cores were merged (see git history for the pre-merge version).
+// Otherwise identical to sim/rtl/tdragon2_hw/tdragon2_hw_top.sv (see that
+// file's own header): a real rtl/sdram.sv + sim/models/sdram_model.sv
+// wired to all four sd0-sd3 ports (sd2 forwarded internally to
+// video_macross2.sv's own arbiter), driven by a real ioctl_download byte
+// stream instead of $readmemh. See docs/hw-bringup.md.
 module macross2_hw_top
 (
 	input  clk_sys,
@@ -88,8 +90,8 @@ module macross2_hw_top
 	// or this testbench would silently run with an uninitialized (all
 	// zero) interrupt-timing table despite otherwise exercising the
 	// real HW_ROMS=1 path.
-	macross2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/macross2_vtiming.hex")) core_inst (
-		.clk_sys(clk_sys), .reset(reset),
+	tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/macross2_vtiming.hex")) core_inst (
+		.clk_sys(clk_sys), .reset(reset), .game_macross2(1'b1),
 		.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
 		.sd0_addr(p0_addr), .sd0_wrl(p0_wrl), .sd0_wrh(p0_wrh), .sd0_din(p0_din), .sd0_dout(p0_dout), .sd0_req(p0_req), .sd0_ack(p0_ack),
 		.sd1_addr(p1_addr), .sd1_req(p1_req), .sd1_dout(p1_dout), .sd1_ack(p1_ack),

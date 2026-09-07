@@ -1,5 +1,9 @@
-# Verilator build for macross2 (Tier 3, Family C — first Z80-direct-sound
-# hi-res port, see rtl/macross2/macross2_core.sv's header).
+# Verilator build for macross2, running on the SHARED Family C core
+# (rtl/tdragon2/tdragon2_core.sv, game_macross2=1 — see that file's own
+# header). This directory used to build its own standalone
+# rtl/macross2/macross2_core.sv; that module was retired once the two
+# games' cores were merged into one runtime-selectable core (see git
+# history for the pre-merge version if needed).
 #
 # Usage:
 #   make roms   # (re)build all ROM hex files from mame_roms/macross2.zip
@@ -13,11 +17,12 @@ JT6295_DIR := ../../../rtl/third_party/jt6295
 NMK_IRQ_DIR := ../../../rtl/nmk_irq
 NMK112_DIR := ../../../rtl/nmk112
 BJTWIN_DIR := ../../../rtl/bjtwin
-CORE_DIR := ../../../rtl/macross2
+VIDEO_DIR := ../../../rtl/macross2
+CORE_DIR := ../../../rtl/tdragon2
 ROMS_DIR := ../../../mame_roms
 TOOLS_DIR := ../../../tools
 OBJ_DIR := obj_dir
-TOP := macross2_core
+TOP := tdragon2_core
 Z1 := $(ROMS_DIR)/macross2.zip
 
 # video_timing.sv reused unchanged from Tier 1's bjtwin (this project's
@@ -29,7 +34,7 @@ Z1 := $(ROMS_DIR)/macross2.zip
 # nmk112.sv is a new, reusable OKI bank-switcher device (see its own
 # header). T80s.v reused unchanged from Tier 5's mustangb. jt03 (YM2203)
 # reused from Tier 4's gunnail/Tier 5's gunnailb own integration pattern.
-SOURCES := $(CORE_DIR)/$(TOP).sv $(CORE_DIR)/video_macross2.sv $(NMK112_DIR)/nmk112.sv \
+SOURCES := $(CORE_DIR)/$(TOP).sv $(VIDEO_DIR)/video_macross2.sv $(NMK112_DIR)/nmk112.sv \
            $(BJTWIN_DIR)/video_timing.sv $(NMK_IRQ_DIR)/nmk_irq.sv \
            $(T80_DIR)/T80s.v $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v
 

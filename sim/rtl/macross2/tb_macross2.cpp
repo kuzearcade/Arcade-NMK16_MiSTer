@@ -1,10 +1,16 @@
-// Testbench for rtl/macross2/macross2_core.sv — Tier 3's first
-// system-level integration milestone. Checks whether the new NMK112 dual-
-// OKI bank-switcher, the real V-PROM nmk_irq (this project's first
-// newly-built use of it), the direct Z80+YM2203 sound path (soundlatch
-// here is a plain polling register, no NMI — see that module's header),
-// and the 4-bank ("tilerambank") wide BG tilemap all produce a correct
-// render when driven by two real CPUs.
+// Testbench for the macross2 game running on the SHARED Family C core,
+// rtl/tdragon2/tdragon2_core.sv (game_macross2=1 — see that file's own
+// header: it now serves both tdragon2 and macross2 from one module,
+// selected at runtime, not synthesis time). Originally this testbench
+// built rtl/macross2/macross2_core.sv as its own separate module; that
+// file was retired once the two cores were merged (see git history for
+// the pre-merge standalone version if needed) — this testbench's own
+// checks are unchanged: whether the NMK112 dual-OKI bank-switcher, the
+// real V-PROM nmk_irq, the direct Z80+YM2203 sound path (soundlatch here
+// is a plain polling register, no NMI — see the core's own header), and
+// the 4-bank ("tilerambank") wide BG tilemap all produce a correct render
+// when driven by two real CPUs, now via game_macross2=1 on the shared
+// core rather than a dedicated module.
 //
 // PC tracking: same M1_n-falling-edge (Z80) / ASn-falling-edge (68000)
 // technique every prior port's own testbench uses — T80s.v/fx68k have no
@@ -13,7 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "Vmacross2_core.h"
+#include "Vtdragon2_core.h"
 #include "verilated.h"
 
 #include "../common/crc32.h"
@@ -28,7 +34,8 @@ int main(int argc, char **argv) {
 	VerilatedContext contextp;
 	contextp.commandArgs(argc, argv);
 
-	Vmacross2_core top{&contextp};
+	Vtdragon2_core top{&contextp};
+	top.game_macross2 = 1;
 
 	FILE *z80_trace = std::fopen("macross2_z80.trace", "w");
 	FILE *z80_cyc_trace = std::fopen("z80_cyc.trace", "w");

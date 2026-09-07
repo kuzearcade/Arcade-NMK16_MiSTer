@@ -1,27 +1,50 @@
-// NMK16 MiSTerFPGA project — tdragon2 (Tier 3, Family C) system-level
-// integration. Second Tier 3 port, after macross2 — read
-// rtl/macross2/macross2_core.sv's own header first, this file follows it
-// line-for-line except for the two differences below (confirmed directly
-// against the reference, not assumed from family resemblance):
-// `tdragon2()`'s own machine config (nmk16.cpp:5490-5533) is otherwise
-// BYTE-FOR-BYTE IDENTICAL to macross2()'s own (same 68000/Z80 clocks, same
-// macross2_sound_map/io_map — literally the same functions — same
-// gfx_macross2/VIDEO_START_OVERRIDE(macross2), same NMK112/dual-OKI setup),
-// so rtl/macross2/video_macross2.sv is reused completely UNMODIFIED (not
-// even a derivative — referenced directly from this file, verified there is
-// truly no video-relevant difference before doing this) and rtl/nmk112/
-// nmk112.sv is reused unmodified too, just instantiated with this game's
-// own ROM byte sizes (oki2 is 0x200000 here, not macross2's own 0x100000
-// — see below).
+// NMK16 MiSTerFPGA project — SHARED Family C system-level integration,
+// serving BOTH tdragon2 and macross2 from one core (module name kept as
+// "tdragon2_core" — tdragon2 was the pilot game and this file's own
+// identity predates the merge; renaming would touch a wide, working blast
+// radius of Makefiles/testbenches/Quartus sources for no functional gain).
+// Game selection is a genuine RUNTIME input (game_macross2 below), not a
+// synthesis-time parameter — see docs/hw-bringup.md: this is what lets one
+// Macross2.rbf boot either game, selected by a hidden status[] bit each
+// game's own .mra sets on load (see Macross2.sv's own header).
 //
-// Difference 1 — mainram address-line swap (nmk16.cpp:280-288,1100-1104):
-// `tdragon2_map` is `macross2_map(map)` plus one override,
+// This merge exists because `tdragon2()` and `macross2()`'s own machine
+// configs (nmk16.cpp:5490-5533 / 5444-5488) are BYTE-FOR-BYTE IDENTICAL
+// (same 68000/Z80 clocks, same macross2_sound_map/io_map — literally the
+// same functions — same gfx_macross2/VIDEO_START_OVERRIDE(macross2), same
+// NMK112/dual-OKI setup) except for exactly ONE genuine runtime behavior
+// difference (mainram address-line swap, below) plus two things that
+// turned out NOT to need per-game switching at all once checked directly
+// against the reference rather than assumed:
+//
+//   - V-PROM content: tdragon2's own "10.bpr" and macross2's own
+//     "mcrs2bpr.10" have IDENTICAL CRC32/SHA1 (e6ead349 /
+//     6d81b1c0233580aa48f9718bade42d640e5ef3dd) — same physical PROM,
+//     same board family, one shared VTIMING_FILE genuinely suffices for
+//     both games (not just "close enough" — byte-identical).
+//   - NMK112 ROM1_BYTES (oki2 chip sizing, rtl/nmk112/nmk112.sv): the
+//     ONLY effect of this parameter is masking WRITTEN bank-select page
+//     indices (`data & MASK1`, MASK1 = ROM1_BYTES/65536 - 1). tdragon2's
+//     own oki2 is 0x200000 (MASK1=0x1F, 32 pages); macross2's own oki2 is
+//     HALF that, 0x100000 (16 pages) — but using tdragon2's wider mask
+//     for macross2 too is provably harmless: macross2's own game code
+//     never writes a bank index beyond its own real chip's 16-page range
+//     (there is nothing on that PCB to select), so the extra mask
+//     headroom is simply never exercised. Kept at tdragon2's fixed
+//     (wider) sizing unconditionally below — no runtime toggle needed.
+//
+// Difference (the one genuine runtime behavior split) — mainram
+// address-line swap (nmk16.cpp:280-288,1100-1104): `tdragon2_map` is
+// `macross2_map(map)` plus one override,
 // `map(0x1f0000,0x1fffff).rw(mainram_swapped_r,mainram_swapped_w)`, which
 // applies `bitswap<16>(offset,15,14,13,12,11,7,9,8,10,6,5,4,3,2,1,0)` to the
 // WORD OFFSET before indexing m_mainram — verified independently (not
 // trusted from the bit-list alone) that this swaps ONLY address bits 7 and
 // 10 with each other; every other bit passes through unchanged. A real PCB
 // address-line miswiring, faithfully replicated — NOT a data-bit scramble.
+// macross2_map itself has no such override at all. Selected below by the
+// game_macross2 runtime input (mainram_addr_cpu computation) — a single
+// small mux, negligible LE cost, no separate core copy needed.
 //
 // CRITICAL: this swap applies ONLY to the 68000 CPU-facing bus handler
 // (mainram_swapped_r/w, both directions) — it does NOT apply to MAME's own
@@ -35,29 +58,18 @@
 // CPU's own swapped writes actually land in. video_macross2.sv's own
 // mainram_addr/mainram_data tap (used for exactly this sprite-snapshot
 // mechanism, see that file's own header/body) therefore must stay
-// UNSWAPPED, reading the SAME raw `mainram` array the CPU-facing accessor
-// also indexes into — only the CPU-facing address computation below is
-// swapped. Getting this backwards (swapping both paths, or swapping
-// neither) would silently corrupt sprite draw order without necessarily
-// breaking anything else — a genuinely non-obvious point, verified against
-// the reference before implementing rather than assumed from the primary
-// session's own delegation brief (which only anticipated a single, uniform
-// swap).
-//
-// Difference 2 — OKI2 ROM size: tdragon2's own oki2 (ww930915.3) is
-// 0x200000 bytes (nmk16.cpp:8351-8352), DOUBLE macross2's own 0x100000
-// (bp932an.a05) — oki1 stays the same 0x200000 both games use. nmk112's
-// own ROM1_BYTES parameter, the oki1_rom array size/addressing width
-// (macross2_core.sv's own naming: the Verilog array named "oki1_rom"
-// backs nmk112's chip 1 / MAME tag "oki2" — a pre-existing naming
-// mismatch in macross2_core.sv itself, not introduced here), and
-// AUDIOCPU_FILE/ROM sizes elsewhere are otherwise identical.
+// UNSWAPPED for tdragon2, reading the SAME raw `mainram` array the
+// CPU-facing accessor also indexes into — only the CPU-facing address
+// computation below is swapped, and only for tdragon2 (game_macross2=0).
+// For macross2 (game_macross2=1) there is no swap on EITHER path at all —
+// both taps already compute the same way, so this asymmetry is naturally
+// game_macross2-gated purely by the mainram_addr_cpu mux below; the video
+// tap itself needs no separate per-game logic.
 //
 // Everything else — clock derivation, address decode, I/O register
 // wiring, Z80 sound path, video pipeline instantiation, real V-PROM
-// nmk_irq wiring — is copied unchanged from macross2_core.sv; see that
-// file's own header for the full derivation of anything not re-explained
-// here.
+// nmk_irq wiring, all HW_ROMS=1 SDRAM infrastructure — serves both games
+// identically, unconditional on game_macross2.
 module tdragon2_core #(
 	parameter ROM_FILE       = "",
 	parameter AUDIOCPU_FILE  = "",
@@ -77,6 +89,12 @@ module tdragon2_core #(
 ) (
 	input clk_sys,        // 40 MHz (68000 bus clk_sys/4=10MHz; pixel/raster clk_sys/5=8MHz)
 	input reset,            // async, active high
+
+	// Runtime game select — 0=tdragon2, 1=macross2 (see this file's own
+	// header). Every existing sim testbench that doesn't drive this port
+	// leaves it floating at 0 (tdragon2 behavior), byte-for-byte
+	// unchanged from before this port existed.
+	input game_macross2,
 
 	// ------------------------------------------------------------------
 	// Hardware-mode-only ports (HW_ROMS=1). Unused/unconnected at
@@ -381,13 +399,16 @@ module tdragon2_core #(
 
 	// ------------------------------------------------------------------
 	// Main work RAM (32768 x 16) — address-line-swapped for the CPU-facing
-	// path ONLY (see header). mainram_addr_cpu[10]<-byte_addr[11] and
+	// path ONLY, and ONLY for tdragon2 (game_macross2=0 — see header).
+	// Swapped form: mainram_addr_cpu[10]<-byte_addr[11] and
 	// mainram_addr_cpu[7]<-byte_addr[8] (word-address bits 10/7 swapped,
 	// i.e. byte_addr bits 11/8 since word_addr[k]=byte_addr[k+1]); every
-	// other bit passes straight through.
+	// other bit passes straight through. macross2 (game_macross2=1) has
+	// no swap at all — plain byte_addr[15:1], matching macross2_map's own
+	// lack of any override on this range.
 	// ------------------------------------------------------------------
 	reg [15:0] mainram [0:32767];
-	wire [14:0] mainram_addr_cpu =
+	wire [14:0] mainram_addr_cpu = game_macross2 ? byte_addr[15:1] :
 		{byte_addr[15:12], byte_addr[8], byte_addr[10:9], byte_addr[11], byte_addr[7:1]};
 	reg [15:0] mainram_dout;
 	reg        mainram_ready;
@@ -816,17 +837,19 @@ module tdragon2_core #(
 	);
 
 	// ------------------------------------------------------------------
-	// NMK112 — see rtl/nmk112/nmk112.sv's own header. ROM1_BYTES is
-	// 0x200000 here, not macross2's own 0x100000 (see this file's own
-	// header, "Difference 2").
+	// NMK112 — see rtl/nmk112/nmk112.sv's own header. ROM1_BYTES fixed at
+	// tdragon2's own (larger) 0x200000 unconditionally, serving macross2
+	// too (its own oki2 is half that, 0x100000, but the wider mask is
+	// provably harmless — see this file's own header for the derivation;
+	// no game_macross2 toggle needed here).
 	// ------------------------------------------------------------------
 	wire nmk112_we = z80_io_we & sel_io_nmk112;
 	wire [17:0] oki0_rom_addr_raw, oki1_rom_addr_raw;
 	wire [21:0] oki0_rom_addr, oki1_rom_addr;
 
 	nmk112 #(
-		.ROM0_BYTES(2097152), // ww930916.4, 0x200000 (oki1)
-		.ROM1_BYTES(2097152)  // ww930915.3, 0x200000 (oki2 — DOUBLE macross2's own)
+		.ROM0_BYTES(2097152), // ww930916.4 / bp932an.a06, 0x200000 (oki1, same both games)
+		.ROM1_BYTES(2097152)  // ww930915.3, 0x200000 (oki2 — macross2's own bp932an.a05 is half this; harmless, see header)
 	) nmk112_inst (
 		.clk_sys(clk_sys), .reset(reset),
 		.reg_sel(z80_a[2:0]), .reg_data(z80_do), .reg_we(nmk112_we),
@@ -836,9 +859,10 @@ module tdragon2_core #(
 
 	// ------------------------------------------------------------------
 	// OKIM6295 x2 — jt6295, driven by the Z80's own I/O bus through
-	// NMK112. oki1_rom (chip 1 / MAME tag "oki2") is now 0x200000 bytes,
-	// 21-bit-addressed — widened from macross2_core.sv's own 0x100000/
-	// 20-bit array (see header, "Difference 2").
+	// NMK112. oki1_rom (chip 1 / MAME tag "oki2") is sized 0x200000/
+	// 21-bit-addressed for both games (macross2's own real chip is half
+	// that — harmless, see header); its own OKI2_ROM_FILE simply loads
+	// into the low half when macross2's own smaller image is used.
 	// ------------------------------------------------------------------
 	// HW_ROMS=0: unchanged sim arrays (jt6295's own rom_ok tied to 1'b1
 	// below, matching the original design exactly). HW_ROMS=1: both OKI
@@ -854,13 +878,13 @@ module tdragon2_core #(
 	wire       oki0_rom_ok, oki1_rom_ok;
 	generate
 	if (!HW_ROMS) begin : g_oki_sim
-		reg [7:0] oki0_rom [0:2097151]; // ww930916.4, 0x200000
-		reg [7:0] oki1_rom [0:2097151]; // ww930915.3, 0x200000 (was 0x100000 in macross2_core.sv)
+		reg [7:0] oki0_rom [0:2097151]; // ww930916.4 / bp932an.a06, 0x200000
+		reg [7:0] oki1_rom [0:2097151]; // ww930915.3, 0x200000 (macross2's own bp932an.a05 is 0x100000 — loads into the low half)
 		initial if (OKI1_ROM_FILE != "") $readmemh(OKI1_ROM_FILE, oki0_rom);
 		initial if (OKI2_ROM_FILE != "") $readmemh(OKI2_ROM_FILE, oki1_rom);
 		reg [7:0] oki0_rom_data_r, oki1_rom_data_r;
 		always @(posedge clk_sys) oki0_rom_data_r <= oki0_rom[oki0_rom_addr[20:0]];
-		always @(posedge clk_sys) oki1_rom_data_r <= oki1_rom[oki1_rom_addr[20:0]]; // 21 bits, was [19:0]
+		always @(posedge clk_sys) oki1_rom_data_r <= oki1_rom[oki1_rom_addr[20:0]];
 		assign oki0_rom_data = oki0_rom_data_r;
 		assign oki1_rom_data = oki1_rom_data_r;
 		assign oki0_rom_ok = 1'b1;

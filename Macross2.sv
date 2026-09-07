@@ -1,10 +1,26 @@
 // NMK16 MiSTerFPGA project — real hardware top-level for the Family C
-// "Macross2" RBF (macross2/tdragon2 share an identical machine config,
-// see rtl/tdragon2/tdragon2_core.sv's own header — one .rbf, one .mra
-// per game). tdragon2 is the pilot; see docs/hw-bringup.md for the full
-// architecture writeup and docs/PLAN.md for the project's overall
-// progress. First real hardware top-level in this project — every
-// other completed port so far exists only as simulation-verified RTL.
+// "Macross2" RBF, serving BOTH macross2 and tdragon2 (identical machine
+// config, merged into one runtime-selectable core — see
+// rtl/tdragon2/tdragon2_core.sv's own header for the full derivation of
+// why a merge was safe/necessary: two nearly-identical ~60%-ALM-budget
+// cores could not both fit as separate instances). tdragon2 was the
+// pilot; see docs/hw-bringup.md for the full architecture writeup and
+// docs/PLAN.md for the project's overall progress. First real hardware
+// top-level in this project — every other completed port so far exists
+// only as simulation-verified RTL.
+//
+// Game select: game_macross2 below is a genuine RUNTIME core input, not
+// a build-time choice — driven from a HIDDEN status[] bit (status[16])
+// that each game's own .mra sets via its <switches default="..."> raw
+// byte string's own third byte (no corresponding <dip> entry — see
+// releases/tdragon2.mra's/macross2.mra's own header for the derivation
+// of this mechanism, and docs/mra-workflow.md's own Donkey Kong reference
+// example for the precedent: a <switches default="..."> byte with no
+// <dip> declaration over it stays fixed at that raw value, invisible to
+// the OSD, exactly the "pick a game with zero user interaction and no
+// stray-toggle risk" property this needs). Loading tdragon2.mra vs
+// macross2.mra on this SAME Macross2.rbf therefore deterministically
+// boots the matching game with no manual OSD step.
 //
 // Known, honestly-flagged limitations of this first pass, not yet
 // resolved:
@@ -13,10 +29,13 @@
 //     project has sourced) — needs tuning against real hardware.
 //   - Player input bit mapping (joystick_0/1 -> IN0/IN1) is now
 //     cross-checked bit-for-bit against nmk16.cpp's own
-//     INPUT_PORTS_START(tdragon2) (see in0_i/in1_i's own comment
-//     below) and DSW1/DSW2 are wired to hps_io's real status[] bus
-//     (see dsw1_i/dsw2_i's own comment below and releases/tdragon2.mra's
-//     own <switches>) — neither has been confirmed against real
+//     INPUT_PORTS_START(tdragon2)/(macross2) (see in0_i/in1_i's own
+//     comment below — macross2's own IN0/IN1 layout is confirmed a
+//     strict subset of tdragon2's, so one shared derivation serves both;
+//     macross2's own missing 3rd button bit simply goes unread by that
+//     game's own core-side logic) and DSW1/DSW2 are wired to hps_io's
+//     real status[] bus (see dsw1_i/dsw2_i's own comment below and each
+//     .mra's own <switches>) — neither has been confirmed against real
 //     hardware, since no JTAG/SD-card access exists in this
 //     environment, only that they compile and the bit/bus math is
 //     internally consistent with the source they were derived from.
@@ -57,6 +76,9 @@ localparam CONF_STR = {
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"-;",
 	"R[0],Reset;",
+	// Fixed at synthesis time as tdragon2's own superset (3 buttons) —
+	// serves macross2 too, whose own .mra just declares fewer <buttons>
+	// names (see in0_i/in1_i's own comment below).
 	"J1,Button 1,Button 2,Button 3,Start,Coin;",
 	"V,v",`BUILD_DATE
 };
@@ -115,34 +137,46 @@ wire reset = RESET | status[0] | buttons[1] | ioctl_download;
 
 // ------------------------------------------------------------------
 // Player inputs — cross-checked bit-for-bit against
-// INPUT_PORTS_START(tdragon2) (nmk16.cpp:2890-2917):
+// INPUT_PORTS_START(tdragon2) (nmk16.cpp:2890-2917). Also verified
+// against INPUT_PORTS_START(macross2) (nmk16.cpp:2801-2826): IN0 is
+// identical, and IN1 is a strict SUBSET (same R/L/D/U/Button1/Button2/
+// Start/Coin bit positions, just missing tdragon2's own Button3 — that
+// bit is simply IPT_UNKNOWN on macross2's own real board, so leaving it
+// wired here is harmless: macross2-mode core logic never reads it
+// meaningfully). One shared derivation below therefore serves both
+// games with no game_macross2 gating needed at this layer.
 //   IN0: bit0=COIN1 bit1=COIN2 bit2=SERVICE1 bit3=START1 bit4=START2
 //        bits[7:5]=unused
 //   IN1: bit0=P1_RIGHT bit1=P1_LEFT bit2=P1_DOWN bit3=P1_UP
-//        bit4=P1_BUTTON1 bit5=P1_BUTTON2 bit6=P1_BUTTON3 bit7=unused
-//        bits[14:8]=same 7-bit pattern for P2, bit15=unused
+//        bit4=P1_BUTTON1 bit5=P1_BUTTON2 bit6=P1_BUTTON3(tdragon2 only)
+//        bit7=unused; bits[14:8]=same 7-bit pattern for P2, bit15=unused
 // Both active-low at the core (matches nmk16.cpp's own IPT_* IP_ACTIVE_LOW).
 //
 // joystick_0/1 bit convention (MiSTer standard): [0]=Right [1]=Left
 // [2]=Down [3]=Up, then buttons assigned sequentially starting at [4]
 // in the SAME order CONF_STR's own "J1,..." list declares them above
-// (Button1=[4], Button2=[5], Button3=[6], Start=[7], Coin=[8]) — this
-// is why in1_i needs no bit reordering at all: MAME's own IN1 layout
-// (R,L,D,U,then 3 buttons starting at bit4) already matches
-// joystick_0/1[6:0] directly, bit for bit.
+// (Button1=[4], Button2=[5], Button3=[6], Start=[7], Coin=[8] — CONF_STR
+// is compiled once for both games as tdragon2's own superset list;
+// macross2's own .mra just declares fewer <buttons> names, leaving
+// Button3 unmapped in the OSD for that game without changing the
+// underlying bit scheme) — this is why in1_i needs no bit reordering at
+// all: MAME's own IN1 layout (R,L,D,U,then buttons starting at bit4)
+// already matches joystick_0/1[6:0] directly, bit for bit, for both
+// games.
 // ------------------------------------------------------------------
 wire [15:0] in0_i = ~{11'd0, joystick_1[7], joystick_0[7], 1'b0, joystick_1[8], joystick_0[8]};
 wire [15:0] in1_i = ~{1'b0, joystick_1[6:0], 1'b0, joystick_0[6:0]};
 // DIP switches — the MiSTer .mra loader auto-generates its own "DIP
-// Switches" OSD submenu directly from releases/tdragon2.mra's own
+// Switches" OSD submenu directly from each loaded .mra's own
 // <switches>/<dip bits="N" .../> declarations (no CONF_STR "O" entry
 // needed for these — that's only for the standard/video-mode options
 // above), and writes each dip's configured value straight into
 // hps_io's own status[] bus at the exact bit position its own "bits"
-// attribute names. tdragon2.mra packs DSW1 at status[7:0] and DSW2 at
-// status[15:8] (byte order matches tdragon2_core.sv's own address
-// decode, sel_dsw1 before sel_dsw2 — see that .mra's own header for
-// the derivation), so this is a direct, unmodified read — no
+// attribute names. Both tdragon2.mra and macross2.mra pack DSW1 at
+// status[7:0] and DSW2 at status[15:8] (byte order matches the core's
+// own address decode, sel_dsw1 before sel_dsw2 — same for both games,
+// see either .mra's own header for the derivation), so this is a
+// direct, unmodified read regardless of which game is loaded — no
 // inversion needed, since MAME's own dsw bit encoding is already
 // exactly what PORT_DIPNAME/PORT_DIPSETTING's raw mask/value pairs
 // specify. Upper byte of each 16-bit CPU-bus word is don't-care (DSW1/
@@ -150,6 +184,11 @@ wire [15:0] in1_i = ~{1'b0, joystick_1[6:0], 1'b0, joystick_0[6:0]};
 // in1_i's own convention for their own unused bits.
 wire [15:0] dsw1_i = {8'hFF, status[7:0]};
 wire [15:0] dsw2_i = {8'hFF, status[15:8]};
+
+// Runtime game select — see this file's own header. status[16] is a
+// HIDDEN bit (no <dip> entry declares it in either .mra), set purely by
+// each .mra's own <switches default="..."> third byte on load.
+wire game_macross2 = status[16];
 
 // ------------------------------------------------------------------
 // SDRAM — single physical rtl/sdram.sv instance, 4 ports, all running
@@ -197,21 +236,26 @@ wire signed [15:0] audio_l, audio_r;
 assign rd_x_screen = hcount_core[8:0] - 9'd28;
 assign rd_y_screen = vcount_core[7:0] - 8'd16;
 
-// VTIMING_FILE: nmk_irq.sv's own V-PROM (10.bpr, ROM_START(tdragon2),
-// nmk16.cpp:8357-8358) has no HW_ROMS gating at all — it's always
-// loaded via $readmemh, baked into the bitstream at synthesis time
-// rather than through ioctl_download like every other ROM region here.
-// Without this, vtiming_prom is never initialized (stays all-zeros),
-// silently breaking frame-IRQ/sprite-DMA-trigger timing on real
-// hardware despite a clean compile — this file must exist locally at
-// quartus_map time (generated the same way the sim testbenches do:
-// python3 tools/mkgfxrom.py --zip mame_roms/tdragon2.zip --mode concat
-// --files 10.bpr --out roms/tdragon2_vtiming.hex) since, like every
-// other ROM file in this project, its content is copyrighted MAME dump
-// data and is never committed (see .gitignore's **/roms/*.hex).
+// VTIMING_FILE: nmk_irq.sv's own V-PROM (tdragon2's own "10.bpr",
+// ROM_START(tdragon2), nmk16.cpp:8357-8358) has no HW_ROMS gating at
+// all — it's always loaded via $readmemh, baked into the bitstream at
+// synthesis time rather than through ioctl_download like every other
+// ROM region here, and it is NOT gated by game_macross2 either: this
+// exact same PROM content (byte-identical CRC32/SHA1, confirmed
+// directly) is macross2's own "mcrs2bpr.10" too — same physical chip,
+// same board family — so one shared file genuinely serves both games,
+// no per-game selection needed. Without this, vtiming_prom is never
+// initialized (stays all-zeros), silently breaking frame-IRQ/
+// sprite-DMA-trigger timing on real hardware despite a clean compile —
+// this file must exist locally at quartus_map time (generated the same
+// way the sim testbenches do: python3 tools/mkgfxrom.py --zip
+// mame_roms/tdragon2.zip --mode concat --files 10.bpr --out
+// roms/tdragon2_vtiming.hex) since, like every other ROM file in this
+// project, its content is copyrighted MAME dump data and is never
+// committed (see .gitignore's **/roms/*.hex).
 tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex")) core
 (
-	.clk_sys(clk_sys), .reset(reset),
+	.clk_sys(clk_sys), .reset(reset), .game_macross2(game_macross2),
 
 	.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),

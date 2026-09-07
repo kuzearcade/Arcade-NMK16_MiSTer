@@ -1,7 +1,11 @@
-# Hardware-mode (HW_ROMS=1) verification build for macross2 — see
-# docs/hw-bringup.md. Same core RTL as sim/rtl/macross2/'s own sim
-# build, plus the real SDRAM/rom_cache1/sdram_arb path instead of
-# $readmemh. Mirrors sim/rtl/tdragon2_hw/'s own Makefile exactly.
+# Hardware-mode (HW_ROMS=1) verification build for macross2, running on
+# the SHARED Family C core (rtl/tdragon2/tdragon2_core.sv, game_macross2=1
+# — see that file's own header). This directory used to build its own
+# standalone rtl/macross2/macross2_core.sv; retired once the two games'
+# cores were merged (see git history for the pre-merge version). Same
+# core RTL as sim/rtl/macross2/'s own sim build, plus the real SDRAM/
+# rom_cache1/sdram_arb path instead of $readmemh. Mirrors
+# sim/rtl/tdragon2_hw/'s own Makefile exactly.
 
 FX68K_DIR := ../../../rtl/third_party/fx68k
 T80_DIR := ../../../rtl/third_party_gen/t80
@@ -11,7 +15,7 @@ NMK_IRQ_DIR := ../../../rtl/nmk_irq
 NMK112_DIR := ../../../rtl/nmk112
 BJTWIN_DIR := ../../../rtl/bjtwin
 MACROSS2_DIR := ../../../rtl/macross2
-CORE_DIR := ../../../rtl/macross2
+CORE_DIR := ../../../rtl/tdragon2
 RTL_DIR := ../../../rtl
 MODEL_DIR := ../../models
 ROMS_DIR := ../../../mame_roms
@@ -19,7 +23,7 @@ OBJ_DIR := obj_dir
 TOP := macross2_hw_top
 Z1 := $(ROMS_DIR)/macross2.zip
 
-SOURCES := macross2_hw_top.sv $(CORE_DIR)/macross2_core.sv $(MACROSS2_DIR)/video_macross2.sv \
+SOURCES := macross2_hw_top.sv $(CORE_DIR)/tdragon2_core.sv $(MACROSS2_DIR)/video_macross2.sv \
            $(NMK112_DIR)/nmk112.sv $(BJTWIN_DIR)/video_timing.sv $(NMK_IRQ_DIR)/nmk_irq.sv \
            $(T80_DIR)/T80s.v $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
            $(RTL_DIR)/sdram.sv $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv \
