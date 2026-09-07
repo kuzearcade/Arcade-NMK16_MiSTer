@@ -21,31 +21,36 @@
   stream this produces is correct regardless of that internal gap
   (nothing reads the unused tail).
 
-  IMPORTANT — NOT YET FUNCTIONAL: unlike releases/tdragon2.mra, this
-  .mra's own <rbf> (Macross2) is CURRENTLY WIRED, in Macross2.sv, to a
-  fixed tdragon2_core instance — not macross2_core. macross2_core.sv
-  itself has no HW_ROMS parameter at all yet (still the pre-hardware-
-  bringup $readmemh-only shape), and even if it did, tdragon2_core.sv's
-  own mainram address-line swap (real PCB-specific wiring, see that
-  file's own header) is unconditional — loading this game's own ROMs
-  into the current Macross2.rbf would corrupt work-RAM addressing.
-  Bringing this game up on real hardware needs either a genuine
-  macross2_core.sv HW_ROMS=1 port (mirroring everything done for
-  tdragon2_core.sv) with its own build, or extending the shared core
-  with a per-game mainram-swap toggle so one rbf can correctly serve
-  both games. This file exists now purely as a correctness-verified
-  ROM-loading/DIP/input transcription, ready for whichever of those
-  happens first.
+  IMPORTANT — STILL NOT YET FUNCTIONAL, but the gap has narrowed:
+  rtl/macross2/macross2_core.sv now has its own real HW_ROMS=1 port
+  (SDRAM-backed ROM loading, RAM-inference-safe mainram/bgvram/txvram,
+  real audio mix, real DSW1/DSW2/IN0/IN1 ports — mirroring
+  tdragon2_core.sv's own already-hardware-proven implementation
+  line-for-line, including this game's own two structural differences:
+  no mainram address-line swap, and OKI2 is 0x100000 not tdragon2's own
+  0x200000). Verified in simulation both ways: HW_ROMS=0 against the
+  pre-port RTL (bit-identical trace files — zero regression) and
+  HW_ROMS=1 against a real sdram.sv+sdram_model.sv harness (sim/rtl/
+  macross2_hw/, mirroring sim/rtl/tdragon2_hw/'s own) — a full 10.2MB
+  ioctl-download completes and both CPUs execute real, varied
+  instructions afterward.
+
+  What's STILL missing before this .mra can actually boot: this .mra's
+  own <rbf> (Macross2) is CURRENTLY WIRED, in Macross2.sv, to a FIXED
+  tdragon2_core instance — macross2_core.sv's own new HW_ROMS=1 port
+  above has no way to actually get INTO the Macross2.rbf yet. Bringing
+  this game up on real hardware still needs either a second, dedicated
+  rbf built around macross2_core.sv, or a game-select mechanism inside
+  Macross2.sv (or a new shared top) that can instantiate either core.
+  This file exists now as a correctness-verified ROM-loading/DIP/input
+  transcription AND a hardware-ready core, waiting only on that
+  top-level wiring.
 
   Other known limitations, not yet resolved:
     - <rotation> — macross2 is ROT0 (horizontal), unlike tdragon2's own
       ROT270, so this omits the <rotation> tag entirely (matching
       docs/mra-workflow.md's own Donkey Kong reference example, which
       also omits it for a horizontal game).
-    - DSW1/DSW2 status[] wiring and player input bit mapping don't
-      exist yet for macross2_core.sv at all (see the HW_ROMS note
-      above) — the <switches>/<dip>/<buttons> data below is correctly
-      transcribed from the driver but has nothing to connect to yet.
 -->
 <misterromdescription>
   <name>Super Spacefortress Macross II</name>
