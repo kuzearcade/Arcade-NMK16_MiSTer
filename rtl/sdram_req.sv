@@ -32,7 +32,24 @@ module sdram_req
 	output [15:0] sdram_din,
 	input  [15:0] sdram_dout,
 	output reg    sdram_req,
-	input         sdram_ack
+	input         sdram_ack,
+
+	// DIAGNOSTIC ONLY — echoes we_r/addr_r, the LATCHED we/addr of
+	// whichever transaction is currently pending or just completed (i.e.
+	// valid alongside a `valid` pulse). Added during this project's own
+	// real-hardware black-screen investigation (see docs/hw-bringup.md)
+	// to test a specific hypothesis: that a consumer sharing this same
+	// port with another, unrelated caller (e.g. rom_cache1.sv's own
+	// reads sharing a port with ioctl_download's writes, see
+	// tdragon2_core.sv's g_rom_hw block) could receive a `valid` pulse
+	// that's actually the TAIL of that OTHER caller's own prior
+	// transaction completing, not a genuine completion of its own
+	// request — reading dbg_we_r_o/dbg_addr_r_o at the exact cycle
+	// `valid` pulses reveals whether the transaction that just finished
+	// really was the read/address the reader thinks it was. Every
+	// existing instantiation leaves these unconnected — harmless no-op.
+	output        dbg_we_r_o,
+	output [24:1] dbg_addr_r_o
 );
 
 	reg        pending;
@@ -47,6 +64,8 @@ module sdram_req
 	assign sdram_wrh  = we_r & wrh_r;
 	assign sdram_din  = din_r;
 	assign dout       = sdram_dout;
+	assign dbg_we_r_o   = we_r;
+	assign dbg_addr_r_o = addr_r;
 
 	always @(posedge clk) begin
 		valid    <= 1'b0;

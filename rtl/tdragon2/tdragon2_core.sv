@@ -79,6 +79,49 @@ module tdragon2_core #(
 	parameter FGTILE_FILE    = "",
 	parameter BGTILE_FILE    = "",
 	parameter SPRITES_FILE   = "",
+	// DIAGNOSTIC ONLY — see ioctl_bucket_fail_o's own comment further
+	// down. A 128-entry, one-16-bit-word-per-line $readmemh table of
+	// known-good per-4096-byte-bucket checksums over the maincpu ROM's
+	// own real content, computed host-side (not ROM-dump-derived, so
+	// unlike every other *_FILE parameter above this one is safe to
+	// commit directly — see tools/ for the generating script if it's
+	// ever regenerated). Empty string (default): the bucket-fail always
+	// block runs and produces an all-zero/meaningless ioctl_bucket_fail_o
+	// (harmless, unread) exactly like every existing sim testbench
+	// leaving VTIMING_FILE-style parameters at their own empty default.
+	parameter IOCTL_BUCKET_REF_FILE = "",
+	// DIAGNOSTIC ONLY — see rom_fetch_bucket_fail_o's own comment further
+	// down. Two companion $readmemh tables (both NOT ROM-dump-derived,
+	// safe to commit): ROM_FETCH_BUCKET_REF_FILE is 128 lines of the
+	// known-good per-bucket rotate-XOR state a REFERENCE (sim) run's own
+	// rom_fetch_bucket_state_o produced; ROM_FETCH_BUCKET_TOUCHED_FILE is
+	// 128 lines of 0/1 marking which of those buckets that reference run
+	// actually visited at all (see the comparison logic's own comment for
+	// why this second table is needed). Empty string (default, every
+	// existing sim testbench): skips loading, matching every other
+	// diagnostic *_FILE parameter's own default-off behavior.
+	parameter ROM_FETCH_BUCKET_REF_FILE     = "",
+	parameter ROM_FETCH_BUCKET_TOUCHED_FILE = "",
+	// DIAGNOSTIC ONLY — a zoomed-in companion to the pair above, same
+	// purpose/mechanism, scoped to ONLY word addresses [0,2048) (i.e.
+	// ROM_FETCH_BUCKET_REF_FILE's own bucket 0 — the one that showed a
+	// real mismatch, see rom_fetch_fine_fail_o's own comment further
+	// down) at 16-words/bucket instead of 2048-words/bucket — 128x finer,
+	// to see whether the CPU's own reset vector (bytes 0-7) specifically,
+	// or only later boot code within that same 4KB range, is corrupted.
+	parameter ROM_FETCH_FINE_REF_FILE     = "",
+	parameter ROM_FETCH_FINE_TOUCHED_FILE = "",
+	// DIAGNOSTIC ONLY — TRUE per-word granularity, one more zoom level
+	// past ROM_FETCH_FINE_*_FILE above: scoped to word addresses [0,16)
+	// (fine bucket 0's own range, the only one that showed any real
+	// traffic at all — see rom_fetch_word_fail_o's own comment). At
+	// 1-word/bucket a rotate-XOR "checksum" over however many fetches
+	// land in a bucket started from 0 is mathematically just that word's
+	// own raw value when only ONE distinct address was ever fetched from
+	// it, so this doubles as a direct per-word value readout, not just
+	// pass/fail, when coverage turns out to be that sparse.
+	parameter ROM_FETCH_WORD_REF_FILE     = "",
+	parameter ROM_FETCH_WORD_TOUCHED_FILE = "",
 	// See docs/hw-bringup.md. HW_ROMS=0 (default, every existing sim
 	// testbench): behavior is completely unchanged from before this
 	// parameter existed — $readmemh-loaded 0-latency arrays. HW_ROMS=1
@@ -106,6 +149,19 @@ module tdragon2_core #(
 	input             ioctl_wr,
 	input      [24:0]  ioctl_addr,
 	input      [7:0]  ioctl_dout,
+	// ioctl_index: hps_io's own menu/file index for the CURRENT ioctl
+	// transfer session. The MiSTer .mra loader sends MORE than one
+	// transfer per game load — the <rom index="0"> data, then the
+	// <switches> DIP block (index 254 by MiSTer convention) as a
+	// SEPARATE session — and hps_io.sv resets ioctl_addr to 0 at the
+	// start of EVERY session. Without gating on this, the DIP bytes land
+	// in SDRAM at word address 0..N — exactly the 68000's own reset
+	// vector — AFTER the ROM was correctly written there. Root cause of
+	// this project's real-hardware "reset vector reads back mostly-zero
+	// / wrong, write path verified clean" black-screen symptom: see
+	// docs/hw-bringup.md. Sim testbenches stream only the ROM (one
+	// session) and never reproduce it — tie to 16'd0 there.
+	input     [15:0]  ioctl_index,
 	// Real MiSTer hps_io.sv already has an ioctl_wait INPUT specifically
 	// for this: each SDRAM write takes several clk_sys cycles to
 	// complete, far more than one ioctl_wr pulse's own spacing, so the
@@ -224,7 +280,165 @@ module tdragon2_core #(
 	// unconnected input to 0, which is "no extra hold" — por_rst's own
 	// countdown then behaves exactly as it did before this port existed,
 	// so this is a byte-for-byte no-op everywhere except Macross2.sv.
-	input extra_por_hold
+	input extra_por_hold,
+
+	// DIAGNOSTIC ONLY — see rom_csum's own comment further down. Real
+	// hardware top only; every existing sim testbench leaves these
+	// unread.
+	output [15:0] rom_csum_o,
+	output [15:0] rom_csum_count_o,
+	output        rom_csum_done_o,
+
+	// DIAGNOSTIC ONLY — see rom_fetch_csum's own comment further down.
+	// Same real-hardware-top-only / unread-elsewhere status as rom_csum_o
+	// above. HW_ROMS=0 always outputs 0/0/0 (there is no cache-fetch
+	// concept in the $readmemh sim path) — meaningful only when compared
+	// between an HW_ROMS=1 Verilator sim reference run and real hardware,
+	// same as rom_csum_o.
+	output [15:0] rom_fetch_csum_o,
+	output [15:0] rom_fetch_csum_count_o,
+	output        rom_fetch_csum_done_o,
+
+	// DIAGNOSTIC ONLY — see ioctl_csum's own comment further down. Same
+	// real-hardware-top-only / unread-elsewhere status as rom_csum_o and
+	// rom_fetch_csum_o above. Runs over the full 524288-byte maincpu ROM
+	// region, so the count port is wide enough to hold that full range.
+	output [15:0] ioctl_csum_o,
+	output [19:0] ioctl_csum_count_o,
+	output        ioctl_csum_done_o,
+
+	// DIAGNOSTIC ONLY — see this port's own comment further down (next
+	// to where it's driven). Real hardware top only; every existing sim
+	// testbench leaves this unread. Bit i = 1 iff bucket i's own live
+	// checksum (over ioctl_download bytes [i*4096, i*4096+4096)) did NOT
+	// match IOCTL_BUCKET_REF_FILE's own entry i.
+	output [0:127] ioctl_bucket_fail_o,
+
+	// DIAGNOSTIC ONLY — see rom_fetch_bucket_fail_o's own comment further
+	// down, next to where these are driven, for the full derivation.
+	// dbg_bucket_sel_i/dbg_bucket_state_o/dbg_bucket_touched_o are a
+	// small combinational read-mux (not a wide flat bus, to sidestep any
+	// question of how a >64-bit port's bit layout maps into a Verilator
+	// testbench's own C++ struct) a sim testbench can step through
+	// 0..127 to read out every bucket's raw accumulator, ONCE, to
+	// generate ROM_FETCH_BUCKET_REF_FILE/ROM_FETCH_BUCKET_TOUCHED_FILE's
+	// own content; unread on real hardware (tied to a fixed 0 — real
+	// hardware instead uses the loaded reference to compute
+	// rom_fetch_bucket_fail_o itself, entirely on-chip).
+	// rom_fetch_bucket_sim_touched_o echoes back
+	// ROM_FETCH_BUCKET_TOUCHED_FILE's own loaded content, so a
+	// real-hardware top can distinguish "never validated against sim at
+	// all" from "checked, and matches/mismatches".
+	input  [6:0]   dbg_bucket_sel_i,
+	output [15:0]  dbg_bucket_state_o,
+	output         dbg_bucket_touched_o,
+	// rom_fetch_bucket_touched_o (unlike the narrow mux above): this
+	// project's real hardware top itself, not a sim testbench, is the
+	// reader — Macross2.sv's own overlay display needs every bucket's
+	// live touched status at once (no C++/Verilator interop involved, so
+	// no need for the narrow-mux workaround here).
+	output [0:127] rom_fetch_bucket_touched_o,
+	output [0:127] rom_fetch_bucket_sim_touched_o,
+	output [0:127] rom_fetch_bucket_fail_o,
+
+	// DIAGNOSTIC ONLY — see rom_fetch_fine_fail_o's own comment further
+	// down for the full derivation. Shares dbg_bucket_sel_i above (both
+	// are 128-entry tables) for the same sim-capture-only reason.
+	output [15:0]  dbg_fine_state_o,
+	output         dbg_fine_touched_o,
+	output [0:127] rom_fetch_fine_touched_o,
+	output [0:127] rom_fetch_fine_sim_touched_o,
+	output [0:127] rom_fetch_fine_fail_o,
+
+	// DIAGNOSTIC ONLY — see rom_fetch_word_fail_o's own comment further
+	// down. Shares dbg_bucket_sel_i[3:0] for the sim-capture-only mux
+	// (only entries 0-15 are meaningful for this 16-word-wide tier).
+	output [15:0] dbg_word_state_o,
+	output        dbg_word_touched_o,
+	output [0:15] rom_fetch_word_touched_o,
+	output [0:15] rom_fetch_word_sim_touched_o,
+	output [0:15] rom_fetch_word_fail_o,
+
+	// DIAGNOSTIC ONLY: unlike every other diagnostic port above (which
+	// only report PASS/FAIL against a reference), these four expose the
+	// ACTUAL raw value real hardware's own fetch_word_state_r[0..3]
+	// holds — the reset vector's own 4 words (see rom_fetch_word_fail_o
+	// above: word0/word1=initial SP, word2/word3=initial PC) — directly,
+	// tied straight to those 4 specific array entries (no mux needed,
+	// unlike dbg_word_state_o's own general-purpose sim-capture mux,
+	// since these particular 4 indices are already known to matter).
+	// Added after this project's own real-hardware bring-up work found
+	// 3 of these 4 words mismatch a known-good reference (see
+	// docs/hw-bringup.md) — the WRONG value itself, not just "it's
+	// wrong", is the next diagnostic step: a recognizable pattern (stale
+	// ioctl_download data, a shifted/aliased address, all-0s/all-1s)
+	// would point directly at which real mechanism (rom_cache1,
+	// sdram_arb, sdram_req) is at fault.
+	output [15:0] rom_word0_raw_o,
+	output [15:0] rom_word1_raw_o,
+	output [15:0] rom_word2_raw_o,
+	output [15:0] rom_word3_raw_o,
+
+	// DIAGNOSTIC ONLY: see fetch_word_was_write_r's own comment further
+	// down (next to where these are captured) for the full derivation —
+	// tests whether each of the first 4 reset-vector words' own
+	// cache_valid pulse actually belonged to a WRITE (the tail of
+	// ioctl_download's own last byte racing against rom_cache1's first
+	// real read on the same shared SDRAM port), not the genuine read it
+	// was taken to be, and what address that transaction actually was
+	// for either way.
+	output        rom_word0_was_write_o,
+	output        rom_word1_was_write_o,
+	output        rom_word2_was_write_o,
+	output        rom_word3_was_write_o,
+	output [24:1] rom_word0_race_addr_o,
+	output [24:1] rom_word1_race_addr_o,
+	output [24:1] rom_word2_race_addr_o,
+	output [24:1] rom_word3_race_addr_o,
+
+	// DIAGNOSTIC ONLY: 1 iff that word's own race_addr above (the
+	// LATCHED address of whichever sd0_inst transaction just completed)
+	// equals the address rom_cache1 itself should have been fetching
+	// (0/1/2/3 for these 4 slots) — a genuine read that was NOT a stale
+	// write (rom_wordN_was_write_o=0) could still be wrong if it was a
+	// genuine read of the WRONG address (a different bug class: e.g. a
+	// stale/aliased request from earlier, not this project's own
+	// sdram_arb.sv since sd0_inst is a plain sdram_req here — see
+	// rom_word0_was_write_o's own comment for the was_write half of
+	// this same two-part check).
+	output rom_word0_addr_ok_o,
+	output rom_word1_addr_ok_o,
+	output rom_word2_addr_ok_o,
+	output rom_word3_addr_ok_o,
+
+	// DIAGNOSTIC ONLY: real ioctl_wr pulse-to-pulse timing/gap
+	// instrumentation over an ACTUAL real-hardware .mra download — tests
+	// whether real hps_io/ARM-side byte-delivery PACING (as opposed to
+	// write granularity or the bare dual-requester mux structure, both
+	// already ruled out via SdramTest.sv's own PHASE 3/3b synthetic
+	// repros run purely in-FPGA — see docs/hw-bringup.md) has real,
+	// irregular gaps large enough to interact with rtl/sdram.sv's own
+	// refresh timer (REFRESH_CYCLES=240 clk_sys cycles @ 40MHz = 6us).
+	// ioctl_wr_max_gap_o: the single largest clk_sys-cycle gap between
+	// two consecutive real ioctl_wr pulses seen during the whole
+	// download. ioctl_wr_over_refresh_count_o: how many of those pulses
+	// were preceded by a gap >= REFRESH_CYCLES (240) — i.e. how often a
+	// real refresh cycle had genuine room to interpose between two
+	// consecutive real download bytes.
+	output [23:0] ioctl_wr_max_gap_o,
+	output [23:0] ioctl_wr_over_refresh_count_o,
+
+	// DIAGNOSTIC ONLY: proof of the multi-session ioctl clobber — see
+	// the ioctl_index port comment. ioctl_session_count_o: number of
+	// ioctl_download rising edges since power-on. ioctl_last_index_o:
+	// ioctl_index of the most recent session. ioctl_nonrom_word0_o: the
+	// 16-bit word ({byte@addr1, byte@addr0}) the most recent NON-index-0
+	// session tried to write at SDRAM word 0 — i.e. exactly what would
+	// have overwritten the reset vector's own first word before the
+	// ioctl_rom_wr gate existed.
+	output [7:0]  ioctl_session_count_o,
+	output [15:0] ioctl_last_index_o,
+	output [15:0] ioctl_nonrom_word0_o
 );
 
 	// ------------------------------------------------------------------
@@ -388,6 +602,27 @@ module tdragon2_core #(
 	// ------------------------------------------------------------------
 	wire [15:0] rom_dout;
 	wire        rom_ready;
+	wire [15:0] rom_fetch_csum;
+	wire [15:0] rom_fetch_csum_count;
+	wire        rom_fetch_csum_done;
+	wire [15:0]   dbg_bucket_state;
+	wire          dbg_bucket_touched;
+	wire [0:127]  rom_fetch_bucket_touched;
+	wire [0:127]  rom_fetch_bucket_sim_touched;
+	wire [0:127]  rom_fetch_bucket_fail;
+	wire [15:0]   dbg_fine_state;
+	wire          dbg_fine_touched;
+	wire [0:127]  rom_fetch_fine_touched;
+	wire [0:127]  rom_fetch_fine_sim_touched;
+	wire [0:127]  rom_fetch_fine_fail;
+	wire [15:0]   dbg_word_state;
+	wire          dbg_word_touched;
+	wire [0:15]   rom_fetch_word_touched;
+	wire [0:15]   rom_fetch_word_sim_touched;
+	wire [0:15]   rom_fetch_word_fail;
+	wire [15:0]   rom_word0_raw, rom_word1_raw, rom_word2_raw, rom_word3_raw;
+	wire          rom_word0_was_write, rom_word1_was_write, rom_word2_was_write, rom_word3_was_write;
+	wire [24:1]   rom_word0_race_addr, rom_word1_race_addr, rom_word2_race_addr, rom_word3_race_addr;
 	generate
 	if (!HW_ROMS) begin : g_rom_sim
 		reg [15:0] rom [0:262143];
@@ -397,21 +632,47 @@ module tdragon2_core #(
 		assign sd0_addr = 24'd0; assign sd0_wrl = 1'b0; assign sd0_wrh = 1'b0;
 		assign sd0_din  = 16'd0; assign sd0_req = 1'b0;
 		assign ioctl_wait = 1'b0;
+		assign rom_fetch_csum = 16'd0; assign rom_fetch_csum_count = 16'd0; assign rom_fetch_csum_done = 1'b0;
+		assign dbg_bucket_state = 16'd0; assign dbg_bucket_touched = 1'b0;
+		assign rom_fetch_bucket_touched = 128'd0;
+		assign rom_fetch_bucket_sim_touched = 128'd0; assign rom_fetch_bucket_fail = 128'd0;
+		assign dbg_fine_state = 16'd0; assign dbg_fine_touched = 1'b0;
+		assign rom_fetch_fine_touched = 128'd0;
+		assign rom_fetch_fine_sim_touched = 128'd0; assign rom_fetch_fine_fail = 128'd0;
+		assign dbg_word_state = 16'd0; assign dbg_word_touched = 1'b0;
+		assign rom_fetch_word_touched = 16'd0;
+		assign rom_fetch_word_sim_touched = 16'd0; assign rom_fetch_word_fail = 16'd0;
+		assign rom_word0_raw = 16'd0; assign rom_word1_raw = 16'd0;
+		assign rom_word2_raw = 16'd0; assign rom_word3_raw = 16'd0;
+		assign rom_word0_was_write = 1'b0; assign rom_word1_was_write = 1'b0;
+		assign rom_word2_was_write = 1'b0; assign rom_word3_was_write = 1'b0;
+		assign rom_word0_race_addr = 24'd0; assign rom_word1_race_addr = 24'd0;
+		assign rom_word2_race_addr = 24'd0; assign rom_word3_race_addr = 24'd0;
 	end else begin : g_rom_hw
 		wire        cache_busy, cache_valid;
 		wire [15:0] cache_dout;
 		wire [24:1] cache_sd_addr;
 		wire        cache_sd_req;
+		wire        sd0_dbg_we;
+		wire [24:1] sd0_dbg_addr;
+
+		// ioctl_rom_wr: only the <rom index="0"> session may write SDRAM.
+		// Every other ioctl session (the .mra <switches> DIP block, index
+		// 254, restarts at ioctl_addr 0) is deliberately IGNORED here —
+		// see the ioctl_index port comment for why this is the real fix
+		// for the reset-vector clobber.
+		wire ioctl_rom_wr = ioctl_download && (ioctl_index == 16'd0);
 
 		sdram_req sd0_inst (
 			.clk(clk_sys), .reset(por_rst),
 			.addr(ioctl_download ? ioctl_addr[24:1] : cache_sd_addr),
-			.we(ioctl_download), .wrl(ioctl_download & ~ioctl_addr[0]), .wrh(ioctl_download & ioctl_addr[0]),
+			.we(ioctl_rom_wr), .wrl(ioctl_rom_wr & ~ioctl_addr[0]), .wrh(ioctl_rom_wr & ioctl_addr[0]),
 			.din({ioctl_dout, ioctl_dout}),
-			.req(ioctl_download ? ioctl_wr : cache_sd_req),
+			.req(ioctl_download ? (ioctl_rom_wr & ioctl_wr) : cache_sd_req),
 			.busy(cache_busy), .valid(cache_valid), .dout(cache_dout),
 			.sdram_addr(sd0_addr), .sdram_wrl(sd0_wrl), .sdram_wrh(sd0_wrh), .sdram_din(sd0_din),
-			.sdram_dout(sd0_dout), .sdram_req(sd0_req), .sdram_ack(sd0_ack)
+			.sdram_dout(sd0_dout), .sdram_req(sd0_req), .sdram_ack(sd0_ack),
+			.dbg_we_r_o(sd0_dbg_we), .dbg_addr_r_o(sd0_dbg_addr)
 		);
 		assign ioctl_wait = ioctl_download & cache_busy;
 
@@ -421,8 +682,492 @@ module tdragon2_core #(
 			.sd_addr(cache_sd_addr), .sd_req(cache_sd_req),
 			.sd_busy(cache_busy), .sd_valid(cache_valid), .sd_dout(cache_dout)
 		);
+
+		// DIAGNOSTIC ONLY: a SECOND passive checksum, one tap stage
+		// upstream of rom_csum above — gated on cache_valid (sd0_inst's
+		// own one-cycle read-complete pulse feeding INTO rom_cache1, i.e.
+		// the exact moment a fresh word lands in rom_cache1's single-entry
+		// cache from real SDRAM), sampling cache_dout, rather than on
+		// DTACKn/the CPU bus. Because rom_cache1 only ever issues a fetch
+		// on a genuine cache miss (see its own addr_match logic), this
+		// counts once per UNIQUE address ever fetched — a strict subset of
+		// rom_csum's per-bus-cycle count, since a 68000 re-read of an
+		// address still held in the 1-entry cache produces no new
+		// cache_valid pulse at all. Safe to treat every cache_valid pulse
+		// here as "a real ROM read completed" (as opposed to an
+		// ioctl_download write also sharing this same sdram_req port)
+		// because this always-block only starts counting after `reset`
+		// deasserts, and ioctl_download is held for the whole download
+		// while the core itself stays in reset (see this ROM region's own
+		// header comment above) — so by the time reset is low here,
+		// ioctl_download is guaranteed 0 and every cache_valid pulse sd0_inst
+		// produces from then on is unambiguously a rom_cache_inst read.
+		//
+		// Purpose: isolate whether a real-vs-sim mismatch on rom_csum_o
+		// (found via this project's own hardware bring-up work — see
+		// docs/hw-bringup.md) traces back to the raw word stream SDRAM
+		// actually delivers to rom_cache1 (this checksum), or instead to
+		// something in rom_cache1's own cache-line replay logic / the
+		// DTACKn wait-state glue between rom_cache1 and the CPU (which
+		// would show as THIS checksum matching between real hardware and
+		// simulation while rom_csum_o still does not).
+		localparam [15:0] ROM_FETCH_CSUM_TARGET = 16'd4096;
+		reg [15:0] fetch_csum_r;
+		reg [15:0] fetch_csum_count_r;
+		reg        fetch_csum_done_r;
+		always @(posedge clk_sys) begin
+			if (reset) begin
+				fetch_csum_r       <= 16'd0;
+				fetch_csum_count_r <= 16'd0;
+				fetch_csum_done_r  <= 1'b0;
+			end else if (cache_valid && !fetch_csum_done_r) begin
+				fetch_csum_r       <= {fetch_csum_r[14:0], fetch_csum_r[15]} ^ cache_dout;
+				fetch_csum_count_r <= fetch_csum_count_r + 16'd1;
+				if (fetch_csum_count_r == ROM_FETCH_CSUM_TARGET - 16'd1) fetch_csum_done_r <= 1'b1;
+			end
+		end
+		assign rom_fetch_csum       = fetch_csum_r;
+		assign rom_fetch_csum_count = fetch_csum_count_r;
+		assign rom_fetch_csum_done  = fetch_csum_done_r;
+
+		// ------------------------------------------------------------------
+		// DIAGNOSTIC ONLY: a SPATIAL companion to rom_fetch_csum above,
+		// same purpose as ioctl_bucket_fail_o has for ioctl_csum_o —
+		// localizing WHERE a real-vs-sim mismatch happens instead of only
+		// knowing THAT one exists. Structurally different from
+		// ioctl_bucket_fail_o's own bucketing, though: the ioctl write
+		// stream visits every address exactly once, in strict monotonic
+		// order, so "count crosses a multiple of N" cleanly marks a
+		// bucket boundary. The CPU's own real ROM-fetch address stream
+		// does neither — it revisits some addresses, skips others
+		// entirely, and jumps around in whatever order the actual
+		// program executes in — so this instead keys 128 INDEPENDENT
+		// per-bucket accumulators directly by address (cache_sd_addr's
+		// own word address, bucket = addr[17:11], 2048 words/bucket,
+		// same 128-bucket granularity as ioctl_bucket_fail_o and
+		// SdramTest.sv's own Phase 1, chosen for direct comparability),
+		// each folding in every word fetched from its own address range
+		// regardless of when/how many times that happens.
+		//
+		// Because coverage is inherently partial and run-dependent (real
+		// hardware's own real-time interrupt-phase jitter can shift
+		// EXACTLY which addresses get visited within a fixed fetch-count
+		// budget — already observed directly: rom_fetch_csum_o itself
+		// read 1 bit apart across two separate real-hardware reloads of
+		// the byte-identical bitstream, see docs/hw-bringup.md), a
+		// bucket's live state can only be meaningfully compared where
+		// BOTH this run and the reference (sim) run actually touched it
+		// — ROM_FETCH_BUCKET_TOUCHED_FILE (rom_fetch_bucket_sim_touched_o
+		// below) records which buckets the reference run itself reached,
+		// so a bucket the reference never visited displays as
+		// "unvalidated" rather than a false FAIL.
+		reg [15:0] fetch_bucket_state_r [0:127];
+		reg        fetch_bucket_touched_r [0:127];
+		integer    fbk_i;
+		always @(posedge clk_sys) begin
+			if (reset) begin
+				for (fbk_i = 0; fbk_i < 128; fbk_i = fbk_i + 1) begin
+					fetch_bucket_state_r[fbk_i]   <= 16'd0;
+					fetch_bucket_touched_r[fbk_i] <= 1'b0;
+				end
+			end else if (cache_valid && !fetch_csum_done_r) begin
+				fetch_bucket_state_r[cache_sd_addr[18:12]] <=
+					{fetch_bucket_state_r[cache_sd_addr[18:12]][14:0], fetch_bucket_state_r[cache_sd_addr[18:12]][15]} ^ cache_dout;
+				fetch_bucket_touched_r[cache_sd_addr[18:12]] <= 1'b1;
+			end
+		end
+
+		reg [15:0] fetch_bucket_ref_r [0:127];
+		reg        fetch_bucket_sim_touched_r [0:127];
+		initial if (ROM_FETCH_BUCKET_REF_FILE != "") $readmemh(ROM_FETCH_BUCKET_REF_FILE, fetch_bucket_ref_r);
+		initial if (ROM_FETCH_BUCKET_TOUCHED_FILE != "") $readmemh(ROM_FETCH_BUCKET_TOUCHED_FILE, fetch_bucket_sim_touched_r);
+
+		genvar gb;
+		for (gb = 0; gb < 128; gb = gb + 1) begin : g_fetch_bucket_pack
+			assign rom_fetch_bucket_touched[gb]     = fetch_bucket_touched_r[gb];
+			assign rom_fetch_bucket_sim_touched[gb] = fetch_bucket_sim_touched_r[gb];
+			assign rom_fetch_bucket_fail[gb]        = fetch_bucket_touched_r[gb] && fetch_bucket_sim_touched_r[gb]
+				&& (fetch_bucket_state_r[gb] != fetch_bucket_ref_r[gb]);
+		end
+		assign dbg_bucket_state   = fetch_bucket_state_r[dbg_bucket_sel_i];
+		assign dbg_bucket_touched = fetch_bucket_touched_r[dbg_bucket_sel_i];
+
+		// ------------------------------------------------------------------
+		// DIAGNOSTIC ONLY: a ZOOMED-IN companion to the 128-bucket spatial
+		// logic just above, scoped to ONLY word addresses [0,2048) — that
+		// logic's own bucket 0, which this project's own real-hardware
+		// bring-up work found DOES show a genuine mismatch (see
+		// docs/hw-bringup.md) — at 16 words/bucket (128x finer) instead of
+		// 2048 words/bucket, to see whether the CPU's own reset vector
+		// (word addresses 0-3, byte 0-7 — the initial SP/PC the 68000
+		// itself latches at power-on) is specifically corrupted, or only
+		// later boot code within that same 4KB range. Same
+		// touched/sim_touched/fail structure and same reasoning for it
+		// (partial, run-dependent coverage) as the 2048-word-bucket
+		// version above — just re-keyed to addr[10:4] (16-word buckets,
+		// 2048/16=128) and gated to cache_sd_addr<2048 so it only ever
+		// accumulates from within this one zoomed-in region.
+		reg [15:0] fetch_fine_state_r [0:127];
+		reg        fetch_fine_touched_r [0:127];
+		integer    ffk_i;
+		always @(posedge clk_sys) begin
+			if (reset) begin
+				for (ffk_i = 0; ffk_i < 128; ffk_i = ffk_i + 1) begin
+					fetch_fine_state_r[ffk_i]   <= 16'd0;
+					fetch_fine_touched_r[ffk_i] <= 1'b0;
+				end
+			end else if (cache_valid && !fetch_csum_done_r && (cache_sd_addr < 25'd2048)) begin
+				fetch_fine_state_r[cache_sd_addr[11:5]] <=
+					{fetch_fine_state_r[cache_sd_addr[11:5]][14:0], fetch_fine_state_r[cache_sd_addr[11:5]][15]} ^ cache_dout;
+				fetch_fine_touched_r[cache_sd_addr[11:5]] <= 1'b1;
+			end
+		end
+
+		reg [15:0] fetch_fine_ref_r [0:127];
+		reg        fetch_fine_sim_touched_r [0:127];
+		initial if (ROM_FETCH_FINE_REF_FILE != "") $readmemh(ROM_FETCH_FINE_REF_FILE, fetch_fine_ref_r);
+		initial if (ROM_FETCH_FINE_TOUCHED_FILE != "") $readmemh(ROM_FETCH_FINE_TOUCHED_FILE, fetch_fine_sim_touched_r);
+
+		genvar gf;
+		for (gf = 0; gf < 128; gf = gf + 1) begin : g_fetch_fine_pack
+			assign rom_fetch_fine_touched[gf]     = fetch_fine_touched_r[gf];
+			assign rom_fetch_fine_sim_touched[gf] = fetch_fine_sim_touched_r[gf];
+			assign rom_fetch_fine_fail[gf]        = fetch_fine_touched_r[gf] && fetch_fine_sim_touched_r[gf]
+				&& (fetch_fine_state_r[gf] != fetch_fine_ref_r[gf]);
+		end
+		assign dbg_fine_state   = fetch_fine_state_r[dbg_bucket_sel_i];
+		assign dbg_fine_touched = fetch_fine_touched_r[dbg_bucket_sel_i];
+
+		// ------------------------------------------------------------------
+		// DIAGNOSTIC ONLY: TRUE per-word granularity, scoped to word
+		// addresses [0,16) — fetch_fine_state_r[0]'s own range above,
+		// which this project's own real-hardware bring-up work found is
+		// the ONLY one of the 128 fine buckets that showed any real
+		// traffic at all (see docs/hw-bringup.md), meaning the entire
+		// coarse-bucket-0 mismatch is concentrated somewhere in this one
+		// 32-byte span. At 1-word/bucket, a rotate-XOR state starting
+		// from 0 with only ONE distinct address ever landing in it is
+		// mathematically just that word's own raw value (0 rol 1 = 0,
+		// 0^word=word) — so fetch_word_state_r doubles as an exact
+		// per-word value readout, not merely pass/fail, letting a mismatch
+		// here directly show BOTH the wrong value real hardware read AND
+		// the correct value it should have read.
+		reg [15:0] fetch_word_state_r [0:15];
+		reg        fetch_word_touched_r [0:15];
+		// DIAGNOSTIC ONLY: captures sd0_inst's own dbg_we_r_o/dbg_addr_r_o
+		// (see sdram_req.sv's own comment) at the exact cycle each of
+		// these first 16 cache_valid pulses fires — testing the specific
+		// race hypothesis this project's own real-hardware bring-up work
+		// raised after finding words 0/1/3 of the reset vector read back
+		// mostly-zero on real hardware (see docs/hw-bringup.md): was the
+		// transaction that JUST completed actually a WRITE (the tail of
+		// ioctl_download's own last byte, whose dout is meaningless —
+		// see sdram_req.sv's own header comment), not the genuine read
+		// rom_cache1 itself thinks just landed? was its own address even
+		// the one rom_cache1 asked for?
+		reg        fetch_word_was_write_r [0:15];
+		reg [24:1] fetch_word_race_addr_r [0:15];
+		integer    fwk_i;
+		always @(posedge clk_sys) begin
+			if (reset) begin
+				for (fwk_i = 0; fwk_i < 16; fwk_i = fwk_i + 1) begin
+					fetch_word_state_r[fwk_i]      <= 16'd0;
+					fetch_word_touched_r[fwk_i]    <= 1'b0;
+					fetch_word_was_write_r[fwk_i]  <= 1'b0;
+					fetch_word_race_addr_r[fwk_i]  <= 24'd0;
+				end
+			end else if (cache_valid && !fetch_csum_done_r && (cache_sd_addr < 25'd16)) begin
+				fetch_word_state_r[cache_sd_addr[4:1]] <=
+					{fetch_word_state_r[cache_sd_addr[4:1]][14:0], fetch_word_state_r[cache_sd_addr[4:1]][15]} ^ cache_dout;
+				fetch_word_touched_r[cache_sd_addr[4:1]]   <= 1'b1;
+				fetch_word_was_write_r[cache_sd_addr[4:1]] <= sd0_dbg_we;
+				fetch_word_race_addr_r[cache_sd_addr[4:1]] <= sd0_dbg_addr;
+			end
+		end
+
+		reg [15:0] fetch_word_ref_r [0:15];
+		reg        fetch_word_sim_touched_r [0:15];
+		initial if (ROM_FETCH_WORD_REF_FILE != "") $readmemh(ROM_FETCH_WORD_REF_FILE, fetch_word_ref_r);
+		initial if (ROM_FETCH_WORD_TOUCHED_FILE != "") $readmemh(ROM_FETCH_WORD_TOUCHED_FILE, fetch_word_sim_touched_r);
+
+		genvar gw;
+		for (gw = 0; gw < 16; gw = gw + 1) begin : g_fetch_word_pack
+			assign rom_fetch_word_touched[gw]     = fetch_word_touched_r[gw];
+			assign rom_fetch_word_sim_touched[gw] = fetch_word_sim_touched_r[gw];
+			assign rom_fetch_word_fail[gw]        = fetch_word_touched_r[gw] && fetch_word_sim_touched_r[gw]
+				&& (fetch_word_state_r[gw] != fetch_word_ref_r[gw]);
+		end
+		assign dbg_word_state   = fetch_word_state_r[dbg_bucket_sel_i[3:0]];
+		assign dbg_word_touched = fetch_word_touched_r[dbg_bucket_sel_i[3:0]];
+
+		assign rom_word0_raw = fetch_word_state_r[0];
+		assign rom_word1_raw = fetch_word_state_r[1];
+		assign rom_word2_raw = fetch_word_state_r[2];
+		assign rom_word3_raw = fetch_word_state_r[3];
+
+		assign rom_word0_was_write = fetch_word_was_write_r[0];
+		assign rom_word1_was_write = fetch_word_was_write_r[1];
+		assign rom_word2_was_write = fetch_word_was_write_r[2];
+		assign rom_word3_was_write = fetch_word_was_write_r[3];
+		assign rom_word0_race_addr = fetch_word_race_addr_r[0];
+		assign rom_word1_race_addr = fetch_word_race_addr_r[1];
+		assign rom_word2_race_addr = fetch_word_race_addr_r[2];
+		assign rom_word3_race_addr = fetch_word_race_addr_r[3];
 	end
 	endgenerate
+	assign rom_fetch_csum_o       = rom_fetch_csum;
+	assign rom_fetch_csum_count_o = rom_fetch_csum_count;
+	assign rom_fetch_csum_done_o  = rom_fetch_csum_done;
+	assign dbg_bucket_state_o             = dbg_bucket_state;
+	assign dbg_bucket_touched_o           = dbg_bucket_touched;
+	assign rom_fetch_bucket_touched_o     = rom_fetch_bucket_touched;
+	assign rom_fetch_bucket_sim_touched_o = rom_fetch_bucket_sim_touched;
+	assign rom_fetch_bucket_fail_o        = rom_fetch_bucket_fail;
+	assign dbg_fine_state_o               = dbg_fine_state;
+	assign dbg_fine_touched_o             = dbg_fine_touched;
+	assign rom_fetch_fine_touched_o       = rom_fetch_fine_touched;
+	assign rom_fetch_fine_sim_touched_o   = rom_fetch_fine_sim_touched;
+	assign rom_fetch_fine_fail_o          = rom_fetch_fine_fail;
+	assign dbg_word_state_o               = dbg_word_state;
+	assign dbg_word_touched_o             = dbg_word_touched;
+	assign rom_fetch_word_touched_o       = rom_fetch_word_touched;
+	assign rom_fetch_word_sim_touched_o   = rom_fetch_word_sim_touched;
+	assign rom_fetch_word_fail_o          = rom_fetch_word_fail;
+	assign rom_word0_raw_o = rom_word0_raw;
+	assign rom_word1_raw_o = rom_word1_raw;
+	assign rom_word2_raw_o = rom_word2_raw;
+	assign rom_word3_raw_o = rom_word3_raw;
+	assign rom_word0_was_write_o = rom_word0_was_write;
+	assign rom_word1_was_write_o = rom_word1_was_write;
+	assign rom_word2_was_write_o = rom_word2_was_write;
+	assign rom_word3_was_write_o = rom_word3_was_write;
+	assign rom_word0_race_addr_o = rom_word0_race_addr;
+	assign rom_word1_race_addr_o = rom_word1_race_addr;
+	assign rom_word2_race_addr_o = rom_word2_race_addr;
+	assign rom_word3_race_addr_o = rom_word3_race_addr;
+	assign rom_word0_addr_ok_o = (rom_word0_race_addr == 24'd0);
+	assign rom_word1_addr_ok_o = (rom_word1_race_addr == 24'd1);
+	assign rom_word2_addr_ok_o = (rom_word2_race_addr == 24'd2);
+	assign rom_word3_addr_ok_o = (rom_word3_race_addr == 24'd3);
+
+	// ------------------------------------------------------------------
+	// DIAGNOSTIC ONLY: a THIRD passive checksum — the earliest possible
+	// tap point in this whole ROM-loading data path: the raw
+	// ioctl_download WRITE byte stream itself (ioctl_dout, one byte per
+	// ioctl_wr pulse), gated to just the maincpu ROM region
+	// (ioctl_addr < 0x080000, matching sel_rom's own range), BEFORE any
+	// of it ever reaches rtl/sdram.sv. Both this project's real hardware
+	// and its HW_ROMS=1 Verilator sim testbenches (see
+	// sim/rtl/tdragon2_hw/tb_tdragon2_hw.cpp) are fed from a
+	// byte-identical tools/mk_ioctl_stream.py-produced .bin file built
+	// from the same source ROM dump, so this checksum SHOULD match
+	// between a real-hardware run and a sim run if (and only if) the
+	// bytes HPS actually sends over ioctl_download on real hardware
+	// match what the ARM-side loader was given — a mismatch here would
+	// mean real-hardware data corruption starts before the FPGA fabric
+	// ever sees it, upstream of everything rom_csum_o/rom_fetch_csum_o
+	// above can see; a MATCH here (while rom_fetch_csum_o still
+	// mismatches) would instead point at rtl/sdram.sv's real write/
+	// refresh/read-back behavior between write time (this download,
+	// during boot) and read time (potentially minutes later, during
+	// actual gameplay) — a real-time gap this project's own SdramTest
+	// diagnostic core's write-then-immediately-readback pattern never
+	// exercised.
+	//
+	// Uses por_rst (NOT this module's own `reset` input) to initialize,
+	// same reasoning as sd0_inst/rom_cache_inst's own reset wiring just
+	// above: `reset` stays asserted for the ENTIRE download (see this
+	// ROM region's own header comment), so gating this accumulator's
+	// reset on `reset` would clear it every single cycle throughout the
+	// exact window it needs to observe and it would never accumulate
+	// anything.
+	//
+	// Covers the full 524288-byte maincpu region (matching this
+	// project's own SdramTest Phase 1 full-range approach — the whole
+	// region really is written during a real download regardless of
+	// sample size), not a small sample.
+	localparam [19:0] IOCTL_CSUM_TARGET_BYTES = 20'd524288;
+	reg [15:0] ioctl_csum_r;
+	reg [19:0] ioctl_csum_count_r;
+	reg        ioctl_csum_done_r;
+	always @(posedge clk_sys) begin
+		if (por_rst) begin
+			ioctl_csum_r       <= 16'd0;
+			ioctl_csum_count_r <= 20'd0;
+			ioctl_csum_done_r  <= 1'b0;
+		end else if (ioctl_download && (ioctl_index == 16'd0) && ioctl_wr && (ioctl_addr < 25'h080000) && !ioctl_csum_done_r) begin
+			ioctl_csum_r       <= {ioctl_csum_r[14:0], ioctl_csum_r[15]} ^ {8'd0, ioctl_dout};
+			ioctl_csum_count_r <= ioctl_csum_count_r + 20'd1;
+			if (ioctl_csum_count_r == IOCTL_CSUM_TARGET_BYTES - 20'd1) ioctl_csum_done_r <= 1'b1;
+		end
+	end
+	assign ioctl_csum_o       = ioctl_csum_r;
+	assign ioctl_csum_count_o = ioctl_csum_count_r;
+	assign ioctl_csum_done_o  = ioctl_csum_done_r;
+
+	// ------------------------------------------------------------------
+	// DIAGNOSTIC ONLY: a SPATIAL/bucketed companion to ioctl_csum_o just
+	// above — that single aggregate checksum can prove real hardware's
+	// write-side data differs from the known-good source, but can't say
+	// WHERE. This splits the same 524288-byte maincpu region into 128
+	// buckets of 4096 bytes each (matching this project's own
+	// SdramTest.sv Phase 1 bucket layout/display convention exactly, for
+	// the same reason: 128 buckets * 3px = 384 = the full screen width),
+	// each with its OWN independent rotate-XOR checksum (reset to 0 at
+	// the start of every bucket), compared live against
+	// IOCTL_BUCKET_REF_FILE's own known-good per-bucket value — computed
+	// host-side, directly from the exact same byte-identical
+	// tools/mk_ioctl_stream.py-produced .bin file both sim and real
+	// hardware are fed from, using this exact rotate-XOR algorithm
+	// (cross-checked to reproduce ioctl_csum_o's own known-good aggregate
+	// value, 0x620E, exactly, before being committed). A real-hardware
+	// mismatch on any bucket here needs no separate sim run to interpret
+	// — IOCTL_BUCKET_REF_FILE already IS the correct answer.
+	//
+	// Several reference buckets are legitimately 0x0000 (real, blank
+	// all-0x00 stretches within the actual ROM dump content itself, not
+	// a gap in this logic) — still meaningful checks, since a real
+	// hardware SDRAM data-retention/refresh problem would show up most
+	// obviously as exactly one of THESE buckets reading back non-zero.
+	reg [15:0] ioctl_bucket_ref [0:127];
+	initial if (IOCTL_BUCKET_REF_FILE != "") $readmemh(IOCTL_BUCKET_REF_FILE, ioctl_bucket_ref);
+
+	reg [15:0] ioctl_bucket_state_r;
+	reg [0:127] ioctl_bucket_fail_r;
+	integer    ibf_i;
+	always @(posedge clk_sys) begin
+		if (por_rst) begin
+			ioctl_bucket_state_r <= 16'd0;
+			for (ibf_i = 0; ibf_i < 128; ibf_i = ibf_i + 1) ioctl_bucket_fail_r[ibf_i] <= 1'b0;
+		end else if (ioctl_download && (ioctl_index == 16'd0) && ioctl_wr && (ioctl_addr < 25'h080000) && !ioctl_csum_done_r) begin
+			if (ioctl_csum_count_r[11:0] == 12'hFFF) begin
+				// last byte of this bucket: fold it in, compare, latch
+				// pass/fail, then reset for the next bucket.
+				ioctl_bucket_fail_r[ioctl_csum_count_r[18:12]] <=
+					(({ioctl_bucket_state_r[14:0], ioctl_bucket_state_r[15]} ^ {8'd0, ioctl_dout})
+						!= ioctl_bucket_ref[ioctl_csum_count_r[18:12]]);
+				ioctl_bucket_state_r <= 16'd0;
+			end else begin
+				ioctl_bucket_state_r <= {ioctl_bucket_state_r[14:0], ioctl_bucket_state_r[15]} ^ {8'd0, ioctl_dout};
+			end
+		end
+	end
+	assign ioctl_bucket_fail_o = ioctl_bucket_fail_r;
+
+	// ------------------------------------------------------------------
+	// DIAGNOSTIC ONLY: real ioctl_wr pulse-to-pulse timing/gap
+	// instrumentation over an ACTUAL real-hardware .mra download — see
+	// ioctl_wr_max_gap_o's own comment at the port declaration for the
+	// full rationale (testing real hps_io/ARM-side pacing irregularity,
+	// after SdramTest.sv's own PHASE 3/3b synthetic repros — clean
+	// full-word writes, then real byte-at-a-time writes, both run
+	// purely in-FPGA at full back-to-back clk_sys speed — both passed
+	// cleanly, ruling out write granularity and the bare dual-requester
+	// mux structure on their own). Uses por_rst (not this module's own
+	// `reset`), same reasoning as ioctl_csum_r's own reset wiring above
+	// — `reset` stays asserted for the entire download.
+	reg [23:0] wr_gap_cnt;
+	reg [23:0] wr_max_gap;
+	reg [23:0] wr_over_refresh_count;
+	reg        wr_prev;
+	always @(posedge clk_sys) begin
+		if (por_rst) begin
+			wr_gap_cnt            <= 24'd0;
+			wr_max_gap            <= 24'd0;
+			wr_over_refresh_count <= 24'd0;
+			wr_prev               <= 1'b0;
+		end else if (ioctl_download) begin
+			wr_prev <= ioctl_wr;
+			if (ioctl_wr && !wr_prev) begin
+				if (wr_gap_cnt > wr_max_gap) wr_max_gap <= wr_gap_cnt;
+				if (wr_gap_cnt >= 24'd240) wr_over_refresh_count <= wr_over_refresh_count + 24'd1;
+				wr_gap_cnt <= 24'd0;
+			end else begin
+				wr_gap_cnt <= wr_gap_cnt + 24'd1;
+			end
+		end
+	end
+	assign ioctl_wr_max_gap_o            = wr_max_gap;
+	assign ioctl_wr_over_refresh_count_o = wr_over_refresh_count;
+
+	// DIAGNOSTIC ONLY: ioctl session tracking — see ioctl_session_count_o's
+	// own port comment. por_rst-gated for the same reason as ioctl_csum_r.
+	reg        dl_prev;
+	reg [7:0]  dl_session_count;
+	reg [15:0] dl_last_index;
+	reg [15:0] dl_nonrom_word0;
+	always @(posedge clk_sys) begin
+		if (por_rst) begin
+			dl_prev          <= 1'b0;
+			dl_session_count <= 8'd0;
+			dl_last_index    <= 16'd0;
+			dl_nonrom_word0  <= 16'd0;
+		end else begin
+			dl_prev <= ioctl_download;
+			if (ioctl_download && !dl_prev) begin
+				dl_session_count <= dl_session_count + 8'd1;
+				dl_last_index    <= ioctl_index;
+			end
+			if (ioctl_download && ioctl_wr && (ioctl_index != 16'd0)) begin
+				if (ioctl_addr == 25'd0) dl_nonrom_word0[7:0]  <= ioctl_dout;
+				if (ioctl_addr == 25'd1) dl_nonrom_word0[15:8] <= ioctl_dout;
+			end
+		end
+	end
+	assign ioctl_session_count_o = dl_session_count;
+	assign ioctl_last_index_o    = dl_last_index;
+	assign ioctl_nonrom_word0_o  = dl_nonrom_word0;
+
+	// ------------------------------------------------------------------
+	// DIAGNOSTIC ONLY (HW_ROMS=1): passive checksum over every REAL
+	// 68000 maincpu-ROM read (rom_dout, via rom_cache1 — the exact same
+	// data path the CPU itself relies on), used to verify on real
+	// hardware that the ROM the CPU is actually executing loaded
+	// correctly, without any risk of disturbing the CPU's own bus
+	// timing — this taps rom_dout/DTACKn purely as an observer, issues
+	// no requests of its own, and does not touch rom_ready/DTACKn/
+	// cache_sd_addr at all. Added during this project's own real-
+	// hardware black-screen investigation (see docs/hw-bringup.md).
+	//
+	// Counts a read exactly once per completed 68000 bus cycle — on the
+	// cycle DTACKn transitions high-to-low, not "every cycle rom_ready
+	// happens to be asserted" (which would double/triple-count a single
+	// transaction across its own wait-state cycles, and worse, count a
+	// DIFFERENT number of times in simulation vs. real hardware since
+	// real SDRAM latency differs from the behavioral sdram_model.sv
+	// timing this project's own sim testbenches use — defeating the
+	// entire point of comparing a real-hardware checksum against a
+	// simulated reference value).
+	//
+	// Freezes after ROM_CSUM_TARGET reads (a fixed transaction count,
+	// not a fixed cycle count) rather than accumulating forever, so a
+	// real-hardware run (unpredictable wall-clock pacing) and a fixed-
+	// clk_sys-cycle-budget simulation run can both reach the identical,
+	// comparison-ready frozen value as long as the CPU's
+	// own instruction stream — deterministic from cold reset, since it
+	// depends only on ROM content and register logic, not real-time
+	// events — hasn't yet diverged between the two environments for any
+	// OTHER reason (e.g. a real timing-dependent bug elsewhere).
+	localparam [15:0] ROM_CSUM_TARGET = 16'd4096;
+	reg        dtackn_prev;
+	reg [15:0] rom_csum;
+	reg [15:0] rom_csum_count;
+	reg        rom_csum_done;
+	always @(posedge clk_sys) begin
+		dtackn_prev <= DTACKn;
+		if (reset) begin
+			rom_csum       <= 16'd0;
+			rom_csum_count <= 16'd0;
+			rom_csum_done  <= 1'b0;
+		end else if (dtackn_prev && !DTACKn && sel_rom && cpu_read && !rom_csum_done) begin
+			rom_csum       <= {rom_csum[14:0], rom_csum[15]} ^ rom_dout;
+			rom_csum_count <= rom_csum_count + 16'd1;
+			if (rom_csum_count == ROM_CSUM_TARGET - 16'd1) rom_csum_done <= 1'b1;
+		end
+	end
+	assign rom_csum_o       = rom_csum;
+	assign rom_csum_count_o = rom_csum_count;
+	assign rom_csum_done_o  = rom_csum_done;
 
 	// ------------------------------------------------------------------
 	// Main work RAM (32768 x 16) — address-line-swapped for the CPU-facing

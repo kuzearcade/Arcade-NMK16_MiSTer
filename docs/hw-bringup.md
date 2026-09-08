@@ -223,18 +223,91 @@ via a full regression re-run of both earlier standalone tests after the
 fix: `sdram_req` 80,000/80,000 unchanged, `sdram_arb` 45,109/45,109
 unchanged.
 
+## Real-hardware bring-up: the black-screen root cause
+
+Both tdragon2 and macross2 first booted to a solid black screen with
+silent audio on a real DE10-Nano (deployed over SSH/rsync to
+`/media/fat/_Arcade/`, observed via a direct-video capture box), despite
+the `HW_ROMS=1` Verilator testbenches passing. The investigation is
+worth recording because the eventual root cause was small, and several
+plausible-looking leads along the way were not it.
+
+**Root cause: `ioctl_download` SDRAM writes were not gated on
+`ioctl_index`.** `Macross2.sv` never connected `hps_io`'s `ioctl_index`
+output, and `tdragon2_core.sv`'s `sd0_inst` wrote SDRAM on *any* ioctl
+session. The MiSTer `.mra` loader sends **two** sessions per game load:
+the single `<rom index="0">` block (every ROM region, at the byte
+offsets in the table above), and then the `<switches>` DIP block as a
+separate session on **index 254** — up to 8 raw bytes, and
+`sys/hps_io.sv`'s `FIO_FILE_TX` resets `ioctl_addr` to 0 at the start
+of every session. So the DIP bytes (`F7,FF,00` for tdragon2) were
+written to SDRAM word 0 onward — the 68000's own reset vector — *after*
+the ROM had been correctly loaded there. The CPU then booted from a
+garbage SP/PC every time. The official MiSTer MRA docs specify exactly
+this (index 254, raw bytes, "instead of the status bits"), and every
+working arcade core checked (Arcade-TMNT, Arcade-Darius, jotego's
+jtframe `IDX_ROM`/`IDX_DIPSW=254`) qualifies ROM writes on
+`ioctl_index == 0`.
+
+**Fix:** `tdragon2_core.sv` takes `ioctl_index`, and `sd0_inst`'s
+`we`/`wrl`/`wrh`/`req` are gated by
+`ioctl_rom_wr = ioctl_download && ioctl_index == 16'd0`. `Macross2.sv`
+also now captures the index-254 block into `dip_sw[0:7]` and drives
+`dsw1_i`/`dsw2_i` and the hidden game-select bit (`dip_sw[2][0]`) from
+it — the previous `status[15:0]`/`status[16]` wiring never received DIP
+data at all, for the same reason. Sim testbenches tie `ioctl_index` to
+`16'd0` (they only ever streamed the ROM, which is precisely why they
+never reproduced this).
+
+**Verification on hardware** (all read back from on-screen diagnostic
+barcodes decoded from direct-video captures): `ioctl_session_count=2`,
+`ioctl_last_index=254`, the index-254 session's word at address 0 =
+`0xFFF7` (= the `.mra`'s own `F7,FF`); after the gate, all four reset-
+vector words correct and the CPU-bus ROM checksum `rom_csum = 0x44D8`,
+matching the Verilator reference exactly — it had been `0xC465` on every
+earlier run.
+
+**What it was not** (each ruled out by a targeted real-hardware test,
+kept here so nobody re-chases them): raw `rtl/sdram.sv` read/write
+correctness (a standalone `SdramTest.sv` core passed a full 512KB
+write/read-back sweep — though that *did* surface and fix a real,
+separate bug: the file's default `REFRESH_CYCLES=850` was tuned for
+~96MHz and violated the 64ms refresh spec at this project's 40MHz
+`clk_sys`, now overridden to 240); the `ioctl_download` write path
+(byte-exact across all 128 4KB buckets — but note the check froze after
+the first 524288 bytes, so it was blind to the *later* small session);
+`rom_cache1`/`sdram_req` request handshake (the corrupted reads were
+genuine reads of the correct address); tRCD/tRP command spacing and the
+`SDRAM_CLK` PLL phase (now parameterizable as `RASCAS_DELAY`,
+`PRECHARGE_DELAY`, `SEPARATE_SDRAM_CLK`/`CLK1_PHASE_SHIFT`, all
+defaulting to the original behavior — none changed the symptom); and
+concurrent multi-port SDRAM contention — a `SdramTest.sv` "background
+load" appeared to reproduce corruption, but only because every phase in
+that test shared SDRAM address 0 onward and the background load
+overwrote words 0–4095 with a different pattern. Lesson: give each
+concurrent SDRAM test its own disjoint address region before drawing
+conclusions.
+
+The diagnostic instrumentation (`rom_csum`, per-bucket/per-word
+checksums with `$readmemh`-loaded sim references under
+`rtl/tdragon2/*_ref.hex`, the `dbg_*` ports on `rtl/sdram_req.sv`) is
+left in `tdragon2_core.sv`; `Macross2.sv` no longer draws the overlays
+(reconnect the `final_rgb` ternary chain, preserved in git history, to
+bring them back). The self-contained methodology — a passive checksum
+tap at a fixed *transaction count*, compared between a fixed-input
+Verilator run and real hardware, read out as a 16px/bit barcode — was
+reliable end to end and is the recommended first tool for any future
+real-hardware divergence.
+
 ## Status
 
-Design only as of this writing — implementation follows in
-`rtl/tdragon2/tdragon2_core.sv` (`HW_ROMS=1` path),
-`rtl/macross2/video_macross2.sv` (`HW_ROMS=1` path), a new generic
-`rtl/sdram_req.sv` helper, the family's top-level `emu.sv`/`.qsf`/`.sdc`,
-and `releases/tdragon2.mra`/`releases/macross2.mra`. Verification plan:
-a new hardware-mode Verilator testbench (behavioral SDRAM-latency model
-+ a fake `ioctl_download` byte-stream replay of the real ROM images)
-confirming the CPU still boots/executes the same program correctly
-under real wait-state latency, before ever spending a Quartus compile
-cycle — Quartus compile + fitter/timing-closure is the furthest this
-session can verify, since no JTAG/SD-card access to a real DE10-Nano
-exists in this environment (see conversation record) — actual hardware
-boot confirmation needs the project owner's own test.
+`HW_ROMS=1` implemented for both games (`rtl/tdragon2/tdragon2_core.sv`
+serving both at runtime, `rtl/macross2/video_macross2.sv`, `rtl/sdram_req.sv`,
+`Macross2.sv`/`.qsf`/`.sdc`, `releases/tdragon2.mra`/`macross2.mra`),
+Verilator-verified under real SDRAM wait-state latency, and — with the
+`ioctl_index` fix above — booting on a real DE10-Nano with the ROM
+checksum matching simulation. Remaining known limitations: HSync/VSync
+placement is still the documented placeholder (the scaler locks and
+reports 384x224 @ 56.2Hz, but it has not been tuned against a reference),
+and player-input mapping has been cross-checked against
+`INPUT_PORTS_START` but not yet exercised in play on hardware.

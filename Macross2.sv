@@ -116,6 +116,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.ioctl_addr(ioctl_addr_full),
 	.ioctl_dout(ioctl_dout),
 	.ioctl_wait(ioctl_wait),
+	.ioctl_index(ioctl_index),
 
 	.ps2_key(ps2_key)
 );
@@ -191,13 +192,22 @@ wire [15:0] in1_i = ~{1'b0, joystick_1[6:0], 1'b0, joystick_0[6:0]};
 // specify. Upper byte of each 16-bit CPU-bus word is don't-care (DSW1/
 // DSW2 are 8-bit hardware switch banks) and idles high, matching in0_i/
 // in1_i's own convention for their own unused bits.
-wire [15:0] dsw1_i = {8'hFF, status[7:0]};
-wire [15:0] dsw2_i = {8'hFF, status[15:8]};
+// dsw1_i/dsw2_i/game_macross2 are now driven from the .mra <switches>
+// block's own ioctl index-254 transfer (see dip_sw below, after the ioctl
+// wires are declared) — NOT from status[]: the official MiSTer MRA docs
+// state <switches> data is sent via ioctl_index 254 "instead of the
+// status bits", so the previous status[15:0]/status[16] wiring never
+// actually received it. Same pattern Arcade-Darius_MiSTer and
+// Arcade-TMNT_MiSTer use. This is also the transfer that, un-gated,
+// used to overwrite the 68000 reset vector in SDRAM — see
+// tdragon2_core.sv's own ioctl_index port comment.
+wire [15:0] dsw1_i;
+wire [15:0] dsw2_i;
 
 // Runtime game select — see this file's own header. status[16] is a
 // HIDDEN bit (no <dip> entry declares it in either .mra), set purely by
 // each .mra's own <switches default="..."> third byte on load.
-wire game_macross2 = status[16];
+wire game_macross2; // assigned below from dip_sw[2][0] (| status[16]) — see dsw1_i's comment
 
 // ------------------------------------------------------------------
 // SDRAM — single physical rtl/sdram.sv instance, 4 ports, all running
@@ -212,7 +222,14 @@ wire        sd0_req, sd1_req, sd2_req, sd3_req;
 wire        sd0_ack, sd1_ack, sd2_ack, sd3_ack;
 wire        sdram_ready;
 
-sdram sdram_inst
+// REFRESH_CYCLES=240 (6us @ 40MHz clk_sys) — see rtl/sdram.sv's own
+// parameter comment: its 850-cycle default assumes a ~96MHz+ clk, and
+// at this project's own 40MHz clk_sys that default stretches the real
+// refresh interval to ~174ms, well past the MT48LC16M16's 64ms JEDEC
+// retention spec — confirmed to cause real data corruption on actual
+// hardware via SdramTest.sv, a standalone diagnostic core built during
+// this session's own real-hardware black-screen investigation.
+sdram #(.REFRESH_CYCLES(10'd240)) sdram_inst
 (
 	.SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
 	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
@@ -230,6 +247,55 @@ sdram sdram_inst
 wire [23:0] rd_rgb;
 wire [8:0]  rd_x_screen;
 wire [7:0]  rd_y_screen;
+wire [15:0] rom_csum;
+wire [15:0] rom_csum_count;
+wire        rom_csum_done;
+wire [15:0] rom_fetch_csum;
+wire [15:0] rom_fetch_csum_count;
+wire        rom_fetch_csum_done;
+wire [15:0] ioctl_csum;
+wire [19:0] ioctl_csum_count;
+wire        ioctl_csum_done;
+wire [0:127] ioctl_bucket_fail;
+wire [0:127] rom_fetch_bucket_touched;
+wire [0:127] rom_fetch_bucket_sim_touched;
+wire [0:127] rom_fetch_bucket_fail;
+wire [0:127] rom_fetch_fine_touched;
+wire [0:127] rom_fetch_fine_sim_touched;
+wire [0:127] rom_fetch_fine_fail;
+wire [0:15] rom_fetch_word_touched;
+wire [0:15] rom_fetch_word_sim_touched;
+wire [0:15] rom_fetch_word_fail;
+wire [15:0] rom_word0_raw, rom_word1_raw, rom_word2_raw, rom_word3_raw;
+wire        rom_word0_was_write, rom_word1_was_write, rom_word2_was_write, rom_word3_was_write;
+wire        rom_word0_addr_ok, rom_word1_addr_ok, rom_word2_addr_ok, rom_word3_addr_ok;
+wire [23:0] ioctl_wr_max_gap;
+wire [23:0] ioctl_wr_over_refresh_count;
+wire [15:0] ioctl_index;
+wire [7:0]  ioctl_session_count;
+wire [15:0] ioctl_last_index;
+wire [15:0] ioctl_nonrom_word0;
+
+// .mra <switches> capture — the canonical MiSTer MRA-doc snippet: up to
+// 8 raw bytes arrive on ioctl index 254, byte 0 = DIP bits 7:0, byte 1 =
+// bits 15:8, etc. Defaults to all-ones (every switch "off"/idle-high,
+// matching in0_i/in1_i's own unused-bit convention) until the loader
+// sends the block. Byte layout follows releases/*.mra's own
+// <switches default="F7,FF,0x">: byte0/byte1 = DSW1/DSW2 low bytes,
+// byte2 bit0 = the hidden game-select bit (00=tdragon2, 01=macross2).
+reg [7:0] dip_sw [0:7];
+integer dip_i;
+initial for (dip_i = 0; dip_i < 8; dip_i = dip_i + 1) dip_sw[dip_i] = 8'hFF;
+always @(posedge clk_sys) begin
+	if (ioctl_download && ioctl_wr && (ioctl_index == 16'd254) && !ioctl_addr[24:3])
+		dip_sw[ioctl_addr[2:0]] <= ioctl_dout;
+end
+assign dsw1_i = {8'hFF, dip_sw[0]};
+assign dsw2_i = {8'hFF, dip_sw[1]};
+// OR'd with status[16] so game select still works if a MiSTer build ever
+// does mirror <switches> into status[] as well; either path alone selects
+// macross2 only for macross2.mra (tdragon2.mra's byte 2 is 00).
+assign game_macross2 = dip_sw[2][0] | status[16];
 wire        ce_pix_core;
 wire [9:0]  hcount_core, vcount_core;
 wire        hblank_core, vblank_core;
@@ -262,13 +328,24 @@ assign rd_y_screen = vcount_core[7:0] - 8'd16;
 // roms/tdragon2_vtiming.hex) since, like every other ROM file in this
 // project, its content is copyrighted MAME dump data and is never
 // committed (see .gitignore's **/roms/*.hex).
-tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex")) core
+// IOCTL_BUCKET_REF_FILE: NOT copyrighted ROM dump data (a small table of
+// checksums derived from it), safe to commit directly — see
+// tdragon2_core.sv's own IOCTL_BUCKET_REF_FILE parameter comment.
+tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex"),
+	.IOCTL_BUCKET_REF_FILE("rtl/tdragon2/tdragon2_ioctl_bucket_ref.hex"),
+	.ROM_FETCH_BUCKET_REF_FILE("rtl/tdragon2/tdragon2_fetch_bucket_ref.hex"),
+	.ROM_FETCH_BUCKET_TOUCHED_FILE("rtl/tdragon2/tdragon2_fetch_bucket_touched.hex"),
+	.ROM_FETCH_FINE_REF_FILE("rtl/tdragon2/tdragon2_fetch_fine_ref.hex"),
+	.ROM_FETCH_FINE_TOUCHED_FILE("rtl/tdragon2/tdragon2_fetch_fine_touched.hex"),
+	.ROM_FETCH_WORD_REF_FILE("rtl/tdragon2/tdragon2_fetch_word_ref.hex"),
+	.ROM_FETCH_WORD_TOUCHED_FILE("rtl/tdragon2/tdragon2_fetch_word_touched.hex")) core
 (
 	.clk_sys(clk_sys), .reset(reset), .game_macross2(game_macross2),
 	.extra_por_hold(~pll_locked),
 
 	.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
+	.ioctl_index(ioctl_index),
 
 	.sd0_addr(sd0_addr), .sd0_wrl(sd0_wrl), .sd0_wrh(sd0_wrh), .sd0_din(sd0_din), .sd0_dout(sd0_dout), .sd0_req(sd0_req), .sd0_ack(sd0_ack),
 	.sd1_addr(sd1_addr), .sd1_req(sd1_req), .sd1_dout(sd1_dout), .sd1_ack(sd1_ack),
@@ -292,7 +369,36 @@ tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex")) core
 	.ce_pix_o(ce_pix_core), .hcount_o(hcount_core), .vcount_o(vcount_core),
 	.hblank_o(hblank_core), .vblank_o(vblank_core),
 
-	.in0_i(in0_i), .in1_i(in1_i), .dsw1_i(dsw1_i), .dsw2_i(dsw2_i)
+	// Real inputs restored (they were temporarily forced to 16'hFFFF
+	// during the real-hardware black-screen investigation so rom_csum
+	// could be compared apples-to-apples against the fixed-input sim
+	// reference — that comparison now matches, 0x44D8 on both, with the
+	// ioctl_index ROM-write gate in place; see docs/hw-bringup.md).
+	.in0_i(in0_i), .in1_i(in1_i), .dsw1_i(dsw1_i), .dsw2_i(dsw2_i),
+
+	.rom_csum_o(rom_csum), .rom_csum_count_o(rom_csum_count), .rom_csum_done_o(rom_csum_done),
+	.rom_fetch_csum_o(rom_fetch_csum), .rom_fetch_csum_count_o(rom_fetch_csum_count), .rom_fetch_csum_done_o(rom_fetch_csum_done),
+	.ioctl_csum_o(ioctl_csum), .ioctl_csum_count_o(ioctl_csum_count), .ioctl_csum_done_o(ioctl_csum_done),
+	.ioctl_bucket_fail_o(ioctl_bucket_fail),
+	.dbg_bucket_sel_i(7'd0), .dbg_bucket_state_o(), .dbg_bucket_touched_o(),
+	.rom_fetch_bucket_touched_o(rom_fetch_bucket_touched),
+	.rom_fetch_bucket_sim_touched_o(rom_fetch_bucket_sim_touched), .rom_fetch_bucket_fail_o(rom_fetch_bucket_fail),
+	.dbg_fine_state_o(), .dbg_fine_touched_o(),
+	.rom_fetch_fine_touched_o(rom_fetch_fine_touched),
+	.rom_fetch_fine_sim_touched_o(rom_fetch_fine_sim_touched), .rom_fetch_fine_fail_o(rom_fetch_fine_fail),
+	.dbg_word_state_o(), .dbg_word_touched_o(),
+	.rom_fetch_word_touched_o(rom_fetch_word_touched),
+	.rom_fetch_word_sim_touched_o(rom_fetch_word_sim_touched), .rom_fetch_word_fail_o(rom_fetch_word_fail),
+	.rom_word0_raw_o(rom_word0_raw), .rom_word1_raw_o(rom_word1_raw),
+	.rom_word2_raw_o(rom_word2_raw), .rom_word3_raw_o(rom_word3_raw),
+	.rom_word0_was_write_o(rom_word0_was_write), .rom_word1_was_write_o(rom_word1_was_write),
+	.rom_word2_was_write_o(rom_word2_was_write), .rom_word3_was_write_o(rom_word3_was_write),
+	.rom_word0_race_addr_o(), .rom_word1_race_addr_o(), .rom_word2_race_addr_o(), .rom_word3_race_addr_o(),
+	.rom_word0_addr_ok_o(rom_word0_addr_ok), .rom_word1_addr_ok_o(rom_word1_addr_ok),
+	.rom_word2_addr_ok_o(rom_word2_addr_ok), .rom_word3_addr_ok_o(rom_word3_addr_ok),
+	.ioctl_wr_max_gap_o(ioctl_wr_max_gap), .ioctl_wr_over_refresh_count_o(ioctl_wr_over_refresh_count),
+	.ioctl_session_count_o(ioctl_session_count), .ioctl_last_index_o(ioctl_last_index),
+	.ioctl_nonrom_word0_o(ioctl_nonrom_word0)
 );
 
 assign AUDIO_L = audio_l;
@@ -313,9 +419,224 @@ assign CE_PIXEL  = ce_pix_core;
 assign VGA_DE = ~(hblank_core | vblank_core);
 assign VGA_HS = hsync;
 assign VGA_VS = vsync;
-assign VGA_R  = rd_rgb[23:16];
-assign VGA_G  = rd_rgb[15:8];
-assign VGA_B  = rd_rgb[7:0];
+// ------------------------------------------------------------------
+// DIAGNOSTIC ONLY: a wide overlay (256 of the screen's 384 columns)
+// across the bottom 16 rows of the active picture, showing
+// tdragon2_core.sv's own rom_csum as a 16-bit black/white barcode
+// (16px per bit — a clean power-of-2 bit width, avoiding a non-power-
+// of-2 divider in this combinational per-pixel path — MSB leftmost)
+// once rom_csum_done, solid BLUE while still accumulating — see that
+// module's own rom_csum comment for the full derivation/purpose. A
+// first attempt at this used a small 64x8-pixel corner box (4px/bit) —
+// too fine to decode reliably through the real analog-capture chain
+// this project's own direct-video testing setup uses (several bits
+// landed ambiguously between black/white when sampled from a real
+// screenshot, confirmed directly); this wider version trades screen
+// area for a 4x per-bit margin. Added during this project's own real-
+// hardware black-screen investigation; remove this block (and the
+// rom_csum_o/_count_o/_done_o wiring above) once no longer needed.
+// ------------------------------------------------------------------
+wire       dbg_ov_active = (rd_x_screen < 9'd256) && (rd_y_screen >= 8'd208);
+wire [3:0] dbg_ov_col    = rd_x_screen[7:4];           // 0..15, 16px/bit (x already <256, fits in 8 bits)
+wire [3:0] dbg_ov_bit    = 4'd15 - dbg_ov_col;         // MSB leftmost
+wire [23:0] dbg_ov_rgb   = !rom_csum_done ? 24'h0000FF : (rom_csum[dbg_ov_bit] ? 24'hFFFFFF : 24'h000000);
+
+// DIAGNOSTIC ONLY: a second barcode strip, same 16px/bit encoding as
+// dbg_ov_rgb above, directly above it (rows 192-207 vs. 208-223),
+// showing tdragon2_core.sv's own rom_fetch_csum_o — a checksum tapped
+// one stage upstream of rom_csum_o, at rom_cache1's own SDRAM-fetch-
+// completion event rather than the CPU/DTACKn bus cycle — see that
+// port's own comment in tdragon2_core.sv for the full rationale. A
+// GREEN (not blue) idle color distinguishes "still accumulating" here
+// from the strip below, since both can be mid-accumulation at once and
+// need to stay visually distinct at a glance.
+wire       dbg_ov2_active = (rd_x_screen < 9'd256) && (rd_y_screen >= 8'd192) && (rd_y_screen < 8'd208);
+wire [3:0] dbg_ov2_col    = rd_x_screen[7:4];
+wire [3:0] dbg_ov2_bit    = 4'd15 - dbg_ov2_col;
+wire [23:0] dbg_ov2_rgb   = !rom_fetch_csum_done ? 24'h00FF00 : (rom_fetch_csum[dbg_ov2_bit] ? 24'hFFFFFF : 24'h000000);
+
+// DIAGNOSTIC ONLY: a THIRD barcode strip, same 16px/bit encoding,
+// directly above the other two (rows 176-191) — tdragon2_core.sv's own
+// ioctl_csum_o, the raw ioctl_download WRITE-side byte checksum over
+// the maincpu ROM region (see that port's own comment for the full
+// rationale). A RED idle color (distinct from the BLUE/GREEN of the
+// two strips below) so all three stay visually distinguishable at a
+// glance while independently accumulating.
+wire       dbg_ov3_active = (rd_x_screen < 9'd256) && (rd_y_screen >= 8'd176) && (rd_y_screen < 8'd192);
+wire [3:0] dbg_ov3_col    = rd_x_screen[7:4];
+wire [3:0] dbg_ov3_bit    = 4'd15 - dbg_ov3_col;
+wire [23:0] dbg_ov3_rgb   = !ioctl_csum_done ? 24'hFF0000 : (ioctl_csum[dbg_ov3_bit] ? 24'hFFFFFF : 24'h000000);
+
+// DIAGNOSTIC ONLY: a FOURTH strip, full screen width (rows 160-175),
+// directly above the other three — tdragon2_core.sv's own
+// ioctl_bucket_fail_o, one bit per 4096-byte bucket of the maincpu ROM
+// ioctl_download write stream, RED if that bucket's own live checksum
+// didn't match its known-good reference value, GREEN if it did — same
+// 128-bucket/3px-per-bucket layout as this project's own SdramTest.sv
+// Phase 1 display (128*3=384=full screen width), chosen so a mismatch
+// can be spatially localized directly from a screenshot instead of only
+// knowing (via ioctl_csum_o's own aggregate value) THAT something
+// differs. See ioctl_bucket_fail_o's own comment in tdragon2_core.sv.
+wire       dbg_ov4_active = (rd_y_screen >= 8'd160) && (rd_y_screen < 8'd176);
+wire [6:0] dbg_ov4_bucket = rd_x_screen / 9'd3;
+wire [23:0] dbg_ov4_rgb   = !ioctl_csum_done ? 24'h0000FF : (ioctl_bucket_fail[dbg_ov4_bucket] ? 24'hFF0000 : 24'h00FF00);
+
+// DIAGNOSTIC ONLY: a FIFTH strip, full screen width (rows 144-159),
+// directly above the other four — a spatial/address-bucketed companion
+// to rom_fetch_csum_o (rows 192-207, strip #2), same 128-bucket/3px
+// layout as strip #4 just below. Unlike ioctl_bucket_fail_o's write-side
+// bucketing (monotonic, full-coverage, so simple GREEN/RED suffices),
+// this needs FOUR states since coverage here is inherently partial and
+// real-hardware-timing-dependent — see rom_fetch_bucket_fail_o's own
+// comment in tdragon2_core.sv:
+//   BLACK = the reference (sim) run itself never touched this bucket —
+//           uninformative, not evidence either way.
+//   GREY  = the reference run touched it but real hardware hasn't (at
+//           the moment this frame was captured) — a coverage gap, not
+//           itself proof of a data problem.
+//   GREEN = both touched it, and real hardware's own live checksum
+//           matches the reference exactly.
+//   RED   = both touched it, and they differ — the real, localized
+//           evidence this whole diagnostic exists to find.
+wire       dbg_ov5_active = (rd_y_screen >= 8'd144) && (rd_y_screen < 8'd160);
+wire [6:0] dbg_ov5_bucket = rd_x_screen / 9'd3;
+wire [23:0] dbg_ov5_rgb   =
+	!rom_fetch_bucket_sim_touched[dbg_ov5_bucket] ? 24'h000000 :
+	!rom_fetch_bucket_touched[dbg_ov5_bucket]     ? 24'h808080 :
+	rom_fetch_bucket_fail[dbg_ov5_bucket]         ? 24'hFF0000 : 24'h00FF00;
+
+// DIAGNOSTIC ONLY: a SIXTH strip, full screen width (rows 128-143),
+// directly above strip #5 — a further zoomed-in companion covering ONLY
+// word addresses [0,2048) (strip #5's own bucket 0, which real hardware
+// showed a genuine mismatch on) at 16 words/bucket instead of 2048 —
+// 128x finer, to localize whether the CPU's own reset vector (bucket 0
+// here = word addresses 0-15 = byte 0x000-0x01F, which includes the
+// initial SP at byte 0-3 and initial PC at byte 4-7) is itself
+// corrupted, or only later boot code within that same 4KB range. Same
+// 4-color BLACK/GREY/GREEN/RED convention as strip #5 — see
+// rom_fetch_fine_fail_o's own comment in tdragon2_core.sv.
+wire       dbg_ov6_active = (rd_y_screen >= 8'd128) && (rd_y_screen < 8'd144);
+wire [6:0] dbg_ov6_bucket = rd_x_screen / 9'd3;
+wire [23:0] dbg_ov6_rgb   =
+	!rom_fetch_fine_sim_touched[dbg_ov6_bucket] ? 24'h000000 :
+	!rom_fetch_fine_touched[dbg_ov6_bucket]     ? 24'h808080 :
+	rom_fetch_fine_fail[dbg_ov6_bucket]         ? 24'hFF0000 : 24'h00FF00;
+
+// DIAGNOSTIC ONLY: a SEVENTH strip, full screen width (rows 112-127),
+// directly above strip #6 — TRUE per-word granularity over word
+// addresses [0,16) (strip #6's own fine bucket 0, the only one that
+// showed any real traffic) — 16 buckets at 24px each (384/16=24,
+// exactly), one per individual word, to pinpoint EXACTLY which word(s)
+// in this 32-byte span (including the CPU's own reset vector at words
+// 0-3) are wrong on real hardware. Same 4-color convention as strips #5
+// and #6 — see rom_fetch_word_fail_o's own comment in tdragon2_core.sv.
+wire       dbg_ov7_active = (rd_y_screen >= 8'd112) && (rd_y_screen < 8'd128);
+wire [3:0] dbg_ov7_bucket = rd_x_screen / 9'd24;
+wire [23:0] dbg_ov7_rgb   =
+	!rom_fetch_word_sim_touched[dbg_ov7_bucket] ? 24'h000000 :
+	!rom_fetch_word_touched[dbg_ov7_bucket]     ? 24'h808080 :
+	rom_fetch_word_fail[dbg_ov7_bucket]         ? 24'hFF0000 : 24'h00FF00;
+
+// DIAGNOSTIC ONLY: four RAW-VALUE barcode strips (16px/bit, same
+// encoding as dbg_ov_rgb/strip #1's own rom_csum barcode — MSB
+// leftmost), rows 32-95 (well clear of the OSD info box that occupies
+// roughly the first ~22 native rows of a direct-video capture),
+// displaying tdragon2_core.sv's own rom_word0..3_raw_o directly — the
+// ACTUAL values real hardware's reset-vector-region fetch returns for
+// word addresses 0-3 (word0/1=initial SP, word2/3=initial PC), not just
+// pass/fail. See rom_word0_raw_o's own comment in tdragon2_core.sv for
+// why: 3 of these 4 words were already found to mismatch a known-good
+// reference (rows 112-127's own strip #7), and the actual wrong value
+// may reveal a recognizable pattern (stale ioctl_download data, a
+// shifted/aliased address, all-0s/all-1s) pointing at the specific
+// mechanism at fault. BLUE while !touched (mirrors dbg_ov_rgb's own
+// idle convention), though by the time rom_fetch_csum_done_o latches
+// (gating all these accumulators, see rom_fetch_word_fail_o's own
+// comment) these 4 specific words are already known to be touched.
+wire       dbg_ov8_active = (rd_x_screen < 9'd256) && (rd_y_screen >= 8'd32) && (rd_y_screen < 8'd48);
+wire [3:0] dbg_ov8_bit    = 4'd15 - rd_x_screen[7:4];
+wire [23:0] dbg_ov8_rgb   = !rom_fetch_word_touched[0] ? 24'h0000FF : (rom_word0_raw[dbg_ov8_bit] ? 24'hFFFFFF : 24'h000000);
+
+wire       dbg_ov9_active = (rd_x_screen < 9'd256) && (rd_y_screen >= 8'd48) && (rd_y_screen < 8'd64);
+wire [3:0] dbg_ov9_bit    = 4'd15 - rd_x_screen[7:4];
+wire [23:0] dbg_ov9_rgb   = !rom_fetch_word_touched[1] ? 24'h0000FF : (rom_word1_raw[dbg_ov9_bit] ? 24'hFFFFFF : 24'h000000);
+
+wire       dbg_ov10_active = (rd_x_screen < 9'd256) && (rd_y_screen >= 8'd64) && (rd_y_screen < 8'd80);
+wire [3:0] dbg_ov10_bit    = 4'd15 - rd_x_screen[7:4];
+wire [23:0] dbg_ov10_rgb   = !rom_fetch_word_touched[2] ? 24'h0000FF : (rom_word2_raw[dbg_ov10_bit] ? 24'hFFFFFF : 24'h000000);
+
+wire       dbg_ov11_active = (rd_x_screen < 9'd256) && (rd_y_screen >= 8'd80) && (rd_y_screen < 8'd96);
+wire [3:0] dbg_ov11_bit    = 4'd15 - rd_x_screen[7:4];
+wire [23:0] dbg_ov11_rgb   = !rom_fetch_word_touched[3] ? 24'h0000FF : (rom_word3_raw[dbg_ov11_bit] ? 24'hFFFFFF : 24'h000000);
+
+// DIAGNOSTIC ONLY: a race-detector summary strip, rows 96-111 (directly
+// below the 4 raw-value strips, still clear of the main 7-strip block
+// at rows 112-223), 4 segments of 64px each (256/4=64) — one per
+// reset-vector word — RED if that word's own cache_valid pulse actually
+// belonged to a WRITE (sd0_dbg_we captured at that exact cycle), GREEN
+// if it was a genuine read. Tests the specific race hypothesis this
+// project's own real-hardware bring-up work raised after finding words
+// 0/1/3 read back mostly-zero — see rom_word0_was_write_o's own comment
+// in tdragon2_core.sv.
+// 3-color: RED = the completing transaction was actually a WRITE (the
+// race hypothesis); ORANGE = it was a genuine read, but of the WRONG
+// address (a different bug — see rom_word0_addr_ok_o's own comment);
+// GREEN = genuine read of the correct address (i.e. this specific
+// mechanism is clean — the wrong DATA must come from somewhere else,
+// e.g. real SDRAM read timing itself).
+wire       dbg_ov12_active = (rd_x_screen < 9'd256) && (rd_y_screen >= 8'd96) && (rd_y_screen < 8'd112);
+wire [1:0] dbg_ov12_seg    = rd_x_screen[7:6];
+wire       dbg_ov12_was_write = (dbg_ov12_seg==2'd0) ? rom_word0_was_write :
+                                 (dbg_ov12_seg==2'd1) ? rom_word1_was_write :
+                                 (dbg_ov12_seg==2'd2) ? rom_word2_was_write : rom_word3_was_write;
+wire       dbg_ov12_addr_ok   = (dbg_ov12_seg==2'd0) ? rom_word0_addr_ok :
+                                 (dbg_ov12_seg==2'd1) ? rom_word1_addr_ok :
+                                 (dbg_ov12_seg==2'd2) ? rom_word2_addr_ok : rom_word3_addr_ok;
+wire [23:0] dbg_ov12_rgb   = dbg_ov12_was_write ? 24'hFF0000 : !dbg_ov12_addr_ok ? 24'hFF8000 : 24'h00FF00;
+
+// DIAGNOSTIC ONLY: two full-width, 16px/bit barcode strips (rows 0-15
+// and 16-31 — the only rows this whole diagnostic overlay hadn't
+// already claimed), showing tdragon2_core.sv's own real ioctl_wr
+// pulse-timing instrumentation directly — see ioctl_wr_max_gap_o's own
+// comment there for the full rationale (testing real hps_io/ARM-side
+// download pacing after two synthetic, purely-in-FPGA repros both
+// passed cleanly). 24 bits each, MSB leftmost, matching the barcode
+// convention used throughout this overlay. May be partially obscured
+// on a capture taken while the MiSTer scaler's own OSD info box is
+// still showing (top-left corner, fades after a few seconds) — the
+// lower/right-hand bits stay readable regardless.
+// Rows 0-15/16-31 repurposed (the ioctl_wr gap-timing readouts they
+// previously showed were decoded and recorded — see docs/hw-bringup.md)
+// to prove the multi-session ioctl clobber directly — see
+// tdragon2_core.sv's own ioctl_index port comment:
+//   strip 13: {ioctl_session_count[7:0], ioctl_last_index[15:0]}
+//   strip 14: {8'd0, ioctl_nonrom_word0[15:0]} — what a non-ROM session
+//             wrote at SDRAM word 0 (compare against the real reset
+//             vector's own first word, 0x001F, and the clobbered value
+//             0x0180 read back before the fix).
+wire [23:0] dbg_ov13_val   = {ioctl_session_count, ioctl_last_index};
+wire       dbg_ov13_active = (rd_y_screen < 8'd16);
+wire [4:0] dbg_ov13_col    = rd_x_screen[8:4];          // 0..23, 16px/bit over the full 384px width
+wire [4:0] dbg_ov13_bit    = 5'd23 - dbg_ov13_col;
+wire [23:0] dbg_ov13_rgb   = dbg_ov13_val[dbg_ov13_bit] ? 24'hFFFFFF : 24'h000000;
+
+wire [23:0] dbg_ov14_val   = {8'd0, ioctl_nonrom_word0};
+wire       dbg_ov14_active = (rd_y_screen >= 8'd16) && (rd_y_screen < 8'd32);
+wire [4:0] dbg_ov14_col    = rd_x_screen[8:4];
+wire [4:0] dbg_ov14_bit    = 5'd23 - dbg_ov14_col;
+wire [23:0] dbg_ov14_rgb   = dbg_ov14_val[dbg_ov14_bit] ? 24'hFFFFFF : 24'h000000;
+
+// Diagnostic overlays disconnected from the picture now that the
+// black-screen root cause is fixed (the dbg_ov* wires above and the
+// core's own diagnostic ports are left in place, unread — Quartus
+// optimizes them away; re-attach the ternary chain here to bring the
+// overlays back if a future real-hardware investigation needs them).
+// The bare-final_rgb chain is preserved in git history / docs/hw-bringup.md.
+wire [23:0] final_rgb    = rd_rgb;
+
+assign VGA_R  = final_rgb[23:16];
+assign VGA_G  = final_rgb[15:8];
+assign VGA_B  = final_rgb[7:0];
 
 reg  [26:0] act_cnt;
 always @(posedge clk_sys) act_cnt <= act_cnt + 1'd1;

@@ -19,6 +19,95 @@
 //
 
 module sdram
+#(
+	// REFRESH_CYCLES: clk cycles between AUTO_REFRESH commands (see
+	// the access-manager `rfs_cnt` counter below). The MT48LC16M16
+	// this controller targets needs all 8192 rows refreshed within
+	// 64ms (JEDEC spec), i.e. at most 64ms/8192 = 7.8125us between
+	// refreshes of a given row — this parameter IS that interval,
+	// expressed in `clk` cycles, so it must scale with whatever clock
+	// rate `clk` actually runs at. Default (850) matches this file's
+	// own original tuning, which line 80's own RASCAS_DELAY comment
+	// ("2 cycles@96MHz") suggests targeted something in the ~96MHz+
+	// range MiSTer's own sdram.sv is typically run at elsewhere in the
+	// ecosystem — 850/96MHz=8.85us, already slightly over the 7.8125us
+	// spec, but with real-world retention margin most chips have
+	// beyond the strict worst-case JEDEC number. Confirmed by direct
+	// real-hardware testing (a standalone SDRAM write/read-back test
+	// core, see SdramTest.sv) that this default is UNSAFE at this
+	// project's own 40MHz clk_sys: 850/40MHz=21.25us, a full 8192-row
+	// refresh sweep of ~174ms, more than DOUBLE the 64ms spec —
+	// produced real, reproducible read-back data corruption on actual
+	// silicon (never visible in sim/models/sdram_model.sv, which does
+	// not model DRAM charge decay at all). This project's own top
+	// level(s) must override REFRESH_CYCLES for their actual clk_sys
+	// rate; the default here is left as this file's own original value
+	// rather than silently changed, since other MiSTer cores may
+	// already rely on it at their own (faster) clock rate.
+	parameter REFRESH_CYCLES = 10'd850,
+
+	// RASCAS_DELAY: cycles between an ACTIVE (row-open) command and the
+	// following READ/WRITE (column-access) command — tRCD. Default (2)
+	// preserved for compatibility with any other consumer at their own
+	// clock rate. This project's own real-hardware bring-up work found
+	// that GENUINE CONCURRENT multi-port contention (several ports
+	// continuously, simultaneously requesting — never exercised by any
+	// single/dual-port isolated test) produces real, reproducible data
+	// corruption that plain single-port operation at the same 40MHz
+	// clk_sys never shows (see SdramTest.sv's own BACKGROUND LOAD test
+	// and docs/hw-bringup.md) — being tested here as a real-hardware
+	// timing-margin hypothesis, overridable per top-level the same way
+	// REFRESH_CYCLES already is.
+	parameter RASCAS_DELAY = 3'd2,
+
+	// PRECHARGE_DELAY: extra STATE_IDLE cycles the access manager must
+	// wait, after a transaction completes, before granting the NEXT
+	// REFRESH or ACTIVE command (i.e. tRP — the completed transaction's
+	// own auto-precharge, see this file's own STATE_CONT-time
+	// SDRAM_A={dqm,2'b10,addr} column-command encoding, needs to finish
+	// before the next row can open, whether that next row is in the
+	// SAME bank or not). Default 0 preserves this file's own original
+	// behavior exactly (grant immediately the same cycle STATE_IDLE is
+	// entered) for any other consumer. Added as a second real-hardware
+	// timing-margin hypothesis after RASCAS_DELAY alone (tRCD, the
+	// ACTIVATE-to-column-access delay — see that parameter's own
+	// comment) failed to fix the genuine concurrent-multi-port-
+	// contention data corruption this project's own BACKGROUND LOAD
+	// test in SdramTest.sv found (see docs/hw-bringup.md) — unlike
+	// RASCAS_DELAY, the gap this covers (STATE_READY of one transaction
+	// to STATE_START of the next) was previously fixed at exactly one
+	// cycle regardless of any existing parameter.
+	parameter PRECHARGE_DELAY = 3'd0,
+
+	// SEPARATE_SDRAM_CLK: default 0 preserves this file's own original
+	// behavior EXACTLY for every existing consumer — SDRAM_CLK generated
+	// straight from `clk` (the same clock every internal state-machine
+	// register runs on) via the altddio_out DDR output cell below, with
+	// NO deliberate phase compensation for the real round-trip PCB trace
+	// delay between the FPGA's own clock pin and the physical SDRAM
+	// chip's own clock input (and back, for read-data setup/hold at this
+	// controller's own sampling flip-flops) — a real, standard SDRAM
+	// design concern this project's own rtl/pll.v never addressed, since
+	// that file was hand-written from scratch without interactive
+	// Quartus GUI access (see its own header comment) and only ever
+	// implements ONE output clock. Set to 1 to instead drive the
+	// altddio_out block's own `outclock` from a SEPARATE `clk_sdram`
+	// input (typically a second, phase-shifted PLL output at the same
+	// frequency as `clk`) — a real-hardware timing-margin hypothesis
+	// this project's own BACKGROUND LOAD test in SdramTest.sv raised
+	// after two DIGITAL-LOGIC-side fixes (RASCAS_DELAY, PRECHARGE_DELAY)
+	// both failed to resolve genuine concurrent-multi-port-contention
+	// data corruption (see docs/hw-bringup.md): unlike those two, a
+	// clock-phase/trace-delay problem would plausibly (a) never show in
+	// simulation (behavioral SDRAM models don't model clock-to-out or
+	// trace delay at all), (b) be completely unaffected by any digital
+	// state-machine cycle-count parameter, and (c) get worse
+	// specifically under heavier concurrent bus switching (more
+	// simultaneous data-bus transitions from different ports = worse
+	// real electrical setup/hold margin at the physical pins exactly
+	// when it matters most).
+	parameter SEPARATE_SDRAM_CLK = 0
+)
 (
 
 	// interface to the MT48LC16M16 chip
@@ -38,6 +127,10 @@ module sdram
 	// cpu/chipset interface
 	input             init,			// init signal after FPGA config to initialize RAM
 	input             clk,			// sdram is accessed at up to 128MHz
+	// clk_sdram: only used when SEPARATE_SDRAM_CLK=1 (see that
+	// parameter's own comment) — left unconnected by every existing
+	// consumer, matching the file's own established default-off pattern.
+	input             clk_sdram,
 	input       [1:0] prio_mode,	// 00=RR equal, 01=video first, 10=CPU first, 11=video 75%
 
 	input      [24:1] addr0,
@@ -77,7 +170,6 @@ assign SDRAM_nCS = 0;
 assign SDRAM_CKE = 1;
 assign {SDRAM_DQMH,SDRAM_DQML} = SDRAM_A[12:11];
 
-localparam RASCAS_DELAY   = 3'd2; // tRCD=20ns -> 2 cycles@96MHz (10.4ns/cycle)
 localparam BURST_LENGTH   = 3'd0; // 0=1, 1=2, 2=4, 3=8, 7=full page
 localparam ACCESS_TYPE    = 1'd0; // 0=sequential, 1=interleaved
 localparam CAS_LATENCY    = 3'd3; // 3 for robust timing on real hardware
@@ -86,13 +178,28 @@ localparam NO_WRITE_BURST = 1'd1; // 0=write burst enabled, 1=only single access
 
 localparam MODE = { 3'b000, NO_WRITE_BURST, OP_MODE, CAS_LATENCY, ACCESS_TYPE, BURST_LENGTH}; 
 
-localparam STATE_IDLE  = 3'd0;             // state to check the requests
+// Declared 4'd0 (not 3'd0): every STATE_* below derives from this one
+// via addition, and Verilog's own width-inference for an unsized
+// localparam takes the MAX of its operands' widths at each step — with
+// this at only 3 bits, STATE_READY (which grows with RASCAS_DELAY, see
+// that parameter's own comment) could silently truncate/wrap for any
+// override large enough to push it past 7, even with `state` itself
+// already widened to 4 bits below. Widening the root here propagates a
+// 4-bit-minimum width through the whole derivation chain.
+localparam STATE_IDLE  = 4'd0;             // state to check the requests
 localparam STATE_START = STATE_IDLE+1'd1;  // state in which a new command is started
 localparam STATE_CONT  = STATE_START+RASCAS_DELAY;
 localparam STATE_READY = STATE_CONT+CAS_LATENCY+1'd1;
 localparam STATE_LAST  = STATE_READY;      // last state in cycle
 
-reg  [2:0] state = 0;
+// Widened from [2:0] (0-7) to [3:0] (0-15): STATE_READY = STATE_CONT +
+// CAS_LATENCY + 1 grows with RASCAS_DELAY (see that parameter's own
+// comment) — the original 3-bit width silently overflowed/wrapped for
+// any override large enough to push STATE_READY past 7, corrupting the
+// whole state machine. 4 bits covers RASCAS_DELAY up to 10 at the
+// current CAS_LATENCY=3, comfortably more headroom than any real
+// tRCD-margin experiment should need.
+reg  [3:0] state = 0;
 reg [22:1] a;
 reg [15:0] data;
 reg        we;
@@ -109,6 +216,7 @@ reg  [1:0] dqm;
 reg        active = 0;
 reg  [3:0] ram_req = 0;
 reg  [1:0] next_port = 0;  // round-robin: 0-3
+reg  [3:0] idle_wait_cnt = 0; // PRECHARGE_DELAY countdown — see that parameter's own comment
 wire [3:0] wr = {wrl3|wrh3,wrl2|wrh2,wrl1|wrh1,wrl0|wrh0};
 
 reg [15:0] dout;
@@ -126,15 +234,18 @@ always @(posedge clk) begin
 	reg rfs, rfs2;
 	
 	rfs_cnt <= rfs_cnt + 1'd1;
-	if (rfs_cnt == 850) begin
+	if (rfs_cnt == REFRESH_CYCLES) begin
 		rfs <= 1;
 		rfs_cnt <= 0;
 	end
 
-	if (rfs_cnt == 425) rfs2 <= 1;
+	if (rfs_cnt == (REFRESH_CYCLES >> 1)) rfs2 <= 1;
 	
 	if(state == STATE_IDLE && mode == MODE_NORMAL) begin
-		if (rfs) begin
+		if (idle_wait_cnt < PRECHARGE_DELAY) begin
+			idle_wait_cnt <= idle_wait_cnt + 1'd1;
+		end
+		else if (rfs) begin
 			rfs <= 0;
 			rfs2 <= 0;
 			rfs_cnt <= 0;
@@ -142,6 +253,7 @@ always @(posedge clk) begin
 			dqm <= 2'b00;
 			active <= 0;
 			state <= STATE_START;
+			idle_wait_cnt <= 0;
 		end
 		else begin : rr_arb
 			// Priority-selectable arbitration via prio_mode[1:0]
@@ -261,6 +373,7 @@ always @(posedge clk) begin
 
 			if (granted) begin
 				active <= 1; rfs <= rfs2; state <= STATE_START;
+				idle_wait_cnt <= 0;
 			end
 		end
 	end
@@ -345,6 +458,14 @@ end
 `ifdef SIMULATION
 assign SDRAM_CLK = ~clk;
 `else
+// ddr_outclock: SEPARATE_SDRAM_CLK's own compile-time constant selects
+// between `clk` (default, this file's original behavior) and
+// `clk_sdram` (a separate, typically phase-shifted clock) — see that
+// parameter's own comment. Never toggles at runtime (SEPARATE_SDRAM_CLK
+// is a parameter, fixed at elaboration), so this is a synthesis-time
+// net selection ahead of the DDR output cell's own clock input, not a
+// runtime clock mux.
+wire ddr_outclock = SEPARATE_SDRAM_CLK ? clk_sdram : clk;
 altddio_out
 #(
 	.extend_oe_disable("OFF"),
@@ -360,7 +481,7 @@ sdramclk_ddr
 (
 	.datain_h(1'b0),
 	.datain_l(1'b1),
-	.outclock(clk),
+	.outclock(ddr_outclock),
 	.dataout(SDRAM_CLK),
 	.aclr(1'b0),
 	.aset(1'b0),

@@ -72,7 +72,27 @@ module tdragon2_hw_top
 	output [9:0]  hcount_o,
 	output [9:0]  vcount_o,
 
-	output        frame_done
+	output        frame_done,
+
+	output [15:0] rom_csum_o,
+	output [15:0] rom_csum_count_o,
+	output        rom_csum_done_o,
+
+	output [15:0] rom_fetch_csum_o,
+	output [15:0] rom_fetch_csum_count_o,
+	output        rom_fetch_csum_done_o,
+
+	output [15:0] ioctl_csum_o,
+	output [19:0] ioctl_csum_count_o,
+	output        ioctl_csum_done_o,
+
+	input  [6:0]  dbg_bucket_sel_i,
+	output [15:0] dbg_bucket_state_o,
+	output        dbg_bucket_touched_o,
+	output [15:0] dbg_fine_state_o,
+	output        dbg_fine_touched_o,
+	output [15:0] dbg_word_state_o,
+	output        dbg_word_touched_o
 );
 
 	// Same computation as Macross2.sv's own rd_x_screen/rd_y_screen —
@@ -93,7 +113,12 @@ module tdragon2_hw_top
 	wire        p0_req, p1_req, p2_req, p3_req;
 	wire        p0_ack, p1_ack, p2_ack, p3_ack;
 
-	sdram sdram_inst (
+	// REFRESH_CYCLES=240 (6us @ 40MHz clk_sys) — matches Macross2.sv's
+	// own real hardware override; see rtl/sdram.sv's own parameter
+	// comment. sim/models/sdram_model.sv doesn't model charge decay so
+	// this doesn't change simulated behavior, but keeps this testbench
+	// consistent with real hardware's own instantiation.
+	sdram #(.REFRESH_CYCLES(10'd240)) sdram_inst (
 		.SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
 		.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
 		.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CLK(SDRAM_CLK), .SDRAM_CKE(SDRAM_CKE), .ready(sdram_ready),
@@ -119,6 +144,7 @@ module tdragon2_hw_top
 	tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex")) core_inst (
 		.clk_sys(clk_sys), .reset(reset), .game_macross2(1'b0),
 		.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
+		.ioctl_index(16'd0), // this testbench streams only the <rom index="0"> data — see tdragon2_core.sv's ioctl_index port comment
 		.sd0_addr(p0_addr), .sd0_wrl(p0_wrl), .sd0_wrh(p0_wrh), .sd0_din(p0_din), .sd0_dout(p0_dout), .sd0_req(p0_req), .sd0_ack(p0_ack),
 		.sd1_addr(p1_addr), .sd1_req(p1_req), .sd1_dout(p1_dout), .sd1_ack(p1_ack),
 		.sd2_addr(p2_addr), .sd2_wrl(p2_wrl), .sd2_wrh(p2_wrh), .sd2_din(p2_din), .sd2_dout(p2_dout), .sd2_req(p2_req), .sd2_ack(p2_ack),
@@ -137,7 +163,18 @@ module tdragon2_hw_top
 
 		.audio_l(), .audio_r(),
 		.ce_pix_o(ce_pix_o), .hcount_o(hcount_o), .vcount_o(vcount_o), .hblank_o(hblank_o), .vblank_o(vblank_o),
-		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF)
+		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF),
+
+		.rom_csum_o(rom_csum_o), .rom_csum_count_o(rom_csum_count_o), .rom_csum_done_o(rom_csum_done_o),
+		.rom_fetch_csum_o(rom_fetch_csum_o), .rom_fetch_csum_count_o(rom_fetch_csum_count_o), .rom_fetch_csum_done_o(rom_fetch_csum_done_o),
+		.ioctl_csum_o(ioctl_csum_o), .ioctl_csum_count_o(ioctl_csum_count_o), .ioctl_csum_done_o(ioctl_csum_done_o),
+		.ioctl_bucket_fail_o(),
+		.dbg_bucket_sel_i(dbg_bucket_sel_i), .dbg_bucket_state_o(dbg_bucket_state_o), .dbg_bucket_touched_o(dbg_bucket_touched_o),
+		.rom_fetch_bucket_touched_o(), .rom_fetch_bucket_sim_touched_o(), .rom_fetch_bucket_fail_o(),
+		.dbg_fine_state_o(dbg_fine_state_o), .dbg_fine_touched_o(dbg_fine_touched_o),
+		.rom_fetch_fine_touched_o(), .rom_fetch_fine_sim_touched_o(), .rom_fetch_fine_fail_o(),
+		.dbg_word_state_o(dbg_word_state_o), .dbg_word_touched_o(dbg_word_touched_o),
+		.rom_fetch_word_touched_o(), .rom_fetch_word_sim_touched_o(), .rom_fetch_word_fail_o()
 	);
 
 endmodule

@@ -58,6 +58,7 @@ int main(int argc, char **argv) {
 	top.reset = 1;
 	top.ioctl_download = 0;
 	top.ioctl_wr = 0;
+	top.dbg_bucket_sel_i = 0;
 	for (int i = 0; i < 20; i++) tick();
 
 	// Wait for the SDRAM controller's own init sequence before downloading.
@@ -217,6 +218,44 @@ int main(int argc, char **argv) {
 	printf("tb_tdragon2_hw: Z80 wrote to YM2203 %ld times, OKI0 %ld times, OKI1 %ld times\n", ym_writes, oki0_writes, oki1_writes);
 	printf("tb_tdragon2_hw: final dbg_z80_reset_n=%d dbg_z80_m1_n=%d dbg_z80_mreq_n=%d\n",
 	       top.dbg_z80_reset_n, top.dbg_z80_m1_n, top.dbg_z80_mreq_n);
+	printf("tb_tdragon2_hw: rom_csum=%04X count=%u done=%d (reference value for real-hardware comparison)\n",
+	       (unsigned)top.rom_csum_o, (unsigned)top.rom_csum_count_o, (int)top.rom_csum_done_o);
+	printf("tb_tdragon2_hw: rom_fetch_csum=%04X count=%u done=%d (reference value for real-hardware comparison)\n",
+	       (unsigned)top.rom_fetch_csum_o, (unsigned)top.rom_fetch_csum_count_o, (int)top.rom_fetch_csum_done_o);
+	printf("tb_tdragon2_hw: ioctl_csum=%04X count=%u done=%d (reference value for real-hardware comparison)\n",
+	       (unsigned)top.ioctl_csum_o, (unsigned)top.ioctl_csum_count_o, (int)top.ioctl_csum_done_o);
+
+	// Dump all 128 rom_fetch_csum address-buckets (see
+	// tdragon2_core.sv's own dbg_bucket_sel_i/rom_fetch_bucket_fail_o
+	// comment) via the small combinational read-mux — REF_FILE/
+	// TOUCHED_FILE for the real-hardware build's own comparison logic,
+	// generated from this printed output by
+	// tools/mk_fetch_bucket_ref.py.
+	printf("tb_tdragon2_hw: rom_fetch_bucket dump (bucket state touched):\n");
+	for (int b = 0; b < 128; b++) {
+		top.dbg_bucket_sel_i = b;
+		top.eval();
+		printf("BUCKET %3d %04X %d\n", b, (unsigned)top.dbg_bucket_state_o, (int)top.dbg_bucket_touched_o);
+	}
+
+	// Zoomed-in dump: word addresses [0,2048) at 16-words/bucket (see
+	// tdragon2_core.sv's own dbg_fine_state_o/rom_fetch_fine_fail_o
+	// comment) — same 128-entry mux, different underlying accumulator.
+	printf("tb_tdragon2_hw: rom_fetch_fine dump (fine state touched):\n");
+	for (int b = 0; b < 128; b++) {
+		top.dbg_bucket_sel_i = b;
+		top.eval();
+		printf("FINE %3d %04X %d\n", b, (unsigned)top.dbg_fine_state_o, (int)top.dbg_fine_touched_o);
+	}
+
+	// True per-word dump: word addresses [0,16) (see tdragon2_core.sv's
+	// own dbg_word_state_o/rom_fetch_word_fail_o comment).
+	printf("tb_tdragon2_hw: rom_fetch_word dump (word state touched):\n");
+	for (int b = 0; b < 16; b++) {
+		top.dbg_bucket_sel_i = b;
+		top.eval();
+		printf("WORD %3d %04X %d\n", b, (unsigned)top.dbg_word_state_o, (int)top.dbg_word_touched_o);
+	}
 	printf("tb_tdragon2_hw: rendered %u video frame(s); last frame had %ld/%d nonzero pixels\n",
 	       frame_count, last_frame_nonzero_px, SCREEN_W * SCREEN_H);
 	if (m68k_trace) fclose(m68k_trace);
