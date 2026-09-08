@@ -647,6 +647,29 @@ pixel counters, so a cached byte (7 of every 8 pixels) is plotted and
 advanced in the same cycle; and a tile lying wholly outside the screen
 is skipped on its first pixel, as MAME's clipping does.
 
+And one more, visible only in the core's own native screenshots
+(`echo screenshot > /dev/MiSTer_cmd`, exact 384x224 pixels — the
+capture box's downscale had hidden it): every sprite row's 2-pixel
+column pairs were swapped on hardware, a jagged "combing" along sprite
+edges, while the sim was pixel-exact. The sprite ROMs are
+`ROM_LOAD16_WORD_SWAP`; MAME's graphics decoder reads that region
+byte-wise from the swapped memory image, so byte b is raw file byte
+b^1, and the sim's `$readmemh` array is built that way (`mkgfxrom
+--mode word_swap`: `sim[i] == raw[i^1]` on every sampled byte). The
+SDRAM image holds the raw file order: the download rebuilds words by
+byte parity and `rom_cache1_byte` picks the byte by the same parity, so
+the two cancel — correct for the 68000's word reads (which is what the
+.mra note had verified), wrong for a byte-wise consumer. Fixed by
+inverting bit 0 of the sprite byte address on the hardware path.
+BG/TX/OKI/Z80 regions are plain `ROM_LOAD`s and were never affected.
+Verified two ways: native MiSTer screenshots of the tdragon2 demo
+reproduce the player-plane sprite pixel for pixel (all 410 non-water
+pixels of a 33x26 masked template) against the MAME-matched reference
+sim, and the `tdragon2_hw` testbench — which streams the raw zip bytes
+through the same ioctl path as the .mra — reaches the same 100% at its
+demo frames 1157/1158. macross2's demo sprites are clean on hardware
+too.
+
 Cost, stated plainly: sprites now display one frame after MAME and the
 real board. Both render sprites per scanline from the table copied at
 scanline 242 of the previous frame, so that table is on screen during

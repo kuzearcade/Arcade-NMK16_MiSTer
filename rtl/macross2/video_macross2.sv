@@ -260,9 +260,21 @@ module video_macross2 #(
 			.use_tag(bg_use_tag), .use_sel(bg_half_col[2:1]), .data(bgtile_rom_byte), .vram(bg_vram_use), .hit(bg_hit),
 			.sd_addr(bg_sd_addr), .sd_req(bg_sd_req), .sd_busy(bg_sd_busy), .sd_valid(bg_sd_valid), .sd_dout(bg_sd_dout), .sd_dout_pair(bg_sd_dout_pair)
 		);
+		// Sprite ROM byte order on the hardware path: the ROMs are
+		// ROM_LOAD16_WORD_SWAP, and MAME's graphics decoder reads the
+		// region BYTE-wise from the swapped memory image, where byte b is
+		// raw file byte b^1 (the sim's $readmemh array is built that way
+		// by mkgfxrom --mode word_swap). The SDRAM image holds the raw
+		// file order: the download rebuilds words by byte parity and
+		// rom_cache1_byte picks the byte by the same parity, so those two
+		// cancel — right for the 68000's word reads (its region is read
+		// as words), wrong here. Without the ^1 every sprite row had its
+		// 2-pixel column pairs swapped: the jagged "combing" seen in
+		// native screenshots on hardware while the sim was pixel-exact.
+		// BG/TX/OKI/Z80 regions are plain ROM_LOADs and stay as they are.
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_SPRITES)) sprites_cache_inst (
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({2'd0, spr_byte_addr}), .data(sprites_rom_byte), .ready(sprites_ready),
+			.byte_addr({2'd0, spr_byte_addr ^ 22'd1}), .data(sprites_rom_byte), .ready(sprites_ready),
 			.sd_addr(arb_addr[1]), .sd_req(arb_req[1]), .sd_busy(arb_busy[1]), .sd_valid(arb_valid[1]), .sd_dout(arb_dout[1]), .sd_dout_pair(arb_dout_pair[1])
 		);
 	end
