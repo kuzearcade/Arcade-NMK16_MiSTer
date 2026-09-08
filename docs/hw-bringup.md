@@ -564,6 +564,29 @@ Macross II) against a reference-sim run long enough to reach it
 (`./obj_dir/Vtdragon2_core 1000000000` — both testbenches take the cycle
 budget as argv[1]).
 
+## Audio "muddled" on hardware
+
+Compared 40 s hardware recordings of each game (capture box, `arecord`)
+with MAME renders of the same games (`-wavwrite`, 50 s), by band energy
+relative to the 1-2 kHz band: hardware sat 4-6 dB below MAME at 2-4 kHz
+and 2-4 dB above it below 250 Hz on both games — the signature of
+sample playback pitched far too low. Two causes in
+`tdragon2_core.sv`, both against MAME's `macross2` machine config:
+
+1. **OKI clock.** MAME clocks both OKIM6295s at 16MHz/4 = 4MHz with pin 7
+   low (24.24 kHz sample rate); `oki_cen` was 40MHz/40 = 1MHz, and
+   jt6295's `cen` is the chip clock, so every sample played four times
+   too slow and two octaves too low. Now 40MHz/10.
+2. **Mix balance.** MAME routes the FM at 1.20 and each OKI at 0.10;
+   with the OKI stream being a 16-bit full-scale signal (jt6295's 14-bit
+   `sound` x4) that is an OKI-to-FM ratio of 1/3 of the 14-bit value.
+   The mix had each OKI at x4 — full 16-bit scale next to the FM, ~12x
+   louder than MAME. Now 3/8.
+
+The YM2203 (12MHz/8 = 1.5MHz) and Z80 (4MHz) enables were already right.
+`rtl/macross/macross_core.sv` (sim-only) clocks its OKI at 1MHz the same
+way and has not been checked against its own MAME config.
+
 ## Status
 
 `HW_ROMS=1` implemented for both games (`rtl/tdragon2/tdragon2_core.sv`

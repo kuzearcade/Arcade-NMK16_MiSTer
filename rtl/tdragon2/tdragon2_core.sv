@@ -519,9 +519,18 @@ module tdragon2_core #(
 		end
 	end
 
-	reg [5:0] oki_cen_cnt = 6'd0;
-	wire      oki_cen = (oki_cen_cnt == 6'd39);
-	always @(posedge clk_sys) oki_cen_cnt <= oki_cen ? 6'd0 : oki_cen_cnt + 6'd1;
+	// OKIM6295 clock enable: 4MHz = 40MHz/10. MAME clocks both OKIs at
+	// XTAL(16MHz)/4 with pin 7 LOW (nmk16.cpp's macross2/tdragon2 config:
+	// `OKIM6295(config, m_oki[n], XTAL(16'000'000) / 4, PIN7_LOW)`), i.e. a
+	// 4MHz/165 = 24.24kHz sample rate, and jt6295's `cen` IS the chip
+	// clock (its own header: "48 kHz sample output for a 1.000 MHz cen").
+	// This used to be 1MHz (40MHz/40): every sample played four times too
+	// slow and two octaves too low — the "muddled" drums, voices and
+	// effects heard on real hardware; measured as the hardware spectrum
+	// sitting ~4-6 dB below MAME's at 2-4kHz and above it below 250Hz.
+	reg [3:0] oki_cen_cnt = 4'd0;
+	wire      oki_cen = (oki_cen_cnt == 4'd9);
+	always @(posedge clk_sys) oki_cen_cnt <= oki_cen ? 4'd0 : oki_cen_cnt + 4'd1;
 
 	// ------------------------------------------------------------------
 	// fx68k
@@ -1743,14 +1752,23 @@ module tdragon2_core #(
 	// ------------------------------------------------------------------
 	// Audio mix — mono (no separate panning info anywhere in this
 	// driver): jt03's own already-mixed FM+PSG `snd` (16-bit) plus both
-	// OKI chips' own 14-bit `sound`, sign-extended and modestly
-	// upscaled to keep the OKI channels audible against the wider FM
-	// range, summed in a wider accumulator then saturated to 16 bits
-	// rather than allowed to silently wrap on overflow.
+	// OKI chips' own 14-bit `sound`, summed in a wider accumulator then
+	// saturated to 16 bits rather than allowed to silently wrap.
+	//
+	// Balance follows MAME's routing for these boards: FM at 1.20, each
+	// OKI at 0.10 (nmk16.cpp macross2 config). MAME's OKI stream is a
+	// 16-bit full-scale signal, i.e. jt6295's 14-bit `sound` x4, so the
+	// OKI-to-FM ratio is (4 x 0.10) / 1.20 = 1/3 of the 14-bit value;
+	// 3/8 below is the nearest cheap shift-add. The previous mix put each
+	// OKI at x4 — full 16-bit scale next to the FM, ~12x louder than
+	// MAME — which, together with the wrong OKI clock above, is what
+	// swamped the music.
 	// ------------------------------------------------------------------
-	wire signed [17:0] audio_sum = {{2{ym_snd[15]}}, ym_snd} +
-	                                {{2{oki0_snd[13]}}, oki0_snd, 2'b00} +
-	                                {{2{oki1_snd[13]}}, oki1_snd, 2'b00};
+	wire signed [17:0] oki0_ext = {{4{oki0_snd[13]}}, oki0_snd};
+	wire signed [17:0] oki1_ext = {{4{oki1_snd[13]}}, oki1_snd};
+	wire signed [17:0] oki0_g   = ((oki0_ext <<< 1) + oki0_ext) >>> 3; // x 3/8
+	wire signed [17:0] oki1_g   = ((oki1_ext <<< 1) + oki1_ext) >>> 3;
+	wire signed [17:0] audio_sum = {{2{ym_snd[15]}}, ym_snd} + oki0_g + oki1_g;
 	wire signed [15:0] audio_mix =
 		(audio_sum > 18'sd32767)  ? 16'sd32767  :
 		(audio_sum < -18'sd32768) ? -16'sd32768 :
