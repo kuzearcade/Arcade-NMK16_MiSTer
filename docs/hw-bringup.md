@@ -587,6 +587,115 @@ The YM2203 (12MHz/8 = 1.5MHz) and Z80 (4MHz) enables were already right.
 `rtl/macross/macross_core.sv` (sim-only) clocks its OKI at 1MHz the same
 way and has not been checked against its own MAME config.
 
+## Sound effects corrupted on hardware: the OKI sample fetch
+
+Reported after the fixes above: music fine, sound effects noisy/garbled
+in both games. Hardware-only again, and again a consumer that the
+reference sim's ideal memory hides.
+
+`rtl/third_party/jt6295/hdl/jt6295_rom.v` shares one ROM port between
+the four ADPCM channels and the phrase-table (ctrl) reads. Each channel
+slot (cen_sr4, ~412 clk_sys) it puts the sample address on `rom_addr`
+for two cen_sr32 periods (~104 clk_sys) and keeps whatever `rom_data`
+shows on the last clock of the second one; the rest of the slot
+`rom_addr` carries the ctrl address. Only the ctrl read waits for
+`rom_ok`; the sample read assumes an asynchronous ROM. Behind
+`rom_cache1_byte` (a single 4-byte line) on the arbitrated SDRAM port 1
+the two addresses evicted each other every slot, so every sample byte
+was a full SDRAM round trip competing with the Z80 and the other OKI,
+and any trip that missed the window handed the decoder the previous
+line's byte. ADPCM is differential with adaptive step size, so one bad
+nibble smears into a burst of noise until the phrase ends.
+
+Measured, not inferred: a Verilator-only audit in `tdragon2_core.sv`
+(`g_oki_hw`, hierarchical references into `oki0_chip.u_rom`) counts
+sample latches where the cache was not ready. Before the fix, over 211
+frames of the `tdragon2_hw` testbench at the 100MHz-equivalent SDRAM
+ratio: 218,676 of 582,312 sample bytes stale (37.6%), the same on both
+chips. The audit lines are printed by `tb_tdragon2_hw` ("OKI ADPCM
+fetch audit", "OKI cen stall audit").
+
+Fix, `rtl/oki_rom_cache.sv`, replacing `rom_cache1_byte` on both OKIs
+(HW path only; the sim path keeps its registered arrays):
+
+1. 16 fully-associative 4-byte lines with NRU replacement, so the four
+   channels' current lines and the ctrl line all stay resident, plus a
+   sequential prefetch of the next line once a channel has consumed
+   byte 2 of its current one (ADPCM phrases are read strictly
+   sequentially). Unit test `sim/rtl/oki_rom_cache_test` drives the
+   jt6295 slot pattern against the real `sdram.sv` + model: 99.95% of
+   sample bytes resident on first presentation, 0.10% of time stalled.
+2. `stall` = byte not resident, ANDed out of the chip's `cen`. Every
+   internal timing pulse of jt6295 derives from `cen`
+   (`jt6295_timing.v`), so a miss now freezes the chip for the few
+   clocks the fetch takes instead of feeding it a wrong byte; the write
+   strobe is sampled on `clk` (`jt6295_ctrl.v` `last_wrn`), so Z80
+   writes during a stall are not lost.
+
+Both testbenches also gained `TB_DUMP_AUDIO=<path>` (raw signed 16-bit
+mono at 48 kHz from `audio_l`) so sim audio can be compared with MAME's
+`-wavwrite` output; until now the sims had no audio output at all,
+which is how a 37% sample corruption rate went unnoticed.
+
+### The second bug the first one exposed: the Z80 read mux
+
+The first hardware build with the new cache played clean sound effects
+but went completely silent, FM included, from the attract's second
+music change until the next one — deterministically, at the same
+seconds of the recording every run, while MAME plays through. The
+`tdragon2_hw` sim never showed it. Found with a diagnostic overlay
+(`DBG_SND_PAINT` parameter on `tdragon2_core`, off by default): the
+core paints live status bits into the top-left corner of the picture —
+cache-stall flags, Z80 opcode-fetch/wait-state flags, both OKIs' busy
+nibbles, the Z80 PC latched at each M1, the sound latch — and the
+MiSTer's own `screenshot` command reads them back exactly. During the
+silence the Z80 was executing, unstalled, at PC $0018-$001B:
+
+    0018: in   a,($00)   ; YM2203 status
+    001a: rlca           ; bit 7 (BUSY) -> carry
+    001b: jr   c,$0018
+
+The YM2203 busy-wait. It never saw BUSY clear because it was never
+reading the YM2203: the Z80 read mux tested the address-only memory
+decodes (`sel_z80_rom` = `z80_a < $8000`, bank, RAM) before the I/O
+decodes, and on an `in a,(n)` the Z80 drives register A onto A15..A8 —
+so with A below $E0 the "status" was a program-ROM, bank or RAM byte at
+`{A, n}`. The loop then chased ROM contents (`rlca` of the byte it just
+read becomes the next address's high byte), and whether that chain ever
+reached a byte with bit 7 clear depended on which line the Z80's ROM
+cache happened to hold at that instant. The old OKI cache's SDRAM
+traffic left the cache in a state where the chain terminated; the new
+one's did not. Fixed by qualifying every memory select in the read mux
+with `z80_mem_re` (the write decodes already were). This bug was
+present in every build of both games; MAME reads the real status.
+`rtl/gunnailb/gunnailb_core.sv` (sim-only) has the same unqualified mux
+and is not yet fixed.
+
+### The third bug: OKI2 was reading the BG tiles
+
+With the cache and the mux fixed, the `tdragon2_hw` sim still sounded
+wrong against the reference sim, so a golden-byte audit was added
+(`g_oki_hw`, Verilator only: every sample byte the chip latches is
+compared with the ROM image loaded from `OKI1_ROM_FILE`/`OKI2_ROM_FILE`,
+which the HW top now passes for this purpose alone). OKI0: 0 wrong of
+727,273. OKI1: 608,053 wrong — at address 0, with the cache reporting a
+hit. The cache's fill print showed why: it fetched SDRAM word 0x060000,
+not 0x460000. `BASE_WORD_OKI2` was written `23'h8C0000 >> 1`, and
+0x8C0000 needs 24 bits; the 23-bit literal silently dropped bit 23, so
+the constant was 0x0C0000 >> 1 — the BG tile region. The second OKI
+had been decoding tile graphics as ADPCM in every build, on hardware
+and in the HW sim alike (the reference sim loads the hex directly and
+was right, which is why the HW sim's audio was louder and less like
+MAME than the reference's). Every 2-chip NMK112 game puts the second
+sample ROM above 8MB in this layout, so this affected both games. The
+base constants are now 24-bit byte offsets with the word offsets
+derived from them.
+
+Note on the MiSTer screenshot rows for the overlay: the native
+384x224 screenshot proved to start some lines into the core's frame
+and repeat lines (the box now runs the 640x480 output mode), so decode
+overlay rows by their marker colour, never by absolute y.
+
 ## Lines through moving sprites, and flicker
 
 The draw FSM swapped the displayed sprite plane (`disp_buf`) the moment

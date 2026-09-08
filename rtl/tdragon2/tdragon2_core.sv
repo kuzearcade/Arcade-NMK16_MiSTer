@@ -130,7 +130,12 @@ module tdragon2_core #(
 	// loaded via ioctl_download rather than $readmemh.
 	parameter HW_ROMS        = 0,
 	// DIAGNOSTIC passthrough to video_macross2.sv — see its own comment.
-	parameter DBG_MISS_PAINT = 0
+	parameter DBG_MISS_PAINT = 0,
+	// DIAGNOSTIC: paint four 8x8 live status blocks in the top-left corner
+	// (visible in the MiSTer's native screenshots): OKI0 cache stall >1ms,
+	// OKI1 cache stall >1ms, Z80 no opcode fetch for >10ms, Z80 held in
+	// its ROM wait-state for >10ms. Green = condition false.
+	parameter DBG_SND_PAINT  = 0
 ) (
 	input clk_sys,        // 40 MHz (68000 bus clk_sys/4=10MHz; pixel/raster clk_sys/5=8MHz)
 	input reset,            // async, active high
@@ -241,6 +246,14 @@ module tdragon2_core #(
 	output        dbg_oki1_we,
 	output  [7:0] dbg_oki0_chip_dout,
 	output  [7:0] dbg_oki1_chip_dout,
+	// Simulation-only (Verilator) OKI sample-fetch audit — see g_oki_hw.
+	output [31:0] dbg_oki0_adpcm_total,
+	output [31:0] dbg_oki0_adpcm_unserved,
+	output [31:0] dbg_oki1_adpcm_total,
+	output [31:0] dbg_oki1_adpcm_unserved,
+	output [31:0] dbg_oki_cen_total,     // oki_cen pulses
+	output [31:0] dbg_oki0_stall_cen,    // of which withheld from chip 0 by its cache stall
+	output [31:0] dbg_oki1_stall_cen,
 
 	// pixel readback for the testbench (mirrors MAME's screen:pixel(x,y))
 	input  [8:0]  rd_x,
@@ -1535,12 +1548,22 @@ module tdragon2_core #(
 	// Absolute byte offsets within the shared 32MB SDRAM address space
 	// this game's ioctl-download stream is laid out at — see
 	// docs/hw-bringup.md's table. Word offset = byte offset / 2.
-	localparam [22:0] BASE_WORD_AUDIOCPU = 23'h080000 >> 1;
-	localparam [22:0] BASE_WORD_FGTILE   = 23'h0A0000 >> 1;
-	localparam [22:0] BASE_WORD_BGTILE   = 23'h0C0000 >> 1;
-	localparam [22:0] BASE_WORD_SPRITES  = 23'h2C0000 >> 1;
-	localparam [22:0] BASE_WORD_OKI1     = 23'h6C0000 >> 1;
-	localparam [22:0] BASE_WORD_OKI2     = 23'h8C0000 >> 1;
+	// Byte offsets are 24-bit values: a 23-bit literal silently drops
+	// bit 23, which put OKI2 (0x8C0000) at 0x0C0000 — the BG tile region —
+	// so that chip decoded tile graphics as ADPCM in every build until
+	// 2026-09-08 (docs/hw-bringup.md, "Sound effects corrupted").
+	localparam [23:0] BASE_BYTE_AUDIOCPU = 24'h080000;
+	localparam [23:0] BASE_BYTE_FGTILE   = 24'h0A0000;
+	localparam [23:0] BASE_BYTE_BGTILE   = 24'h0C0000;
+	localparam [23:0] BASE_BYTE_SPRITES  = 24'h2C0000;
+	localparam [23:0] BASE_BYTE_OKI1     = 24'h6C0000;
+	localparam [23:0] BASE_BYTE_OKI2     = 24'h8C0000;
+	localparam [22:0] BASE_WORD_AUDIOCPU = BASE_BYTE_AUDIOCPU[23:1];
+	localparam [22:0] BASE_WORD_FGTILE   = BASE_BYTE_FGTILE[23:1];
+	localparam [22:0] BASE_WORD_BGTILE   = BASE_BYTE_BGTILE[23:1];
+	localparam [22:0] BASE_WORD_SPRITES  = BASE_BYTE_SPRITES[23:1];
+	localparam [22:0] BASE_WORD_OKI1     = BASE_BYTE_OKI1[23:1];
+	localparam [22:0] BASE_WORD_OKI2     = BASE_BYTE_OKI2[23:1];   // 0x460000
 
 	wire [7:0] audiocpu_dout;
 	wire       audiocpu_ready;
@@ -1686,6 +1709,7 @@ module tdragon2_core #(
 	// long as its own ctrl_addr stays stable).
 	wire [7:0] oki0_rom_data, oki1_rom_data;
 	wire       oki0_rom_ok, oki1_rom_ok;
+	wire       oki0_stall, oki1_stall;   // HW path: sample byte not resident yet — hold the chip's cen
 	generate
 	if (!HW_ROMS) begin : g_oki_sim
 		reg [7:0] oki0_rom [0:2097151]; // ww930916.4 / bp932an.a06, 0x200000
@@ -1699,18 +1723,111 @@ module tdragon2_core #(
 		assign oki1_rom_data = oki1_rom_data_r;
 		assign oki0_rom_ok = 1'b1;
 		assign oki1_rom_ok = 1'b1;
+		assign oki0_stall = 1'b0;
+		assign oki1_stall = 1'b0;
+		assign dbg_oki0_adpcm_total = 32'd0; assign dbg_oki0_adpcm_unserved = 32'd0;
+		assign dbg_oki1_adpcm_total = 32'd0; assign dbg_oki1_adpcm_unserved = 32'd0;
+		assign dbg_oki_cen_total = 32'd0; assign dbg_oki0_stall_cen = 32'd0; assign dbg_oki1_stall_cen = 32'd0;
 	end else begin : g_oki_hw
 		// Channels 1 and 2 of SDRAM port 1's arbiter (g_audiocpu_hw above).
-		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_OKI1)) oki0_cache_inst (
+		// oki_rom_cache, not rom_cache1_byte: jt6295's ADPCM fetch ignores
+		// rom_ok, so the sample byte has to be resident when the chip
+		// latches it (multi-line + sequential prefetch), and when it is
+		// not, `stall` freezes the chip's cen until it is — see
+		// rtl/oki_rom_cache.sv's header and docs/hw-bringup.md.
+		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI1)) oki0_cache_inst (
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({2'd0, oki0_rom_addr}), .data(oki0_rom_data), .ready(oki0_rom_ok),
+			.byte_addr(oki0_rom_addr), .data(oki0_rom_data), .ready(oki0_rom_ok), .stall(oki0_stall),
 			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1]), .sd_dout_pair(p1_dout_pair[1])
 		);
-		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_OKI2)) oki1_cache_inst (
+		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI2)) oki1_cache_inst (
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({2'd0, oki1_rom_addr}), .data(oki1_rom_data), .ready(oki1_rom_ok),
+			.byte_addr(oki1_rom_addr), .data(oki1_rom_data), .ready(oki1_rom_ok), .stall(oki1_stall),
 			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2]), .sd_dout_pair(p1_dout_pair[2])
 		);
+`ifdef VERILATOR
+		// Audit of jt6295's ADPCM sample fetch, which (jt6295_rom.v) never
+		// consults rom_ok: it presents adpcm_addr for two cen_sr32 slots
+		// and keeps the value of rom_data seen on the last clock of the
+		// second slot (st == 8'h02, cen32 about to advance it). Count how
+		// often the cache had NOT yet delivered that byte at that instant —
+		// each such event feeds the decoder a stale byte from the previous
+		// line. Sim-only: hierarchical references into the vendored chip.
+		reg [31:0] oki0_adpcm_total_r = 32'd0, oki0_adpcm_unserved_r = 32'd0;
+		reg [31:0] oki1_adpcm_total_r = 32'd0, oki1_adpcm_unserved_r = 32'd0;
+		reg [31:0] oki_cen_total_r = 32'd0, oki0_stall_cen_r = 32'd0, oki1_stall_cen_r = 32'd0;
+		// Extra diagnostics printed via $display at the end of the run
+		// (see tb): fetch/prefetch/miss-event counts and longest stall.
+		reg [31:0] oki0_fetches = 32'd0, oki0_prefetches = 32'd0, oki0_miss_events = 32'd0, oki0_stall_len = 32'd0, oki0_stall_max = 32'd0;
+		reg        oki0_pending_d = 1'b0, oki0_stall_d = 1'b0;
+		reg [31:0] oki0_addr_changes = 32'd0;
+		reg [21:0] oki0_addr_d = 22'd0;
+		always @(posedge clk_sys) begin
+			oki0_pending_d <= oki0_cache_inst.pending;
+			oki0_stall_d   <= oki0_stall;
+			oki0_addr_d    <= oki0_rom_addr;
+			if (oki0_rom_addr != oki0_addr_d) oki0_addr_changes <= oki0_addr_changes + 32'd1;
+			if (oki0_cache_inst.pending && !oki0_pending_d) begin
+				oki0_fetches <= oki0_fetches + 32'd1;
+				if (oki0_cache_inst.req_is_prefetch) oki0_prefetches <= oki0_prefetches + 32'd1;
+			end
+			if (oki0_stall && !oki0_stall_d) oki0_miss_events <= oki0_miss_events + 32'd1;
+			if (oki0_stall) begin
+				oki0_stall_len <= oki0_stall_len + 32'd1;
+				if (oki0_stall_len + 32'd1 > oki0_stall_max) oki0_stall_max <= oki0_stall_len + 32'd1;
+			end else oki0_stall_len <= 32'd0;
+		end
+		final $display("OKI0 cache diag: addr changes %0d, fetches %0d (prefetch %0d), miss events %0d, longest stall %0d clk",
+			oki0_addr_changes, oki0_fetches, oki0_prefetches, oki0_miss_events, oki0_stall_max);
+		// Golden-byte audit: when OKI1_ROM_FILE/OKI2_ROM_FILE are given to
+		// an HW_ROMS=1 build (the tdragon2_hw top does), every sample byte
+		// the chip latches is compared with the plain ROM image.
+		reg [7:0] golden0 [0:2097151];
+		reg [7:0] golden1 [0:2097151];
+		initial if (OKI1_ROM_FILE != "") $readmemh(OKI1_ROM_FILE, golden0);
+		initial if (OKI2_ROM_FILE != "") $readmemh(OKI2_ROM_FILE, golden1);
+		reg [31:0] oki0_bytes_wrong = 32'd0, oki1_bytes_wrong = 32'd0, oki0_bytes_checked = 32'd0;
+		always @(posedge clk_sys) begin
+			if (OKI1_ROM_FILE != "" && oki0_chip.u_rom.st == 8'h02 && oki0_chip.u_rom.cen32) begin
+				oki0_bytes_checked <= oki0_bytes_checked + 32'd1;
+				if (oki0_rom_data != golden0[oki0_rom_addr[20:0]]) oki0_bytes_wrong <= oki0_bytes_wrong + 32'd1;
+			end
+			if (OKI2_ROM_FILE != "" && oki1_chip.u_rom.st == 8'h02 && oki1_chip.u_rom.cen32) begin
+				if (oki1_rom_data != golden1[oki1_rom_addr[20:0]]) begin
+					oki1_bytes_wrong <= oki1_bytes_wrong + 32'd1;
+					if (oki1_bytes_wrong < 32'd6 || oki1_bytes_wrong[16:0] == 17'd0)
+						$display("[%0t] OKI1 wrong byte: addr=%06x raw=%05x got=%02x golden=%02x ready=%0d (count %0d)", $time,
+							oki1_rom_addr, oki1_rom_addr_raw, oki1_rom_data, golden1[oki1_rom_addr[20:0]], oki1_rom_ok, oki1_bytes_wrong);
+				end
+			end
+			if (OKI1_ROM_FILE != "" && oki0_chip.u_rom.st == 8'h02 && oki0_chip.u_rom.cen32 && oki0_bytes_checked[18:0] == 19'd0)
+				$display("[%0t] OKI0 sample: addr=%06x got=%02x golden=%02x", $time, oki0_rom_addr, oki0_rom_data, golden0[oki0_rom_addr[20:0]]);
+		end
+		final $display("OKI golden-byte audit: %0d sample latches checked, wrong bytes oki0 %0d, oki1 %0d",
+			oki0_bytes_checked, oki0_bytes_wrong, oki1_bytes_wrong);
+		always @(posedge clk_sys) begin
+			if (oki_cen) begin
+				oki_cen_total_r <= oki_cen_total_r + 32'd1;
+				if (oki0_stall) oki0_stall_cen_r <= oki0_stall_cen_r + 32'd1;
+				if (oki1_stall) oki1_stall_cen_r <= oki1_stall_cen_r + 32'd1;
+			end
+			if (oki0_chip.u_rom.st == 8'h02 && oki0_chip.u_rom.cen32) begin
+				oki0_adpcm_total_r <= oki0_adpcm_total_r + 32'd1;
+				if (!oki0_rom_ok) oki0_adpcm_unserved_r <= oki0_adpcm_unserved_r + 32'd1;
+			end
+			if (oki1_chip.u_rom.st == 8'h02 && oki1_chip.u_rom.cen32) begin
+				oki1_adpcm_total_r <= oki1_adpcm_total_r + 32'd1;
+				if (!oki1_rom_ok) oki1_adpcm_unserved_r <= oki1_adpcm_unserved_r + 32'd1;
+			end
+		end
+		assign dbg_oki0_adpcm_total = oki0_adpcm_total_r; assign dbg_oki0_adpcm_unserved = oki0_adpcm_unserved_r;
+		assign dbg_oki1_adpcm_total = oki1_adpcm_total_r; assign dbg_oki1_adpcm_unserved = oki1_adpcm_unserved_r;
+		assign dbg_oki_cen_total = oki_cen_total_r; assign dbg_oki0_stall_cen = oki0_stall_cen_r; assign dbg_oki1_stall_cen = oki1_stall_cen_r;
+`else
+		assign dbg_oki0_adpcm_total = 32'd0; assign dbg_oki0_adpcm_unserved = 32'd0;
+		assign dbg_oki1_adpcm_total = 32'd0; assign dbg_oki1_adpcm_unserved = 32'd0;
+		assign dbg_oki_cen_total = 32'd0; assign dbg_oki0_stall_cen = 32'd0; assign dbg_oki1_stall_cen = 32'd0;
+`endif
 	end
 	endgenerate
 
@@ -1743,13 +1860,13 @@ module tdragon2_core #(
 	wire [7:0] oki0_chip_dout, oki1_chip_dout;
 	wire signed [13:0] oki0_snd, oki1_snd;
 	jt6295 oki0_chip (
-		.rst(reset), .clk(clk_sys), .cen(oki_cen), .ss(1'b0),
+		.rst(reset), .clk(clk_sys), .cen(oki_cen & ~oki0_stall), .ss(1'b0),
 		.wrn(oki0_wr_n), .din(oki0_din_latch), .dout(oki0_chip_dout),
 		.rom_addr(oki0_rom_addr_raw), .rom_data(oki0_rom_data), .rom_ok(oki0_rom_ok),
 		.sound(oki0_snd), .sample()
 	);
 	jt6295 oki1_chip (
-		.rst(reset), .clk(clk_sys), .cen(oki_cen), .ss(1'b0),
+		.rst(reset), .clk(clk_sys), .cen(oki_cen & ~oki1_stall), .ss(1'b0),
 		.wrn(oki1_wr_n), .din(oki1_din_latch), .dout(oki1_chip_dout),
 		.rom_addr(oki1_rom_addr_raw), .rom_data(oki1_rom_data), .rom_ok(oki1_rom_ok),
 		.sound(oki1_snd), .sample()
@@ -1785,11 +1902,19 @@ module tdragon2_core #(
 	// ------------------------------------------------------------------
 	// Z80 read-data mux
 	// ------------------------------------------------------------------
+	// Memory selects are address-only decodes, so they MUST be qualified
+	// with the MREQ cycle here: on an I/O read (`in a,(n)`) the Z80 puts
+	// register A on A15..A8, and an unqualified `sel_z80_rom` would hand
+	// the CPU a program-ROM/bank/RAM byte instead of the chip status.
+	// The sound driver's YM2203 busy-wait (ROM $0018: in a,($00); rlca;
+	// jr c) did exactly that and could spin forever on ROM contents —
+	// heard on hardware as the music dying at a music change until the
+	// next Z80 reset. See docs/hw-bringup.md.
 	reg [7:0] z80_rdata;
 	always @(*) begin
-		if (sel_z80_rom)        z80_rdata = audiocpu_dout;
-		else if (sel_z80_bank)  z80_rdata = audiocpu_dout;
-		else if (sel_z80_ram)   z80_rdata = z80_ram[z80_a[12:0]];
+		if (z80_mem_re & sel_z80_rom)        z80_rdata = audiocpu_dout;
+		else if (z80_mem_re & sel_z80_bank)  z80_rdata = audiocpu_dout;
+		else if (z80_mem_re & sel_z80_ram)   z80_rdata = z80_ram[z80_a[12:0]];
 		else if (z80_mem_re & sel_z80_soundlatch_r) z80_rdata = soundlatch_data;
 		else if (z80_io_re & sel_io_ym)   z80_rdata = ym_chip_dout;
 		else if (z80_io_re & sel_io_oki0) z80_rdata = oki0_chip_dout;
@@ -1852,6 +1977,7 @@ module tdragon2_core #(
 	// Video pipeline — rtl/macross2/video_macross2.sv, reused UNMODIFIED
 	// (see this file's own header).
 	// ------------------------------------------------------------------
+	wire [23:0] rd_rgb_video;   // video's pixel; rd_rgb below may overlay DBG_SND_PAINT blocks
 	video_macross2 #(
 		.FGTILE_FILE(FGTILE_FILE),
 		.BGTILE_FILE(BGTILE_FILE),
@@ -1872,11 +1998,55 @@ module tdragon2_core #(
 		.bg_xscroll(bg_xscroll), .bg_yscroll(bg_yscroll),
 		.bg_bank(bgbank_reg),
 		.tilerambank(tilerambank_reg),
-		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
+		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb_video),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),
 		.sd_dout(sd2_dout), .sd_dout_pair(sd2_dout_pair), .sd_req(sd2_req), .sd_ack(sd2_ack),
 		.sd_b_addr(sd3_addr), .sd_b_req(sd3_req), .sd_b_dout(sd3_dout), .sd_b_dout_pair(sd3_dout_pair), .sd_b_ack(sd3_ack)
 	);
+
+	generate
+	if (DBG_SND_PAINT) begin : g_snd_paint
+		reg [16:0] stall0_cnt = 17'd0, stall1_cnt = 17'd0;
+		reg [19:0] m1_idle_cnt = 20'd0, wait_cnt = 20'd0;
+		reg        m1_n_d = 1'b1;
+		always @(posedge clk_sys) begin
+			stall0_cnt <= oki0_stall ? (stall0_cnt == 17'h1FFFF ? stall0_cnt : stall0_cnt + 17'd1) : 17'd0;
+			stall1_cnt <= oki1_stall ? (stall1_cnt == 17'h1FFFF ? stall1_cnt : stall1_cnt + 17'd1) : 17'd0;
+			m1_n_d <= z80_m1_n;
+			m1_idle_cnt <= (m1_n_d && !z80_m1_n) ? 20'd0 : (m1_idle_cnt == 20'hFFFFF ? m1_idle_cnt : m1_idle_cnt + 20'd1);
+			wait_cnt <= z80_wait_n ? 20'd0 : (wait_cnt == 20'hFFFFF ? wait_cnt : wait_cnt + 20'd1);
+		end
+		wire f0 = stall0_cnt >= 17'd40000;     // 1 ms
+		wire f1 = stall1_cnt >= 17'd40000;
+		wire f2 = m1_idle_cnt >= 20'd400000;   // 10 ms without an opcode fetch
+		wire f3 = wait_cnt >= 20'd400000;      // 10 ms in the ROM wait-state
+		// Row 0 (y 0-7): the four flags. Row 1 (y 8-15): OKI0 busy[3:0]
+		// then OKI1 busy[3:0] (white = busy). Row 2 (y 16-23): Z80 PC
+		// bits 15..8, row 3 (y 24-31): PC bits 7..0 (white = 1), latched
+		// at each opcode fetch. Row 4 (y 32-39): sound latch bits 7..0.
+		reg [15:0] pc_latch = 16'd0;
+		always @(posedge clk_sys) if (m1_n_d && !z80_m1_n) pc_latch <= z80_a;
+		wire [7:0] busy_bits = {oki0_chip_dout[3:0], oki1_chip_dout[3:0]};
+		// Self-describing layout, 6 rows of 8 px: x 0-7 = row marker
+		// colour (red, green, blue, yellow, magenta, cyan), x 8-71 = 8 data
+		// bits MSB first, on = white, off = dark blue 000080.
+		//   row 0: {f0, f1, f2, f3, 1,0,1,0}   row 1: OKI0 busy[3:0], OKI1 busy[3:0]
+		//   row 2: Z80 PC[15:8]  row 3: PC[7:0]  row 4: sound latch  row 5: 8'h5A
+		wire [2:0] row = rd_y[5:3];
+		wire [3:0] col = rd_x[6:3];          // 0 = marker, 1..8 = bits
+		wire in_blk = (rd_y < 9'd48) && (rd_x < 9'd72);
+		wire [23:0] marker = (row == 3'd0) ? 24'hFF0000 : (row == 3'd1) ? 24'h00FF00 : (row == 3'd2) ? 24'h0000FF :
+		                     (row == 3'd3) ? 24'hFFFF00 : (row == 3'd4) ? 24'hFF00FF : 24'h00FFFF;
+		wire [7:0] row_bits = (row == 3'd0) ? {f0, f1, f2, f3, 4'b1010} : (row == 3'd1) ? busy_bits :
+		                      (row == 3'd2) ? pc_latch[15:8] : (row == 3'd3) ? pc_latch[7:0] :
+		                      (row == 3'd4) ? soundlatch_data : 8'h5A;
+		wire [2:0] bi = 3'd7 - (col[2:0] - 3'd1);   // col 1 -> bit 7 ... col 8 -> bit 0
+		wire bit_on = row_bits[bi];
+		assign rd_rgb = !in_blk ? rd_rgb_video : (col == 4'd0) ? marker : (bit_on ? 24'hFFFFFF : 24'h000080);
+	end else begin : g_no_snd_paint
+		assign rd_rgb = rd_rgb_video;
+	end
+	endgenerate
 
 	reg frame_done_r;
 	always @(posedge clk_sys) begin

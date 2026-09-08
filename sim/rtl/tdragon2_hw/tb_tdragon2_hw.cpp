@@ -151,8 +151,23 @@ int main(int argc, char **argv) {
 	// count + optional PPM) at that frame's own frame_done.
 	static uint32_t framebuf[SCREEN_H][SCREEN_W];
 
+	// TB_DUMP_AUDIO=<path>: raw signed 16-bit mono, 48kHz (audio_l
+	// resampled by decimation from the 40MHz clk_sys), for comparison
+	// with MAME's -wavwrite output.
+	FILE *audio_f = std::getenv("TB_DUMP_AUDIO") ? fopen(std::getenv("TB_DUMP_AUDIO"), "wb") : nullptr;
+	uint64_t audio_phase = 0;
+
 	for (; clk_sys_ticks < g_run_cycles; clk_sys_ticks++) {
 		tick();
+
+		if (audio_f) {
+			audio_phase += 48000;
+			if (audio_phase >= 40000000ULL) {
+				audio_phase -= 40000000ULL;
+				int16_t s = (int16_t)top.audio_l;
+				fwrite(&s, 2, 1, audio_f);
+			}
+		}
 
 		if (top.ce_pix_o && !top.hblank_o && !top.vblank_o) {
 			int x = (int)top.hcount_o - 28;
@@ -232,6 +247,14 @@ int main(int argc, char **argv) {
 	printf("tb_tdragon2_hw: Z80 executed %ld instructions, last fetch PC=$%04X\n", z80_instrs, z80_last_pc);
 	printf("tb_tdragon2_hw: 68000 executed %ld instructions, last fetch PC=$%06X\n", m68k_instrs, m68k_last_pc);
 	printf("tb_tdragon2_hw: Z80 wrote to YM2203 %ld times, OKI0 %ld times, OKI1 %ld times\n", ym_writes, oki0_writes, oki1_writes);
+	printf("tb_tdragon2_hw: OKI ADPCM fetch audit: oki0 %u of %u sample bytes unserved at latch, oki1 %u of %u\n",
+	       (unsigned)top.dbg_oki0_adpcm_unserved, (unsigned)top.dbg_oki0_adpcm_total,
+	       (unsigned)top.dbg_oki1_adpcm_unserved, (unsigned)top.dbg_oki1_adpcm_total);
+	printf("tb_tdragon2_hw: OKI cen stall audit: %u cen pulses, withheld by cache stall oki0 %u (%.4f%%), oki1 %u (%.4f%%)\n",
+	       (unsigned)top.dbg_oki_cen_total,
+	       (unsigned)top.dbg_oki0_stall_cen, top.dbg_oki_cen_total ? 100.0 * top.dbg_oki0_stall_cen / top.dbg_oki_cen_total : 0.0,
+	       (unsigned)top.dbg_oki1_stall_cen, top.dbg_oki_cen_total ? 100.0 * top.dbg_oki1_stall_cen / top.dbg_oki_cen_total : 0.0);
+	if (audio_f) fclose(audio_f);
 	printf("tb_tdragon2_hw: final dbg_z80_reset_n=%d dbg_z80_m1_n=%d dbg_z80_mreq_n=%d\n",
 	       top.dbg_z80_reset_n, top.dbg_z80_m1_n, top.dbg_z80_mreq_n);
 	printf("tb_tdragon2_hw: rom_csum=%04X count=%u done=%d (reference value for real-hardware comparison)\n",
@@ -275,6 +298,7 @@ int main(int argc, char **argv) {
 	printf("tb_tdragon2_hw: rendered %u video frame(s); last frame had %ld/%d nonzero pixels\n",
 	       frame_count, last_frame_nonzero_px, SCREEN_W * SCREEN_H);
 	if (m68k_trace) fclose(m68k_trace);
+	top.final();   // runs the RTL's `final` diagnostics ($display)
 
 	return 0;
 }
