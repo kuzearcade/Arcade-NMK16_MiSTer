@@ -64,6 +64,14 @@ module tdragon2_hw_top
 	output        dbg_oki1_we,
 	output [7:0]  dbg_oki0_chip_dout,
 	output [7:0]  dbg_oki1_chip_dout,
+	output [31:0] dbg_oki0_adpcm_total,
+	output [31:0] dbg_oki0_adpcm_unserved,
+	output [31:0] dbg_oki1_adpcm_total,
+	output [31:0] dbg_oki1_adpcm_unserved,
+	output [31:0] dbg_oki_cen_total,
+	output [31:0] dbg_oki0_stall_cen,
+	output [31:0] dbg_oki1_stall_cen,
+	output signed [15:0] audio_l,
 
 	output [23:0] rd_rgb,
 	output        ce_pix_o,
@@ -147,7 +155,10 @@ module tdragon2_hw_top
 	// or this testbench would silently run with an uninitialized (all
 	// zero) interrupt-timing table despite otherwise exercising the
 	// real HW_ROMS=1 path.
-	tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex")) core_inst (
+	// OKI*_ROM_FILE here feed only the Verilator golden-byte audit of the
+	// HW-path OKI cache (g_oki_hw), not the chips.
+	tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex"),
+	                .OKI1_ROM_FILE("../tdragon2/roms/tdragon2_oki1.hex"), .OKI2_ROM_FILE("../tdragon2/roms/tdragon2_oki2.hex")) core_inst (
 		.clk_sys(clk_sys), .reset(reset), .game_macross2(1'b0),
 		.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
 		.ioctl_index(16'd0), // this testbench streams only the <rom index="0"> data — see tdragon2_core.sv's ioctl_index port comment
@@ -162,12 +173,15 @@ module tdragon2_hw_top
 		.dbg_z80_iorq_n(dbg_z80_iorq_n), .dbg_z80_int_n(dbg_z80_int_n), .dbg_z80_reset_n(dbg_z80_reset_n), .dbg_z80_cen(dbg_z80_cen),
 		.dbg_ym_we(dbg_ym_we), .dbg_ym_cs(dbg_ym_cs), .dbg_ym_chip_dout(dbg_ym_chip_dout), .dbg_ym_irq_n(dbg_ym_irq_n),
 		.dbg_oki0_we(dbg_oki0_we), .dbg_oki1_we(dbg_oki1_we), .dbg_oki0_chip_dout(dbg_oki0_chip_dout), .dbg_oki1_chip_dout(dbg_oki1_chip_dout),
+		.dbg_oki0_adpcm_total(dbg_oki0_adpcm_total), .dbg_oki0_adpcm_unserved(dbg_oki0_adpcm_unserved),
+		.dbg_oki1_adpcm_total(dbg_oki1_adpcm_total), .dbg_oki1_adpcm_unserved(dbg_oki1_adpcm_unserved),
+		.dbg_oki_cen_total(dbg_oki_cen_total), .dbg_oki0_stall_cen(dbg_oki0_stall_cen), .dbg_oki1_stall_cen(dbg_oki1_stall_cen),
 		.rd_x(rd_x_screen), .rd_y(rd_y_screen), .rd_rgb(rd_rgb),
 		.dbg_pal_addr(10'd0), .dbg_pal_data(), .dbg_bgvram_addr(15'd0), .dbg_bgvram_data(),
 		.dbg_txvram_addr(11'd0), .dbg_txvram_data(),
 		.frame_done(frame_done),
 
-		.audio_l(), .audio_r(),
+		.audio_l(audio_l), .audio_r(),
 		.ce_pix_o(ce_pix_o), .hcount_o(hcount_o), .vcount_o(vcount_o), .hblank_o(hblank_o), .vblank_o(vblank_o),
 		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF),
 
