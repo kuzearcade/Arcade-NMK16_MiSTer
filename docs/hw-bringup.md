@@ -521,6 +521,49 @@ separate things did, the first two of which are core bugs:
    region measured in the 576x720 captures. That is a user preference,
    not core behaviour; `vscale_mode=0` fills the height.
 
+## Sprites missing or garbled in the attract demos
+
+Symptom (both games, hardware): during the attract demos only the
+static HUD/life icons appeared; the player, enemies, bullets and
+Macross II's mech — everything that changes from frame to frame — were
+missing or garbled, while the title screens were pixel-identical to
+MAME. Two things were wrong, found in this order:
+
+1. **The sprite-table snapshot was a state of the draw FSM**, reachable
+   only once a draw pass had finished. In the zero-latency sim a pass
+   always finishes well inside a frame, so the copy happened at the DMA
+   trigger as in MAME; on real hardware a sprite-heavy pass (every pixel
+   waits on an SDRAM fetch) can outlast the frame, and the copy then
+   landed at an arbitrary point in the 68000's own frame, mid-update of
+   the table. That is a real hardware-only hazard and is fixed — the
+   snapshot is now its own engine, copying at the trigger into whichever
+   buffer the draw pass is not reading (`snap_active`/`snap_ready`/
+   `snap_consume` in `video_macross2.sv`), and the plot/advance states
+   are folded into one cycle — but it was NOT the cause of the missing
+   sprites: the fixed build looked the same.
+2. **The sprite header fetch read every word one offset late.**
+   `S_SPR_HEAD_RD` fetches a slot's six words through `snap_rd_data`, a
+   REGISTERED read of the snapshot buffer (commit 23a0cac made it one to
+   kill a 1024:1 mux), but latched each word in the very cycle after
+   presenting its address — one cycle before the registered word could
+   arrive. So the visible flag came from the previous slot's colour
+   word, the size from the flag word, the code from the size word, the X
+   from the code word, and so on: sprites drawn (if at all) with wrong
+   size, tile, position and colour. It survived every comparison because
+   the frames compared to MAME (both title screens) contain no sprites
+   — the "life icons" that did render are text-layer tiles. Fixed with a
+   settle cycle per word (`head_rd_settle`); twelve cycles per slot
+   header instead of six, irrelevant against a 256-pixel tile. With it,
+   both demos render their sprites on hardware (tdragon2's player,
+   enemies and bullets; Macross II's fighter, mechs and power-ups), and
+   the sprite-free title frame is still pixel-identical to MAME.
+
+Lesson for future sprite work here: a title screen is not a sprite
+test. Compare a demo frame (MAME `-str 20` for tdragon2, `-str 45` for
+Macross II) against a reference-sim run long enough to reach it
+(`./obj_dir/Vtdragon2_core 1000000000` — both testbenches take the cycle
+budget as argv[1]).
+
 ## Status
 
 `HW_ROMS=1` implemented for both games (`rtl/tdragon2/tdragon2_core.sv`
@@ -528,7 +571,8 @@ serving both at runtime, `rtl/macross2/video_macross2.sv`, `rtl/sdram_req.sv`,
 `Macross2.sv`/`.qsf`/`.sdc`, `releases/tdragon2.mra`/`macross2.mra`),
 Verilator-verified under real SDRAM wait-state latency, and — with the
 `ioctl_index` fix above — booting on a real DE10-Nano with the ROM
-checksum matching simulation. With `rtl/sdram.sv` on the 96MHz
+checksum matching simulation, with sprites rendering in the attract
+demos (see the sprite section above). With `rtl/sdram.sv` on the 96MHz
 `clk_ram`, the prefetching tile cache, BG and TX on separate SDRAM
 ports and the arbiter duplicate-grant fix (see the SDRAM sections
 above) both games render without the horizontal smearing the

@@ -420,9 +420,26 @@ module video_macross2 #(
 	// (Verilator) has never had any issue with the original 2D form.
 	reg [15:0] snap_buf_0 [0:2047];
 	reg [15:0] snap_buf_1 [0:2047];
-	reg        snap_cur; // buffer index the NEXT trigger will overwrite
-	reg        snap_pending;
+	// The snapshot is taken by its OWN engine (see the always block after
+	// the draw FSM's declarations below), at the DMA trigger, regardless
+	// of what the draw FSM is doing — into whichever buffer the current
+	// draw pass is not reading. It used to be a state of the draw FSM,
+	// only reachable once a pass had finished: harmless in the
+	// zero-latency sim, where a pass always finishes well within a frame,
+	// but on real hardware a sprite-heavy pass (every pixel waits on an
+	// SDRAM fetch) can outlast the frame, and the copy then happened at an
+	// arbitrary point in the 68000's own frame — mid-update of the sprite
+	// table — instead of at the DMA scanline. Static screens survive
+	// that (the table never changes); the attract demos did not: sprites
+	// missing or garbled. MAME copies the table atomically at the trigger
+	// (`sprite_dma()` from the scanline timer), as real hardware does.
+	reg        snap_active;   // a copy is in progress
+	reg        snap_ready;    // a completed copy awaits a draw pass
+	reg        snap_done_idx; // buffer that completed copy landed in
+	reg        snap_tgt;      // buffer the running copy writes
+	reg  [1:0] snap_phase;    // 0 request, 1 wait, 2 latch — same handshake timing as before
 	reg [11:0] snap_idx;
+	reg        snap_consume;  // one-cycle pulse from the draw FSM: it has taken snap_done_idx
 
 	// ------------------------------------------------------------------
 	// Sprite plane: double-buffered display/draw planes — 5-bit colour
@@ -525,16 +542,16 @@ module video_macross2 #(
 		S_RESET_CLR0 = 0,
 		S_RESET_CLR1 = 1,
 		S_IDLE        = 2,
-		S_SNAP_REQ    = 3,
-		S_SNAP_LATCH  = 4,
+		S_SNAP_REQ    = 3,  // retired: the snapshot has its own engine (see snap_* above)
+		S_SNAP_LATCH  = 4,  // retired
 		S_CLEAR       = 5,
 		S_SPR_HEAD    = 6,
 		S_SPR_UNIT    = 7,
 		S_SPR_CHECK   = 8,
 		S_SPR_WAIT    = 13, // HW_ROMS=1 only: real block until sprites_ready (see rom_cache1_byte above); at HW_ROMS=0, sprites_ready is tied 1'b1, so this is a single pass-through cycle, unchanged from before this state existed
 		S_SPR_CHECK2  = 9,
-		S_SPR_PLOT    = 10,
-		S_SPR_NEXT    = 11,
+		S_SPR_PLOT    = 10, // retired: folded into S_SPR_CHECK2
+		S_SPR_NEXT    = 11, // retired: folded into S_SPR_CHECK2
 		S_DONE        = 12,
 		S_SNAP_WAIT   = 14, // HW_ROMS=1 only: real block until mainram_ready (mirrors S_SPR_WAIT — see mainram_ready's own port declaration above); at HW_ROMS=0, mainram_ready is tied 1'b1, so this is a single pass-through cycle
 		S_SPR_HEAD_RD     = 15, // read snap_buf's 6 needed words for this slot one at a time (see snap_rd_addr/snap_rd_data below) instead of all 6 combinationally in one cycle — that shape synthesized into a bare "1024:1" mux (Quartus's own multiplexer-restructuring report), ~21K LEs, before this fix
@@ -584,18 +601,64 @@ module video_macross2 #(
 	endfunction
 
 	reg [2:0]  head_rd_idx;
+	reg        head_rd_settle; // snap_rd_data is REGISTERED: one cycle between presenting an address and its word being readable
 	reg [15:0] head_w0, head_w1, head_w3, head_w4, head_w6, head_w7;
 
+	// ---- snapshot engine (see snap_* declarations above) ----
+	// A pass reads snap_buf[draw_snap_idx] from S_CLEAR to S_DONE; a copy
+	// therefore targets ~draw_snap_idx while a pass is active, and
+	// otherwise the buffer opposite the last completed copy (which a pass
+	// may be about to start on). A pass never starts while a copy is in
+	// flight, so a copy's target can never be the buffer being read.
+	wire pass_active = (state != S_IDLE);
 	always @(posedge clk_sys) begin
+		if (reset) begin
+			snap_active   <= 1'b0;
+			snap_ready    <= 1'b0;
+			snap_done_idx <= 1'b0;
+			snap_tgt      <= 1'b0;
+			snap_phase    <= 2'd0;
+			snap_idx      <= 12'd0;
+		end else begin
+			if (snap_consume) snap_ready <= 1'b0;
+			if (!snap_active) begin
+				if (sprite_dma_trigger) begin
+					snap_active <= 1'b1;
+					snap_idx    <= 12'd0;
+					snap_phase  <= 2'd0;
+					snap_tgt    <= pass_active ? ~draw_snap_idx : ~snap_done_idx;
+				end
+			end else begin
+				case (snap_phase)
+					2'd0: begin // request: mainram[0x8000 + 2*i] -> snap_buf[snap_tgt][i], i = 0..2047
+						mainram_addr <= 15'h4000 + snap_idx[10:0]; // 0x8000 bytes / 2 = 0x4000 word offset
+						snap_phase <= 2'd1;
+					end
+					2'd1: if (mainram_ready) snap_phase <= 2'd2; // HW_ROMS=1: real block; HW_ROMS=0: one pass-through cycle
+					default: begin // latch
+						if (snap_tgt) snap_buf_1[snap_idx] <= mainram_data;
+						else          snap_buf_0[snap_idx] <= mainram_data;
+						if (snap_idx == 12'd2047) begin
+							snap_active   <= 1'b0;
+							snap_ready    <= 1'b1;
+							snap_done_idx <= snap_tgt;
+						end else begin
+							snap_idx   <= snap_idx + 12'd1;
+							snap_phase <= 2'd0;
+						end
+					end
+				endcase
+			end
+		end
+	end
+
+	always @(posedge clk_sys) begin
+		snap_consume <= 1'b0;
 		if (reset) begin
 			state    <= S_RESET_CLR0;
 			clr_idx  <= 17'd0;
 			disp_buf <= 1'b0;
-			snap_cur <= 1'b0;
-			snap_pending <= 1'b0;
 		end else begin
-			if (sprite_dma_trigger) snap_pending <= 1'b1;
-
 			case (state)
 				S_RESET_CLR0: begin
 					sprite_plane[{1'b0, clr_idx}] <= 10'd0;
@@ -611,32 +674,14 @@ module video_macross2 #(
 				end
 
 				S_IDLE: begin
-					if (snap_pending) begin
-						snap_pending <= 1'b0;
-						snap_idx <= 12'd0;
-						state <= S_SNAP_REQ;
-					end
-				end
-
-				// snapshot mainram[0x8000+i] -> snap_buf[snap_cur][i], i=0..2047
-				S_SNAP_REQ: begin
-					mainram_addr <= 15'h4000 + snap_idx[10:0]; // 0x8000 bytes / 2 = 0x4000 word offset
-					state <= S_SNAP_WAIT;
-				end
-				S_SNAP_WAIT: begin
-					if (mainram_ready) state <= S_SNAP_LATCH;
-				end
-				S_SNAP_LATCH: begin
-					if (snap_cur) snap_buf_1[snap_idx] <= mainram_data;
-					else          snap_buf_0[snap_idx] <= mainram_data;
-					if (snap_idx == 12'd2047) begin
-						draw_buf <= ~disp_buf;
-						draw_snap_idx <= ~snap_cur;
-						clr_idx <= 17'd0;
-						state <= S_CLEAR;
-					end else begin
-						snap_idx <= snap_idx + 12'd1;
-						state <= S_SNAP_REQ;
+					// Start a pass on the latest completed snapshot, never while
+					// a copy is in flight (see the snapshot engine above).
+					if (snap_ready && !snap_active) begin
+						draw_buf      <= ~disp_buf;
+						draw_snap_idx <= snap_done_idx;
+						snap_consume  <= 1'b1;
+						clr_idx       <= 17'd0;
+						state         <= S_CLEAR;
 					end
 				end
 
@@ -656,24 +701,40 @@ module video_macross2 #(
 				// S_SPR_HEAD_DECIDE runs the original decision logic once
 				// they're all latched.
 				S_SPR_HEAD: begin
-					snap_rd_addr <= s_slot * 11'd8 + head_rd_offset(3'd0);
-					head_rd_idx  <= 3'd0;
+					snap_rd_addr   <= s_slot * 11'd8 + head_rd_offset(3'd0);
+					head_rd_idx    <= 3'd0;
+					head_rd_settle <= 1'b1;
 					state <= S_SPR_HEAD_RD;
 				end
+				// Two cycles per word: snap_rd_data is a registered read, so
+				// the cycle after an address is presented only lets the word
+				// land; the next cycle latches it and presents the next
+				// address. Latching in the same cycle as the address change
+				// (as this once did) delivered every word one offset late —
+				// the visible flag from the previous slot's colour word, the
+				// size from the flag word, the code from the size word —
+				// which is why moving sprites were missing or garbled on
+				// hardware and in simulation while the sprite-free title
+				// screens still matched MAME pixel for pixel.
 				S_SPR_HEAD_RD: begin
-					case (head_rd_idx)
-						3'd0: head_w0 <= snap_rd_data;
-						3'd1: head_w1 <= snap_rd_data;
-						3'd2: head_w3 <= snap_rd_data;
-						3'd3: head_w4 <= snap_rd_data;
-						3'd4: head_w6 <= snap_rd_data;
-						default: head_w7 <= snap_rd_data; // head_rd_idx == 5
-					endcase
-					if (head_rd_idx == 3'd5) begin
-						state <= S_SPR_HEAD_DECIDE;
+					if (head_rd_settle) begin
+						head_rd_settle <= 1'b0;
 					end else begin
-						snap_rd_addr <= s_slot * 11'd8 + head_rd_offset(head_rd_idx + 3'd1);
-						head_rd_idx  <= head_rd_idx + 3'd1;
+						case (head_rd_idx)
+							3'd0: head_w0 <= snap_rd_data;
+							3'd1: head_w1 <= snap_rd_data;
+							3'd2: head_w3 <= snap_rd_data;
+							3'd3: head_w4 <= snap_rd_data;
+							3'd4: head_w6 <= snap_rd_data;
+							default: head_w7 <= snap_rd_data; // head_rd_idx == 5
+						endcase
+						if (head_rd_idx == 3'd5) begin
+							state <= S_SPR_HEAD_DECIDE;
+						end else begin
+							snap_rd_addr   <= s_slot * 11'd8 + head_rd_offset(head_rd_idx + 3'd1);
+							head_rd_idx    <= head_rd_idx + 3'd1;
+							head_rd_settle <= 1'b1;
+						end
 					end
 				end
 				S_SPR_HEAD_DECIDE: begin
@@ -735,27 +796,23 @@ module video_macross2 #(
 				S_SPR_WAIT: begin
 					if (sprites_ready) state <= S_SPR_CHECK2;
 				end
+				// Plot (if opaque) and advance in ONE cycle — the former
+				// S_SPR_PLOT / S_SPR_NEXT states folded in: three cycles per
+				// pixel when the byte is cached instead of four or five,
+				// which is what bounds how many sprite tiles a pass can draw
+				// per frame on real hardware.
 				S_SPR_CHECK2: begin
 					s_pix_nib = tile_nibble(sprites_byte, s_px[0]);
-					if (s_pix_nib != 15) state <= S_SPR_PLOT;
-					else state <= S_SPR_NEXT;
-				end
-
-				S_SPR_PLOT: begin
 					begin : spr_plot_blk
 						integer sx, sy;
 						reg [16:0] plot_addr;
 						sx = (s_pixel_x_base + s_px) % 512; // wrap per pixel: a sprite straddling the
 						sy = (s_pixel_y_base + s_py) % 512; // top/left edge shows its visible part
 						plot_addr = sy * SCREEN_W + sx;
-						if (sx < SCREEN_W && sy < SCREEN_H) begin
+						if (s_pix_nib != 15 && sx < SCREEN_W && sy < SCREEN_H) begin
 							sprite_plane[{draw_buf, plot_addr}] <= {1'b1, s_colour[4:0], s_pix_nib[3:0]};
 						end
 					end
-					state <= S_SPR_NEXT;
-				end
-
-				S_SPR_NEXT: begin
 					if (s_px == 15) begin
 						s_px <= 0;
 						if (s_py == 15) begin
@@ -785,7 +842,6 @@ module video_macross2 #(
 
 				S_DONE: begin
 					disp_buf <= draw_buf;
-					snap_cur <= ~snap_cur;
 					state <= S_IDLE;
 				end
 

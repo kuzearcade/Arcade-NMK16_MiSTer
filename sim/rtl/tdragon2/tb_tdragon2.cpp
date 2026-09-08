@@ -21,13 +21,14 @@
 #include "../common/nmktrace.h"
 
 static constexpr uint64_t RESET_CYCLES = 200;
-static constexpr uint64_t RUN_CYCLES   = 300000000; // clk_sys (40MHz) cycles = 7.5 real seconds
+static uint64_t RUN_CYCLES = 300000000; // clk_sys (40MHz) cycles = 7.5 real seconds; override via argv[1]
 static constexpr int SCREEN_W = 384;
 static constexpr int SCREEN_H = 224;
 
 int main(int argc, char **argv) {
 	VerilatedContext contextp;
 	contextp.commandArgs(argc, argv);
+	if (argc > 1) RUN_CYCLES = strtoull(argv[1], nullptr, 0);
 
 	Vtdragon2_core top{&contextp};
 	top.game_macross2 = 0; // shared Family C core (see tdragon2_core.sv's own header) — tdragon2 behavior
