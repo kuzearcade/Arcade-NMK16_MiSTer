@@ -33,12 +33,14 @@ module sdram_arb #(
 	output        i_busy  [0:N-1],
 	output reg    i_valid [0:N-1],
 	output reg [15:0] i_dout [0:N-1],
+	output reg [31:0] i_dout_pair [0:N-1], // see rtl/sdram.sv's doutN_pair
 
 	output [24:1] sdram_addr,
 	output        sdram_wrl,
 	output        sdram_wrh,
 	output [15:0] sdram_din,
 	input  [15:0] sdram_dout,
+	input  [31:0] sdram_dout_pair,
 	output        sdram_req,
 	input         sdram_ack
 );
@@ -68,6 +70,7 @@ module sdram_arb #(
 
 	wire        u_busy, u_valid;
 	wire [15:0] u_dout;
+	wire [31:0] u_dout_pair;
 
 	genvar g;
 	generate
@@ -79,9 +82,9 @@ module sdram_arb #(
 	sdram_req u_req_inst (
 		.clk(clk), .reset(reset),
 		.addr(addr_r), .we(we_r), .wrl(wrl_r), .wrh(wrh_r), .din(din_r),
-		.req(u_req), .busy(u_busy), .valid(u_valid), .dout(u_dout),
+		.req(u_req), .busy(u_busy), .valid(u_valid), .dout(u_dout), .dout_pair(u_dout_pair),
 		.sdram_addr(sdram_addr), .sdram_wrl(sdram_wrl), .sdram_wrh(sdram_wrh),
-		.sdram_din(sdram_din), .sdram_dout(sdram_dout), .sdram_req(sdram_req), .sdram_ack(sdram_ack)
+		.sdram_din(sdram_din), .sdram_dout(sdram_dout), .sdram_dout_pair(sdram_dout_pair), .sdram_req(sdram_req), .sdram_ack(sdram_ack)
 	);
 
 	integer k;
@@ -119,6 +122,7 @@ module sdram_arb #(
 			end
 		end else if (u_valid) begin
 			i_dout[gnt_ch]   <= u_dout;
+			i_dout_pair[gnt_ch] <= u_dout_pair;
 			i_valid[gnt_ch]  <= 1'b1;
 			gnt_active       <= 1'b0;
 			hold_off[gnt_ch] <= 1'b1;

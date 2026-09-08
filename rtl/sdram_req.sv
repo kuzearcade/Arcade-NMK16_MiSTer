@@ -24,6 +24,7 @@ module sdram_req
 	output        busy,   // high from req until valid — caller must not issue req while busy
 	output reg    valid,  // one-cycle pulse: dout (read) or write-complete (write)
 	output [15:0] dout,
+	output [31:0] dout_pair, // the aligned word pair containing addr — see rtl/sdram.sv's doutN_pair
 
 	// rtl/sdram.sv port side (one of its four addr/wr/din/dout/req/ack sets)
 	output [24:1] sdram_addr,
@@ -31,6 +32,7 @@ module sdram_req
 	output        sdram_wrh,
 	output [15:0] sdram_din,
 	input  [15:0] sdram_dout,
+	input  [31:0] sdram_dout_pair, // may be left unconnected by consumers that only use dout
 	output reg    sdram_req,
 	input         sdram_ack,
 
@@ -76,6 +78,7 @@ module sdram_req
 	assign sdram_wrh  = we_r & wrh_r;
 	assign sdram_din  = din_r;
 	assign dout       = sdram_dout;
+	assign dout_pair  = sdram_dout_pair;
 	assign dbg_we_r_o   = we_r;
 	assign dbg_addr_r_o = addr_r;
 

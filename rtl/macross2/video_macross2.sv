@@ -72,6 +72,7 @@ module video_macross2 #(
 	output            sd_wrh,
 	output     [15:0] sd_din,
 	input      [15:0] sd_dout,
+	input      [31:0] sd_dout_pair,
 	output            sd_req,
 	input             sd_ack,
 	// HW_ROMS=1 only: a SECOND physical SDRAM port (read-only) for the TX
@@ -80,6 +81,7 @@ module video_macross2 #(
 	output     [24:1] sd_b_addr,
 	output            sd_b_req,
 	input      [15:0] sd_b_dout,
+	input      [31:0] sd_b_dout_pair,
 	input             sd_b_ack,
 
 	input sprite_dma_trigger, // from nmk_irq: snapshot sprite RAM now
@@ -196,45 +198,47 @@ module video_macross2 #(
 		// screen); on separate ports their round trips overlap.
 		wire        bg_sd_busy, bg_sd_valid;
 		wire [15:0] bg_sd_dout;
+		wire [31:0] bg_sd_dout_pair;
 		wire [24:1] bg_sd_addr;
 		wire        bg_sd_req;
 		sdram_req bg_req_inst (
 			.clk(clk_sys), .reset(reset),
 			.addr(bg_sd_addr), .we(1'b0), .wrl(1'b0), .wrh(1'b0), .din(16'd0),
-			.req(bg_sd_req), .busy(bg_sd_busy), .valid(bg_sd_valid), .dout(bg_sd_dout),
+			.req(bg_sd_req), .busy(bg_sd_busy), .valid(bg_sd_valid), .dout(bg_sd_dout), .dout_pair(bg_sd_dout_pair),
 			.sdram_addr(sd_addr), .sdram_wrl(sd_wrl), .sdram_wrh(sd_wrh), .sdram_din(sd_din),
-			.sdram_dout(sd_dout), .sdram_req(sd_req), .sdram_ack(sd_ack)
+			.sdram_dout(sd_dout), .sdram_dout_pair(sd_dout_pair), .sdram_req(sd_req), .sdram_ack(sd_ack)
 		);
 		wire        arb_busy [0:1];
 		wire        arb_valid[0:1];
 		wire [24:1] arb_addr [0:1];
 		wire        arb_req  [0:1];
 		wire [15:0] arb_dout [0:1];
+		wire [31:0] arb_dout_pair [0:1];
 		sdram_arb #(.N(2), .FIXED_PRIO(1)) video_arb_inst (
 			.clk(clk_sys), .reset(reset),
 			.i_addr(arb_addr), .i_we('{1'b0,1'b0}), .i_wrl('{1'b0,1'b0}), .i_wrh('{1'b0,1'b0}), .i_din('{16'd0,16'd0}),
-			.i_req(arb_req), .i_busy(arb_busy), .i_valid(arb_valid), .i_dout(arb_dout),
+			.i_req(arb_req), .i_busy(arb_busy), .i_valid(arb_valid), .i_dout(arb_dout), .i_dout_pair(arb_dout_pair),
 			.sdram_addr(sd_b_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
-			.sdram_dout(sd_b_dout), .sdram_req(sd_b_req), .sdram_ack(sd_b_ack)
+			.sdram_dout(sd_b_dout), .sdram_dout_pair(sd_b_dout_pair), .sdram_req(sd_b_req), .sdram_ack(sd_b_ack)
 		);
 		assign bgvram_addr = bg_vram_addr_look;
 		assign txvram_addr = tx_vram_addr_look;
 		tile_prefetch_byte #(.TAG_W(19), .ENTRIES(8), .BASE_WORD_OFFSET(BASE_WORD_FGTILE)) fgtile_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.pf_tag(tx_look_tag), .pf_byte_addr({7'd0, fgl_byte_addr}), .pf_vram(txvram_data),
-			.use_tag(tx_use_tag), .use_odd(tx_px[1]), .data(fgtile_rom_byte), .vram(tx_vram_use), .hit(tx_hit),
-			.sd_addr(arb_addr[0]), .sd_req(arb_req[0]), .sd_busy(arb_busy[0]), .sd_valid(arb_valid[0]), .sd_dout(arb_dout[0])
+			.use_tag(tx_use_tag), .use_sel(tx_px[2:1]), .data(fgtile_rom_byte), .vram(tx_vram_use), .hit(tx_hit),
+			.sd_addr(arb_addr[0]), .sd_req(arb_req[0]), .sd_busy(arb_busy[0]), .sd_valid(arb_valid[0]), .sd_dout(arb_dout[0]), .sd_dout_pair(arb_dout_pair[0])
 		);
 		tile_prefetch_byte #(.TAG_W(19), .ENTRIES(8), .BASE_WORD_OFFSET(BASE_WORD_BGTILE)) bgtile_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.pf_tag(bg_look_tag), .pf_byte_addr({3'd0, bgl_byte_addr}), .pf_vram(bgvram_data),
-			.use_tag(bg_use_tag), .use_odd(bg_half_col[1]), .data(bgtile_rom_byte), .vram(bg_vram_use), .hit(bg_hit),
-			.sd_addr(bg_sd_addr), .sd_req(bg_sd_req), .sd_busy(bg_sd_busy), .sd_valid(bg_sd_valid), .sd_dout(bg_sd_dout)
+			.use_tag(bg_use_tag), .use_sel(bg_half_col[2:1]), .data(bgtile_rom_byte), .vram(bg_vram_use), .hit(bg_hit),
+			.sd_addr(bg_sd_addr), .sd_req(bg_sd_req), .sd_busy(bg_sd_busy), .sd_valid(bg_sd_valid), .sd_dout(bg_sd_dout), .sd_dout_pair(bg_sd_dout_pair)
 		);
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_SPRITES)) sprites_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({2'd0, spr_byte_addr}), .data(sprites_rom_byte), .ready(sprites_ready),
-			.sd_addr(arb_addr[1]), .sd_req(arb_req[1]), .sd_busy(arb_busy[1]), .sd_valid(arb_valid[1]), .sd_dout(arb_dout[1])
+			.sd_addr(arb_addr[1]), .sd_req(arb_req[1]), .sd_busy(arb_busy[1]), .sd_valid(arb_valid[1]), .sd_dout(arb_dout[1]), .sd_dout_pair(arb_dout_pair[1])
 		);
 	end
 	endgenerate
@@ -318,11 +322,11 @@ module video_macross2 #(
 	wire [7:0]  bgl_col      = bgl_line_x[11:4];
 	wire [3:0]  bgl_half_col = bgl_line_x[3:0];
 	wire [14:0] bg_vram_addr_look = {tilerambank, bg_row[4], bgl_col, bg_row[3:0]};
-	// Tile-space word identity ({line_y, line_x>>2}) — see
+	// Tile-space word-PAIR identity ({line_y, line_x>>3}, 8 pixels) — see
 	// tile_prefetch_byte's own header for why the tags are positions,
 	// not ROM addresses.
-	wire [18:0] bg_use_tag  = {bg_line_y[8:0], bg_line_x[11:2]};
-	wire [18:0] bg_look_tag = {bg_line_y[8:0], bgl_line_x[11:2]};
+	wire [18:0] bg_use_tag  = {1'b0, bg_line_y[8:0], bg_line_x[11:3]};
+	wire [18:0] bg_look_tag = {1'b0, bg_line_y[8:0], bgl_line_x[11:3]};
 
 	// common_get_bg_tile_info<0,1>: (code&0xfff)|(m_bgbank<<12) — 14-bit
 	// code for macross2's own 16384-tile ROM (bg_bank[1:0], same as
@@ -360,8 +364,8 @@ module video_macross2 #(
 	wire [5:0]  txl_col    = txl_line_x[8:3];
 	wire [2:0]  txl_px     = txl_line_x[2:0];
 	wire [10:0] tx_vram_addr_look = {txl_col, 5'd0} + {6'd0, tx_row};
-	wire [18:0] tx_use_tag  = {4'd0, tx_line_y, tx_line_x[8:2]};
-	wire [18:0] tx_look_tag = {4'd0, tx_line_y, txl_line_x[8:2]};
+	wire [18:0] tx_use_tag  = {5'd0, tx_line_y, tx_line_x[8:3]};
+	wire [18:0] tx_look_tag = {5'd0, tx_line_y, txl_line_x[8:3]};
 	wire [16:0] fgl_byte_addr = {txvram_data[11:0], 5'd0} + {12'd0, tx_py, 2'd0} + {15'd0, txl_px[2:1]};
 
 	wire [3:0] tx_pix_nib = tile_nibble(fgtile_rom_byte, tx_px[0]);

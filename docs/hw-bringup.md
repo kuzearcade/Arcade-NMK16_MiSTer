@@ -83,11 +83,18 @@ default path byte-for-byte unchanged.
 ## SDRAM port assignment (`rtl/sdram.sv`'s 4 req/ack ports)
 
 `sdram.sv` is word-addressed (`addr[24:1]`, 24-bit word address → 32MB
-byte space) with an ~8-`clk`-cycle req→ack latency (toggle-style: caller
-flips `req`, waits for `ack` to mirror it) at whatever clock `clk_sys`
-feeds it. Four physical ports, more than four logical consumers, so
-consumers that don't need simultaneous access share a port through a
-tiny round-robin arbiter:
+byte space) with a toggle-style req/ack handshake (caller flips `req`,
+waits for `ack` to mirror it), and **every read returns the aligned
+word pair containing the requested address**: `doutN` is the requested
+word, `doutN_pair` is `{word(addr|1), word(addr&~1)}`. Internally that
+is two READ commands in one activation (the second with auto-precharge)
+for one extra cycle on the data bus — the column/row split is
+column = `a[9:1]`, row = `a[22:10]` so a pair shares a row. Writes stay
+single-word. The wrappers (`sdram_req.sv`, `sdram_arb.sv`) pass the pair
+through; `rom_cache1.sv` is a 2-word line, `tile_prefetch_byte.sv` caches
+4-byte / 8-pixel groups. Four physical ports, more than four logical
+consumers, so consumers that don't need simultaneous access share a
+port through a tiny round-robin arbiter:
 
 - **Port 0** — `ioctl_download` writes (only active before/between
   play, core held in reset) **and** 68000 program-ROM reads (mutually
@@ -239,7 +246,8 @@ which the 3:1 simulation reproduced:
    still missed on two thirds of the screen — measured directly with
    `DBG_MISS_PAINT` (a `video_macross2.sv`/`tdragon2_core.sv` parameter
    that paints BG-cache misses magenta and TX misses cyan; the miss
-   counts in a capture are then a pixel count). Each fetch's round trip
+   counts in a capture are then a pixel count — but subtract the game's
+   own pure-magenta/cyan pixels, see item 3). Each fetch's round trip
    is ~12 `clk_sys` uncontended and more behind other ports, against the
    20 `clk_sys` the two layers have per word between them. Hence the
    port split above.
@@ -255,18 +263,32 @@ which the 3:1 simulation reproduced:
    has been seen low. The `*_hw` testbenches' Z80 write counters
    (YM2203/OKI writes) caught it in simulation once the port move was
    simulated: 41 YM2203 writes instead of ~21,000.
-3. **What is left.** With the split ports, the 16-pixel lookahead and
-   the arbiter fix, painted misses are 0-15 pixels per frame in normal
-   play and ~0.5% of the frame in two specific moments (the lines right
-   after vblank in the Macross II attract HUD, where the 68000's port is
-   busiest; the tdragon2 base scene's TX HUD column, where sprite fetch
-   saturates port 3). Those did not change between 8- and 16-pixel
-   lookahead, i.e. they are throughput-bound. The structural fix is to
-   return **two words per transaction** (a second READ to `col+1` in the
-   same activation, auto-precharge on the second; per-port 32-bit dout;
-   8-pixel tags in the prefetch cache; a 2-word line in `rom_cache1`),
-   which halves every consumer's transaction count for the same
-   handshake cost. Not done yet.
+3. **Two words per transaction.** With the split ports, the 16-pixel
+   lookahead and the arbiter fix, the painted-miss captures still
+   showed a few hundred to ~2000 "miss" pixels in two scenes. Those
+   turned out to be a measurement error: the paint detector (pure
+   magenta / pure cyan in a capture) was counting genuine game colours
+   — the pink separator lines of the Macross II HUD bar and the teal
+   border of tdragon2's score panel — which is why the counts were
+   byte-identical across three otherwise different builds. Real misses
+   were already indistinguishable from zero. The pair read was built
+   before that was understood and is kept as a margin improvement (the
+   68000 executes ~8-10% more instructions per sim run, i.e. fewer wait
+   states; every consumer's transaction count halves), verified the same
+   way as everything else here. Every read now returns the aligned
+   word pair (see the port-assignment section): a second
+   READ to the odd column in the same activation, auto-precharge on the
+   second, the free-running single `SDRAM_DQ` capture register copied
+   twice (even word at READY+1, odd at READY+2, ack after the second),
+   `doutN_pair` on every port, 8-pixel tags and 32-bit entries in
+   `tile_prefetch_byte`, a 2-word line in `rom_cache1` (so the 68000,
+   Z80, OKI and sprite fetches halve too). One extra bus cycle per
+   transaction buys half the transactions everywhere, because the
+   handshake round trip, not the SDRAM, is the cost. The per-word
+   ROM-fetch checksum reference tables under `rtl/tdragon2/*fetch_*.hex`
+   (a disconnected diagnostic) were generated for single-word fetches
+   and no longer match the fetch sequence; `rom_csum` (DTACK-gated) is
+   unaffected.
 
 ## ROM-loading / `.mra` scheme
 
@@ -436,8 +458,9 @@ checksum matching simulation. With `rtl/sdram.sv` on the 96MHz
 ports and the arbiter duplicate-grant fix (see the SDRAM sections
 above) both games render without the horizontal smearing the
 single-clock design showed, with audio, on hardware and in the
-`HW_ROMS=1` sim frames; a residual ~0.5%-of-frame stale-word artifact
-in two HUD-heavy moments awaits the two-words-per-transaction change. Remaining known limitations: HSync/VSync
+`HW_ROMS=1` sim frames; reads return two words per transaction as a
+throughput margin (see item 3 above — the "residual" it was built for
+was a paint-detector false positive on genuine game colours). Remaining known limitations: HSync/VSync
 placement is still the documented placeholder (the scaler locks and
 reports 384x224 @ 56.2Hz, but it has not been tuned against a reference),
 and player-input mapping has been cross-checked against

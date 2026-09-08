@@ -182,6 +182,7 @@ module tdragon2_core #(
 	output            sd0_wrh,
 	output     [15:0] sd0_din,
 	input      [15:0] sd0_dout,
+	input      [31:0] sd0_dout_pair, // see rtl/sdram.sv's doutN_pair
 	output            sd0_req,
 	input             sd0_ack,
 
@@ -190,6 +191,7 @@ module tdragon2_core #(
 	output     [24:1] sd1_addr,
 	output            sd1_req,
 	input      [15:0] sd1_dout,
+	input      [31:0] sd1_dout_pair,
 	input             sd1_ack,
 
 	// SDRAM port 2: passed straight through to video_macross2.sv's own
@@ -199,6 +201,7 @@ module tdragon2_core #(
 	output            sd2_wrh,
 	output     [15:0] sd2_din,
 	input      [15:0] sd2_dout,
+	input      [31:0] sd2_dout_pair,
 	output            sd2_req,
 	input             sd2_ack,
 
@@ -209,6 +212,7 @@ module tdragon2_core #(
 	output     [24:1] sd3_addr,
 	output            sd3_req,
 	input      [15:0] sd3_dout,
+	input      [31:0] sd3_dout_pair,
 	input             sd3_ack,
 
 	// debug/trace outputs for the Verilator testbench
@@ -657,6 +661,7 @@ module tdragon2_core #(
 	end else begin : g_rom_hw
 		wire        cache_busy, cache_valid;
 		wire [15:0] cache_dout;
+		wire [31:0] cache_dout_pair;
 		wire [24:1] cache_sd_addr;
 		wire        cache_sd_req;
 		wire        sd0_dbg_we;
@@ -675,9 +680,9 @@ module tdragon2_core #(
 			.we(ioctl_rom_wr), .wrl(ioctl_rom_wr & ~ioctl_addr[0]), .wrh(ioctl_rom_wr & ioctl_addr[0]),
 			.din({ioctl_dout, ioctl_dout}),
 			.req(ioctl_download ? (ioctl_rom_wr & ioctl_wr) : cache_sd_req),
-			.busy(cache_busy), .valid(cache_valid), .dout(cache_dout),
+			.busy(cache_busy), .valid(cache_valid), .dout(cache_dout), .dout_pair(cache_dout_pair),
 			.sdram_addr(sd0_addr), .sdram_wrl(sd0_wrl), .sdram_wrh(sd0_wrh), .sdram_din(sd0_din),
-			.sdram_dout(sd0_dout), .sdram_req(sd0_req), .sdram_ack(sd0_ack),
+			.sdram_dout(sd0_dout), .sdram_dout_pair(sd0_dout_pair), .sdram_req(sd0_req), .sdram_ack(sd0_ack),
 			.dbg_we_r_o(sd0_dbg_we), .dbg_addr_r_o(sd0_dbg_addr)
 		);
 		assign ioctl_wait = ioctl_download & cache_busy;
@@ -686,7 +691,7 @@ module tdragon2_core #(
 			.clk(clk_sys), .reset(reset | ioctl_download),
 			.addr(byte_addr[18:1]), .data(rom_dout), .ready(rom_ready),
 			.sd_addr(cache_sd_addr), .sd_req(cache_sd_req),
-			.sd_busy(cache_busy), .sd_valid(cache_valid), .sd_dout(cache_dout)
+			.sd_busy(cache_busy), .sd_valid(cache_valid), .sd_dout(cache_dout), .sd_dout_pair(cache_dout_pair)
 		);
 
 		// DIAGNOSTIC ONLY: a SECOND passive checksum, one tap stage
@@ -1539,6 +1544,7 @@ module tdragon2_core #(
 	wire [24:1] p1_addr [0:2];
 	wire        p1_req  [0:2];
 	wire [15:0] p1_dout [0:2];
+	wire [31:0] p1_dout_pair [0:2];
 	generate
 	if (!HW_ROMS) begin : g_audiocpu_sim
 		reg [7:0] audiocpu_rom [0:131071];
@@ -1549,20 +1555,21 @@ module tdragon2_core #(
 		assign p1_busy  = '{1'b0, 1'b0, 1'b0};
 		assign p1_valid = '{1'b0, 1'b0, 1'b0};
 		assign p1_dout  = '{16'd0, 16'd0, 16'd0};
+		assign p1_dout_pair = '{32'd0, 32'd0, 32'd0};
 		assign p1_addr  = '{24'd0, 24'd0, 24'd0};
 		assign p1_req   = '{1'b0, 1'b0, 1'b0};
 	end else begin : g_audiocpu_hw
 		sdram_arb #(.N(3)) p1_arb_inst (
 			.clk(clk_sys), .reset(por_rst),
 			.i_addr(p1_addr), .i_we('{1'b0, 1'b0, 1'b0}), .i_wrl('{1'b0, 1'b0, 1'b0}), .i_wrh('{1'b0, 1'b0, 1'b0}), .i_din('{16'd0, 16'd0, 16'd0}),
-			.i_req(p1_req), .i_busy(p1_busy), .i_valid(p1_valid), .i_dout(p1_dout),
+			.i_req(p1_req), .i_busy(p1_busy), .i_valid(p1_valid), .i_dout(p1_dout), .i_dout_pair(p1_dout_pair),
 			.sdram_addr(sd1_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
-			.sdram_dout(sd1_dout), .sdram_req(sd1_req), .sdram_ack(sd1_ack)
+			.sdram_dout(sd1_dout), .sdram_dout_pair(sd1_dout_pair), .sdram_req(sd1_req), .sdram_ack(sd1_ack)
 		);
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_AUDIOCPU)) audiocpu_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr(audiocpu_byte_addr), .data(audiocpu_dout), .ready(audiocpu_ready),
-			.sd_addr(p1_addr[0]), .sd_req(p1_req[0]), .sd_busy(p1_busy[0]), .sd_valid(p1_valid[0]), .sd_dout(p1_dout[0])
+			.sd_addr(p1_addr[0]), .sd_req(p1_req[0]), .sd_busy(p1_busy[0]), .sd_valid(p1_valid[0]), .sd_dout(p1_dout[0]), .sd_dout_pair(p1_dout_pair[0])
 		);
 	end
 	endgenerate
@@ -1682,12 +1689,12 @@ module tdragon2_core #(
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_OKI1)) oki0_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({2'd0, oki0_rom_addr}), .data(oki0_rom_data), .ready(oki0_rom_ok),
-			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1])
+			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1]), .sd_dout_pair(p1_dout_pair[1])
 		);
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_OKI2)) oki1_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({2'd0, oki1_rom_addr}), .data(oki1_rom_data), .ready(oki1_rom_ok),
-			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2])
+			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2]), .sd_dout_pair(p1_dout_pair[2])
 		);
 	end
 	endgenerate
@@ -1843,8 +1850,8 @@ module tdragon2_core #(
 		.tilerambank(tilerambank_reg),
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),
-		.sd_dout(sd2_dout), .sd_req(sd2_req), .sd_ack(sd2_ack),
-		.sd_b_addr(sd3_addr), .sd_b_req(sd3_req), .sd_b_dout(sd3_dout), .sd_b_ack(sd3_ack)
+		.sd_dout(sd2_dout), .sd_dout_pair(sd2_dout_pair), .sd_req(sd2_req), .sd_ack(sd2_ack),
+		.sd_b_addr(sd3_addr), .sd_b_req(sd3_req), .sd_b_dout(sd3_dout), .sd_b_dout_pair(sd3_dout_pair), .sd_b_ack(sd3_ack)
 	);
 
 	reg frame_done_r;

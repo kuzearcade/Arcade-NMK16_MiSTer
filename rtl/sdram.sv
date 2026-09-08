@@ -133,11 +133,17 @@ module sdram
 	input             clk_sdram,
 	input       [1:0] prio_mode,	// 00=RR over all 4 ports, 01=video first, 10=CPU first, 11=video 75%
 
+	// Every read returns the ALIGNED WORD PAIR containing the requested
+	// address in one transaction (two READ commands in one activation —
+	// see STATE_CONT2 below): doutN is the requested word exactly as
+	// before, doutN_pair is {word(addr|1), word(addr&~1)}. Consumers that
+	// only want one word leave doutN_pair unconnected.
 	input      [24:1] addr0,
 	input             wrl0,
 	input             wrh0,
 	input      [15:0] din0,
 	output     [15:0] dout0,
+	output     [31:0] dout0_pair,
 	input             req0,
 	output reg        ack0 = 0,
 	
@@ -146,6 +152,7 @@ module sdram
 	input             wrh1,
 	input      [15:0] din1,
 	output     [15:0] dout1,
+	output     [31:0] dout1_pair,
 	input             req1,
 	output reg        ack1 = 0,
 	
@@ -154,6 +161,7 @@ module sdram
 	input             wrh2,
 	input      [15:0] din2,
 	output     [15:0] dout2,
+	output     [31:0] dout2_pair,
 	input             req2,
 	output reg        ack2 = 0,
 
@@ -162,6 +170,7 @@ module sdram
 	input             wrh3,
 	input      [15:0] din3,
 	output     [15:0] dout3,
+	output     [31:0] dout3_pair,
 	input             req3,
 	output reg        ack3 = 0
 );
@@ -189,6 +198,15 @@ localparam MODE = { 3'b000, NO_WRITE_BURST, OP_MODE, CAS_LATENCY, ACCESS_TYPE, B
 localparam STATE_IDLE  = 4'd0;             // state to check the requests
 localparam STATE_START = STATE_IDLE+1'd1;  // state in which a new command is started
 localparam STATE_CONT  = STATE_START+RASCAS_DELAY;
+// Reads issue a SECOND READ command one cycle after the first, to the
+// odd word of the same aligned pair, so every read transaction returns
+// two words for the cost of one extra cycle on the data bus — the
+// handshake round trip (consumer, two clock crossings, arbitration)
+// dominates the cost of a transaction, so this roughly halves what the
+// real-time tile fetch, the sprite fetch and the CPU program fetch pay
+// per word (see docs/hw-bringup.md). The first READ has no auto-
+// precharge, the second does. Writes stay single-word.
+localparam STATE_CONT2 = STATE_CONT+1'd1;
 localparam STATE_READY = STATE_CONT+CAS_LATENCY+1'd1;
 localparam STATE_LAST  = STATE_READY;      // last state in cycle
 
@@ -244,17 +262,24 @@ wire req3_i = req3_s[1];
 // safe because a same-clock consumer sampled it exactly one cycle after
 // its ack; with synchronizer delay on the consumer side, another port's
 // transaction could complete and overwrite it first.
-reg [15:0] dout0_r = 0, dout1_r = 0, dout2_r = 0, dout3_r = 0;
-reg [3:0]  done_port = 0; // one-hot: which port's read data landed in `dout` last cycle
+reg [15:0] dout0_r = 0, dout1_r = 0, dout2_r = 0, dout3_r = 0;       // even word of the pair
+reg [15:0] dout0_h = 0, dout1_h = 0, dout2_h = 0, dout3_h = 0;       // odd word of the pair
+reg        sel0 = 0, sel1 = 0, sel2 = 0, sel3 = 0;                   // requested address bit 1
+reg [3:0]  done_port = 0;  // one-hot: which port's even word landed in `dout` last cycle
+reg [3:0]  done_port2 = 0; // one cycle later: its odd word
 wire [3:0] wr = {wrl3|wrh3,wrl2|wrh2,wrl1|wrh1,wrl0|wrh0};
 
 reg [15:0] dout;
 
 
-assign dout0 = dout0_r;
-assign dout1 = dout1_r;
-assign dout2 = dout2_r;
-assign dout3 = dout3_r;
+assign dout0 = sel0 ? dout0_h : dout0_r;
+assign dout1 = sel1 ? dout1_h : dout1_r;
+assign dout2 = sel2 ? dout2_h : dout2_r;
+assign dout3 = sel3 ? dout3_h : dout3_r;
+assign dout0_pair = {dout0_h, dout0_r};
+assign dout1_pair = {dout1_h, dout1_r};
+assign dout2_pair = {dout2_h, dout2_r};
+assign dout3_pair = {dout3_h, dout3_r};
 
 
 // access manager
@@ -293,10 +318,10 @@ always @(posedge clk) begin
 			// would otherwise look pending for exactly one more cycle and
 			// be re-granted as a duplicate transaction — whose completion
 			// toggles ack a second time and desynchronizes the handshake.
-			p0 = (ack0 != req0_i) && !done_port[0];
-			p1 = (ack1 != req1_i) && !done_port[1];
-			p2 = (ack2 != req2_i) && !done_port[2];
-			p3 = (ack3 != req3_i) && !done_port[3];
+			p0 = (ack0 != req0_i) && !done_port[0] && !done_port2[0];
+			p1 = (ack1 != req1_i) && !done_port[1] && !done_port2[1];
+			p2 = (ack2 != req2_i) && !done_port[2] && !done_port2[2];
+			p3 = (ack3 != req3_i) && !done_port[3] && !done_port2[3];
 			granted = 0;
 
 			case (prio_mode)
@@ -412,22 +437,32 @@ always @(posedge clk) begin
 	// cell; the rest sampled through unconstrained routing, and real
 	// hardware read visibly corrupted graphics/sample data at 96MHz. So
 	// the per-port copy and its ack happen one cycle later, from `dout`.
-	done_port <= 4'b0000;
+	// `dout` free-runs (sampled every cycle, still one register on the
+	// pad): the even word is on the bus at STATE_READY, the odd word one
+	// cycle later (second READ, see STATE_CONT2).
+	dout <= SDRAM_DQ;
+	done_port  <= 4'b0000;
+	done_port2 <= done_port;
 	if(state == STATE_READY && ram_req) begin
-		dout <= SDRAM_DQ;
 		done_port <= ram_req;
 		active <= 0;
 		ram_req <= 0;
 	end
-	// Copy into the completing port's own register and mirror the
-	// SYNCHRONIZED req (the value that was actually granted) into its ack
-	// — see the CDC comment above. The consumer cannot observe this ack
-	// for at least two of ITS clock cycles (its own synchronizer), long
-	// after this copy has landed.
-	if (done_port[0]) begin dout0_r <= dout; ack0 <= req0_i; end
-	if (done_port[1]) begin dout1_r <= dout; ack1 <= req1_i; end
-	if (done_port[2]) begin dout2_r <= dout; ack2 <= req2_i; end
-	if (done_port[3]) begin dout3_r <= dout; ack3 <= req3_i; end
+	// Copy into the completing port's own registers — even word first,
+	// odd word the cycle after — and only then mirror the SYNCHRONIZED
+	// req (the value that was actually granted) into its ack — see the
+	// CDC comment above. The consumer cannot observe this ack for at
+	// least two of ITS clock cycles (its own synchronizer), long after
+	// both copies have landed. addrN is still the request's own address
+	// here (held until ack), so its bit 1 selects which word doutN shows.
+	if (done_port[0])  begin dout0_r <= dout; end
+	if (done_port[1])  begin dout1_r <= dout; end
+	if (done_port[2])  begin dout2_r <= dout; end
+	if (done_port[3])  begin dout3_r <= dout; end
+	if (done_port2[0]) begin dout0_h <= dout; sel0 <= addr0[1]; ack0 <= req0_i; end
+	if (done_port2[1]) begin dout1_h <= dout; sel1 <= addr1[1]; ack1 <= req1_i; end
+	if (done_port2[2]) begin dout2_h <= dout; sel2 <= addr2[1]; ack2 <= req2_i; end
+	if (done_port2[3]) begin dout3_h <= dout; sel3 <= addr3[1]; ack3 <= req3_i; end
 
 	if(mode != MODE_NORMAL || state != STATE_IDLE || reset) begin
 		state <= state + 1'd1;
@@ -477,6 +512,7 @@ always @(posedge clk) begin
 		{2'bXX, MODE_NORMAL, STATE_START}: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= active ? CMD_ACTIVE : CMD_AUTO_REFRESH;
 		{2'b11, MODE_NORMAL, STATE_CONT }: begin {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_WRITE; sdram_dq_out <= data; sdram_dq_oe <= 1'b1; end
 		{2'b10, MODE_NORMAL, STATE_CONT }: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_READ;
+		{2'b10, MODE_NORMAL, STATE_CONT2}: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_READ; // odd word of the pair, with auto-precharge
 
 		// init
 		{2'bXX,    MODE_LDM, STATE_START}: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_LOAD_MODE;
@@ -486,9 +522,18 @@ always @(posedge clk) begin
 	endcase
 
 	if(mode == MODE_NORMAL) begin
+		// Row/column split: column = a[9:1], row = a[22:10], so the two
+		// words of an aligned pair (a[1] = 0/1) sit in the same row and
+		// the pair is one activation. (The original mapping, row=a[13:1]
+		// / column=a[22:14], put consecutive words in different rows.
+		// This is a pure permutation of where data lives; everything
+		// reaches the chip through this controller.) A10 (bit 10 of the
+		// column command) is auto-precharge: off on a read's first
+		// command, on for its second and for single writes.
 		casex(state)
-			STATE_START: SDRAM_A <= a[13:1];
-			STATE_CONT:  SDRAM_A <= {dqm, 2'b10, a[22:14]};
+			STATE_START: SDRAM_A <= a[22:10];
+			STATE_CONT:  SDRAM_A <= we ? {dqm, 2'b10, a[9:1]} : {dqm, 2'b00, a[9:2], 1'b0};
+			STATE_CONT2: if (!we) SDRAM_A <= {dqm, 2'b10, a[9:2], 1'b1};
 		endcase
 	end
 	else if(mode == MODE_LDM && state == STATE_START) SDRAM_A <= MODE;

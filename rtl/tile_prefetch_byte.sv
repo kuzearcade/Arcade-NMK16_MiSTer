@@ -28,7 +28,11 @@
 //           pixels (16 px = 80 clk_sys) of slack per fetch instead of
 //           zero.
 //
-// Tags are tile-SPACE positions ({line_y, line_x>>2}), not ROM
+// Each entry is one aligned word PAIR (4 bytes = 8 pixels), which is
+// exactly what one rtl/sdram.sv transaction returns; a TX tile row and a
+// BG half-tile row are each one such group, 4-byte aligned in ROM.
+//
+// Tags are tile-SPACE positions ({line_y, line_x>>3}), not ROM
 // addresses: the use pixel's ROM address would need its own VRAM read
 // (the tile code), but there is only one VRAM read port and the
 // lookahead owns it. The entry therefore also stores the VRAM word that
@@ -64,7 +68,7 @@ module tile_prefetch_byte #(
 
 	// use stream
 	input  [TAG_W-1:0] use_tag,
-	input              use_odd,        // byte select within the word (the use pixel's byte_addr[0])
+	input  [1:0]       use_sel,        // byte select within the 4-byte group (the use pixel's byte_addr[1:0])
 	output [7:0]       data,
 	output [15:0]      vram,           // VRAM word stored with the matching entry
 	output             hit,            // diagnostic: 1 iff data/vram are the use pixel's own, not stale
@@ -74,13 +78,14 @@ module tile_prefetch_byte #(
 	output        sd_req,
 	input         sd_busy,
 	input         sd_valid,
-	input  [15:0] sd_dout
+	input  [15:0] sd_dout,      // unused: the whole aligned pair is cached
+	input  [31:0] sd_dout_pair
 );
 
 	localparam PTR_W = (ENTRIES <= 1) ? 1 : $clog2(ENTRIES);
 
 	reg [TAG_W-1:0]   e_tag  [0:ENTRIES-1];
-	reg [15:0]        e_word [0:ENTRIES-1];
+	reg [31:0]        e_word [0:ENTRIES-1]; // aligned word pair = 4 bytes = 8 pixels
 	reg [15:0]        e_vram [0:ENTRIES-1];
 	reg [ENTRIES-1:0] e_valid;
 	reg [PTR_W-1:0]   wr_ptr;
@@ -91,12 +96,14 @@ module tile_prefetch_byte #(
 	reg [15:0]      req_vram;
 	reg [22:0]      req_word;
 
-	reg [15:0] last_word, last_vram;
+	reg [31:0] last_word;
+	reg [15:0] last_vram;
 
 	// ---- use side: fully associative lookup, stale-serve on miss ----
 	integer i;
 	reg        use_hit;
-	reg [15:0] use_word, use_vram;
+	reg [31:0] use_word;
+	reg [15:0] use_vram;
 	always @* begin
 		use_hit  = 1'b0;
 		use_word = last_word;
@@ -111,14 +118,16 @@ module tile_prefetch_byte #(
 	end
 	always @(posedge clk) begin
 		if (reset) begin
-			last_word <= 16'd0;
+			last_word <= 32'd0;
 			last_vram <= 16'd0;
 		end else if (use_hit) begin
 			last_word <= use_word;
 			last_vram <= use_vram;
 		end
 	end
-	assign data = use_odd ? use_word[15:8] : use_word[7:0];
+	assign data = (use_sel == 2'd0) ? use_word[7:0]   :
+	              (use_sel == 2'd1) ? use_word[15:8]  :
+	              (use_sel == 2'd2) ? use_word[23:16] : use_word[31:24];
 	assign vram = use_vram;
 	assign hit  = use_hit;
 
@@ -150,7 +159,7 @@ module tile_prefetch_byte #(
 			end
 			if (pending && sd_valid) begin
 				e_tag[wr_ptr]   <= req_tag;
-				e_word[wr_ptr]  <= sd_dout;
+				e_word[wr_ptr]  <= sd_dout_pair;
 				e_vram[wr_ptr]  <= req_vram;
 				e_valid[wr_ptr] <= 1'b1;
 				wr_ptr  <= wr_ptr + 1'b1;

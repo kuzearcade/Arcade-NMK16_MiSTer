@@ -19,7 +19,8 @@ module rom_cache1_byte #(
 	output        sd_req,
 	input         sd_busy,
 	input         sd_valid,
-	input  [15:0] sd_dout
+	input  [15:0] sd_dout,
+	input  [31:0] sd_dout_pair
 );
 
 	wire [22:0] word_addr = BASE_WORD_OFFSET + byte_addr[23:1];
@@ -28,7 +29,7 @@ module rom_cache1_byte #(
 	rom_cache1 cache_inst (
 		.clk(clk), .reset(reset),
 		.addr(word_addr), .data(word_data), .ready(ready),
-		.sd_addr(sd_addr), .sd_req(sd_req), .sd_busy(sd_busy), .sd_valid(sd_valid), .sd_dout(sd_dout)
+		.sd_addr(sd_addr), .sd_req(sd_req), .sd_busy(sd_busy), .sd_valid(sd_valid), .sd_dout(sd_dout), .sd_dout_pair(sd_dout_pair)
 	);
 
 	assign data = byte_addr[0] ? word_data[15:8] : word_data[7:0];

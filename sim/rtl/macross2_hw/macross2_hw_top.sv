@@ -77,6 +77,7 @@ module macross2_hw_top
 	wire        p0_wrl, p0_wrh, p2_wrl, p2_wrh;
 	wire [15:0] p0_din, p2_din;
 	wire [15:0] p0_dout, p1_dout, p2_dout, p3_dout;
+	wire [31:0] p0_dout_pair, p1_dout_pair, p2_dout_pair, p3_dout_pair;
 	wire        p0_req, p1_req, p2_req, p3_req;
 	wire        p0_ack, p1_ack, p2_ack, p3_ack;
 
@@ -94,10 +95,10 @@ module macross2_hw_top
 		.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
 		.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CLK(SDRAM_CLK), .SDRAM_CKE(SDRAM_CKE), .ready(sdram_ready),
 		.init(reset), .clk(clk_ram), .prio_mode(2'd0),
-		.addr0(p0_addr), .wrl0(p0_wrl), .wrh0(p0_wrh), .din0(p0_din), .dout0(p0_dout), .req0(p0_req), .ack0(p0_ack),
-		.addr1(p1_addr), .wrl1(1'b0), .wrh1(1'b0), .din1('0), .dout1(p1_dout), .req1(p1_req), .ack1(p1_ack),
-		.addr2(p2_addr), .wrl2(p2_wrl), .wrh2(p2_wrh), .din2(p2_din), .dout2(p2_dout), .req2(p2_req), .ack2(p2_ack),
-		.addr3(p3_addr), .wrl3(1'b0), .wrh3(1'b0), .din3('0), .dout3(p3_dout), .req3(p3_req), .ack3(p3_ack)
+		.addr0(p0_addr), .wrl0(p0_wrl), .wrh0(p0_wrh), .din0(p0_din), .dout0(p0_dout), .dout0_pair(p0_dout_pair), .req0(p0_req), .ack0(p0_ack),
+		.addr1(p1_addr), .wrl1(1'b0), .wrh1(1'b0), .din1('0), .dout1(p1_dout), .dout1_pair(p1_dout_pair), .req1(p1_req), .ack1(p1_ack),
+		.addr2(p2_addr), .wrl2(p2_wrl), .wrh2(p2_wrh), .din2(p2_din), .dout2(p2_dout), .dout2_pair(p2_dout_pair), .req2(p2_req), .ack2(p2_ack),
+		.addr3(p3_addr), .wrl3(1'b0), .wrh3(1'b0), .din3('0), .dout3(p3_dout), .dout3_pair(p3_dout_pair), .req3(p3_req), .ack3(p3_ack)
 	);
 
 	sdram_model model_inst (
@@ -116,10 +117,10 @@ module macross2_hw_top
 		.clk_sys(clk_sys), .reset(reset), .game_macross2(1'b1),
 		.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
 		.ioctl_index(16'd0), // this testbench streams only the <rom index="0"> data — see tdragon2_core.sv's ioctl_index port comment
-		.sd0_addr(p0_addr), .sd0_wrl(p0_wrl), .sd0_wrh(p0_wrh), .sd0_din(p0_din), .sd0_dout(p0_dout), .sd0_req(p0_req), .sd0_ack(p0_ack),
-		.sd1_addr(p1_addr), .sd1_req(p1_req), .sd1_dout(p1_dout), .sd1_ack(p1_ack),
-		.sd2_addr(p2_addr), .sd2_wrl(p2_wrl), .sd2_wrh(p2_wrh), .sd2_din(p2_din), .sd2_dout(p2_dout), .sd2_req(p2_req), .sd2_ack(p2_ack),
-		.sd3_addr(p3_addr), .sd3_req(p3_req), .sd3_dout(p3_dout), .sd3_ack(p3_ack),
+		.sd0_addr(p0_addr), .sd0_wrl(p0_wrl), .sd0_wrh(p0_wrh), .sd0_din(p0_din), .sd0_dout(p0_dout), .sd0_dout_pair(p0_dout_pair), .sd0_req(p0_req), .sd0_ack(p0_ack),
+		.sd1_addr(p1_addr), .sd1_req(p1_req), .sd1_dout(p1_dout), .sd1_dout_pair(p1_dout_pair), .sd1_ack(p1_ack),
+		.sd2_addr(p2_addr), .sd2_wrl(p2_wrl), .sd2_wrh(p2_wrh), .sd2_din(p2_din), .sd2_dout(p2_dout), .sd2_dout_pair(p2_dout_pair), .sd2_req(p2_req), .sd2_ack(p2_ack),
+		.sd3_addr(p3_addr), .sd3_req(p3_req), .sd3_dout(p3_dout), .sd3_dout_pair(p3_dout_pair), .sd3_ack(p3_ack),
 
 		.dbg_eab(dbg_eab), .dbg_data(dbg_data), .dbg_write(dbg_write), .dbg_as_n(dbg_as_n),
 		.dbg_fc0(dbg_fc0), .dbg_fc1(dbg_fc1), .dbg_fc2(dbg_fc2),

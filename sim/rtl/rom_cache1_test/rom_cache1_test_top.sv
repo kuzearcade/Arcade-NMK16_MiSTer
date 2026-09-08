@@ -33,6 +33,7 @@ module rom_cache1_test_top
 	wire        p0_wrl, p0_wrh;
 	wire [15:0] p0_din;
 	wire [15:0] p0_dout_from_sdram;
+	wire [31:0] p0_dout_pair_from_sdram;
 	wire        p0_req, p0_ack;
 
 	// Port 1 (raw pre-load writer)
@@ -47,7 +48,7 @@ module rom_cache1_test_top
 		.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
 		.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CLK(SDRAM_CLK), .SDRAM_CKE(SDRAM_CKE), .ready(sdram_ready),
 		.init(reset), .clk(clk), .prio_mode(2'd0),
-		.addr0(p0_addr), .wrl0(p0_wrl), .wrh0(p0_wrh), .din0(p0_din), .dout0(p0_dout_from_sdram), .req0(p0_req), .ack0(p0_ack),
+		.addr0(p0_addr), .wrl0(p0_wrl), .wrh0(p0_wrh), .din0(p0_din), .dout0(p0_dout_from_sdram), .dout0_pair(p0_dout_pair_from_sdram), .req0(p0_req), .ack0(p0_ack),
 		.addr1(p1_addr), .wrl1(p1_wrl), .wrh1(p1_wrh), .din1(p1_din), .dout1(p1_dout_from_sdram), .req1(p1_req), .ack1(p1_ack),
 		.addr2('0), .wrl2(1'b0), .wrh2(1'b0), .din2('0), .dout2(), .req2(1'b0), .ack2(),
 		.addr3('0), .wrl3(1'b0), .wrh3(1'b0), .din3('0), .dout3(), .req3(1'b0), .ack3()
@@ -62,19 +63,20 @@ module rom_cache1_test_top
 	wire [24:1] cache_sd_addr;
 	wire        cache_req, cache_busy, cache_valid;
 	wire [15:0] cache_dout;
+	wire [31:0] cache_dout_pair;
 
 	sdram_req cache_req_inst (
 		.clk(clk), .reset(reset),
 		.addr(cache_sd_addr), .we(1'b0), .wrl(1'b0), .wrh(1'b0), .din(16'h0),
-		.req(cache_req), .busy(cache_busy), .valid(cache_valid), .dout(cache_dout),
+		.req(cache_req), .busy(cache_busy), .valid(cache_valid), .dout(cache_dout), .dout_pair(cache_dout_pair),
 		.sdram_addr(p0_addr), .sdram_wrl(p0_wrl), .sdram_wrh(p0_wrh),
-		.sdram_din(p0_din), .sdram_dout(p0_dout_from_sdram), .sdram_req(p0_req), .sdram_ack(p0_ack)
+		.sdram_din(p0_din), .sdram_dout(p0_dout_from_sdram), .sdram_dout_pair(p0_dout_pair_from_sdram), .sdram_req(p0_req), .sdram_ack(p0_ack)
 	);
 
 	rom_cache1 cache_inst (
 		.clk(clk), .reset(reset),
 		.addr(c_addr), .data(c_data), .ready(c_ready),
-		.sd_addr(cache_sd_addr), .sd_req(cache_req), .sd_busy(cache_busy), .sd_valid(cache_valid), .sd_dout(cache_dout)
+		.sd_addr(cache_sd_addr), .sd_req(cache_req), .sd_busy(cache_busy), .sd_valid(cache_valid), .sd_dout(cache_dout), .sd_dout_pair(cache_dout_pair)
 	);
 
 	sdram_req w_req_inst (
