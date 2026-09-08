@@ -559,9 +559,15 @@ module tdragon2_core #(
 	// byte-for-byte, for every existing sim testbench.
 	wire rom_wait     = sel_rom     & cpu_read & ~rom_ready;
 	wire mainram_wait = sel_mainram & cpu_read & ~mainram_ready;
+	// Sprite DMA in progress: hold the CPU off main RAM (reads via DTACKn
+	// here, writes via the gated write enables below), as the real
+	// board's DMA bus request does — see video_macross2.sv's own
+	// sprite_dma_busy port comment for what goes wrong otherwise.
+	wire sprite_dma_busy;
+	wire mainram_dma_wait = sel_mainram & ~ASn & sprite_dma_busy;
 	wire bgvram_wait  = sel_bgvram  & cpu_read & ~bgvram_ready;
 	wire txvram_wait  = sel_txvram  & cpu_read & ~txvram_ready;
-	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | bgvram_wait | txvram_wait;
+	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | mainram_dma_wait | bgvram_wait | txvram_wait;
 
 	fx68k fx68k_inst (
 		.clk(clk_sys),
@@ -1231,7 +1237,7 @@ module tdragon2_core #(
 	generate
 	if (!HW_ROMS) begin : g_mainram_cpu_sim
 		always @(posedge clk_sys) begin
-			if (sel_mainram & cpu_write) begin
+			if (sel_mainram & cpu_write & ~sprite_dma_busy) begin
 				if (~UDSn) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
 				if (~LDSn) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
 			end
@@ -1249,8 +1255,8 @@ module tdragon2_core #(
 		// RAM, done in ~1 minute instead of ~50.
 		reg [14:0] mainram_addr_cpu_r;
 		always @(posedge clk_sys) begin
-			if (sel_mainram & cpu_write & ~UDSn) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
-			if (sel_mainram & cpu_write & ~LDSn) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
+			if (sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
+			if (sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
 			mainram_dout       <= mainram[mainram_addr_cpu];
 			mainram_addr_cpu_r <= mainram_addr_cpu;
 			mainram_ready      <= (mainram_addr_cpu_r == mainram_addr_cpu);
@@ -1857,7 +1863,7 @@ module tdragon2_core #(
 		.BASE_WORD_SPRITES(BASE_WORD_SPRITES)
 	) video (
 		.clk_sys(clk_sys), .reset(reset),
-		.sprite_dma_trigger(sprite_dma_trigger),
+		.sprite_dma_trigger(sprite_dma_trigger), .sprite_dma_busy(sprite_dma_busy),
 		.bgvram_addr(vid_bgvram_addr), .bgvram_data(vid_bgvram_dout),
 		.txvram_addr(vid_txvram_addr), .txvram_data(vid_txvram_dout),
 		.palette_addr(vid_palette_addr), .palette_data(vid_palette_dout),

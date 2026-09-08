@@ -587,6 +587,79 @@ The YM2203 (12MHz/8 = 1.5MHz) and Z80 (4MHz) enables were already right.
 `rtl/macross/macross_core.sv` (sim-only) clocks its OKI at 1MHz the same
 way and has not been checked against its own MAME config.
 
+## Lines through moving sprites, and flicker
+
+The draw FSM swapped the displayed sprite plane (`disp_buf`) the moment
+a pass finished — at whatever scanline the raster had reached. The top
+of that frame was therefore scanned from the previous plane and the
+bottom from the new one, cutting every sprite that had moved between
+the two passes at a swap line that wandered from frame to frame: a
+line through the sprite, and, frame after frame, an apparent flicker of
+the same sprites. Real hardware swaps its sprite buffer at vblank. The
+finished plane now waits (`pass_done`) and is swapped in at the
+sprite-DMA trigger (scanline 242, inside vblank); the next pass does not
+start until that swap, so it cannot overwrite the waiting plane, and a
+pass that outlasts a frame delays its swap by a frame instead of
+tearing.
+
+The actual cause of the lines on hardware turned out to be a third
+flaw, found only because the sim kept losing sprites on alternate
+frames after the swap fix: **the sprite plane was mis-indexed.** The
+array has 2 x 86016 entries but was indexed as `{plane, y*384+x}`, i.e.
+plane 1 at +131072, so plane 1's rows from 107 down (indices
+172032..217087) lay beyond the array. Verilator dropped those writes —
+the lower half of every other plane stayed empty, which is what the
+per-frame surveys showed (explosions near the top still drawn, the
+player near the bottom gone, alternating with the plane in use).
+Quartus built a 172032-deep RAM (210 M10K, "Address Too Wide") whose
+out-of-range addresses alias onto indices 0..45055 — the top 117 rows
+of plane 0 — so drawing plane 1 scribbled the new pass's sprites into
+the plane being displayed and its next clear wiped them mid-frame: the
+lines through moving sprites and the flicker. Fixed by indexing with a
+real offset (`plane * PLANE_PX + addr`) at all six sites; no extra RAM.
+The oracle work never saw it: the title screens have no sprites.
+
+A further, independent flaw showed up in the sim while verifying this:
+sprites vanishing on random frames. The vblank IRQ fires at scanline
+240 and the sprite-DMA trigger at 242, so the 68000's vblank handler is
+already running when the table is copied. MAME copies the whole table
+in an instant at 242 and the real board's DMA holds the CPU off the bus
+(BR/BGACK) for the ~200 µs it takes; this core's copy takes ~2.5
+scanlines while the CPU keeps running, and a fast enough CPU (the
+zero-latency sim; on hardware the slower CPU usually lost the race,
+which is why captures looked fine) gets to clearing or rebuilding the
+table before the copy is through, so that pass draws a mostly empty
+plane. Fixed the way the board does it: `sprite_dma_busy`
+(`snap_active`) holds DTACKn for the CPU's main-RAM accesses and gates
+the main-RAM write enables for the duration of the copy.
+
+With all of the above in place the sim still showed each demo frame
+twice while MAME advanced every frame. The 68000 was not the reason:
+its cycle-stamped PC trace shows the game's frame loop running exactly
+once per video frame at a steady ~31.8k instructions. The sprite pass
+was: at three cycles per pixel plus a ROM fetch per eight, walking every
+pixel of every tile in the table — including the many objects the game
+keeps entirely off-screen — it outlasted a frame in this scene even
+with zero-latency ROM, so the vblank-synchronous swap landed every
+second frame and the sim displayed only MAME's odd frames. Two changes
+in `S_SPR_CHECK`: the ROM byte address is now combinational from the
+pixel counters, so a cached byte (7 of every 8 pixels) is plotted and
+advanced in the same cycle; and a tile lying wholly outside the screen
+is skipped on its first pixel, as MAME's clipping does.
+
+Cost, stated plainly: sprites now display one frame after MAME and the
+real board. Both render sprites per scanline from the table copied at
+scanline 242 of the previous frame, so that table is on screen during
+the very next frame; this core draws a whole plane, which takes most of
+a frame, so the same table reaches the screen one frame later. In the
+sim the sprite-heavy demo frame therefore matches MAME's snapshot on
+94.7% of pixels at the same frame index (moving sprites one motion step
+behind; tilemaps, HUD and text identical) — the 96.7% of the tearing
+version was sprites reaching the screen sooner but cut in two. Removing
+the frame of latency would need a scanline (line-buffer) sprite
+renderer. Hardware: the same demo instant that showed the cut through a
+large explosion before renders it continuous now.
+
 ## Status
 
 `HW_ROMS=1` implemented for both games (`rtl/tdragon2/tdragon2_core.sv`

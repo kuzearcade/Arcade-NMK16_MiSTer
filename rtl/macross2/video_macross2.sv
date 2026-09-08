@@ -85,6 +85,16 @@ module video_macross2 #(
 	input             sd_b_ack,
 
 	input sprite_dma_trigger, // from nmk_irq: snapshot sprite RAM now
+	// High while the sprite-table copy is in progress. The real board's
+	// sprite DMA holds the 68000 off the bus for the ~200us the copy
+	// takes; MAME copies the whole table in an instant. This copy takes
+	// ~2.5 scanlines while the CPU keeps running — and the vblank IRQ
+	// (scanline 240) precedes the DMA trigger (242), so a fast CPU can be
+	// clearing or rebuilding the table before the copy is through, giving
+	// that frame a mostly empty sprite plane (seen in the zero-latency
+	// sim as sprites vanishing on random frames). The core stalls the
+	// CPU's main-RAM accesses on this signal (tdragon2_core.sv's DTACKn).
+	output sprite_dma_busy,
 
 	// register/RAM read ports into macross2_core's storage (dual-tap
 	// reads, macross2_core owns the arrays)
@@ -440,6 +450,7 @@ module video_macross2 #(
 	reg  [1:0] snap_phase;    // 0 request, 1 wait, 2 latch — same handshake timing as before
 	reg [11:0] snap_idx;
 	reg        snap_consume;  // one-cycle pulse from the draw FSM: it has taken snap_done_idx
+	assign sprite_dma_busy = snap_active;
 
 	// ------------------------------------------------------------------
 	// Sprite plane: double-buffered display/draw planes — 5-bit colour
@@ -471,7 +482,19 @@ module video_macross2 #(
 	// arrays shape: at 2048 entries each they're small enough to
 	// implement as flip-flops outright (no RAM inference needed), so
 	// they don't hit this wall and are left as they were.
-	reg [9:0] sprite_plane [0:2*SCREEN_W*SCREEN_H-1]; // {valid,colour[4:0],pix[3:0]} = 1+5+4=10 bits; index = {buffer_select, y*SCREEN_W+x}
+	// Index = plane * PLANE_PX + (y*SCREEN_W + x) — an OFFSET, not a bit
+	// concatenation. This array has 2 x 86016 entries, but it used to be
+	// indexed as {plane, y*384+x}, i.e. plane 1 at +131072: its rows from
+	// 107 down (indices 172032..217087) lay beyond the array. Verilator
+	// dropped those writes (the lower half of every other plane stayed
+	// empty: sprites vanishing on alternate frames in the sim); Quartus
+	// built a 172032-deep RAM whose out-of-range addresses alias onto
+	// indices 0..45055 — the top 117 rows of plane 0 — so drawing plane 1
+	// scribbled sprites into the plane being displayed and the next clear
+	// wiped them mid-frame: the lines through moving sprites and the
+	// flicker seen on hardware.
+	localparam integer PLANE_PX = SCREEN_W*SCREEN_H;
+	reg [9:0] sprite_plane [0:2*SCREEN_W*SCREEN_H-1]; // {valid,colour[4:0],pix[3:0]} = 1+5+4=10 bits
 	reg        disp_buf;
 
 	wire [16:0] rd_addr = rd_y * SCREEN_W + rd_x;
@@ -502,14 +525,14 @@ module video_macross2 #(
 	wire [9:0] spr_entry;
 	generate
 	if (!HW_ROMS) begin : g_composite_sim
-		wire [9:0] spr_entry_raw = sprite_plane[{disp_buf, rd_addr}];
+		wire [9:0] spr_entry_raw = sprite_plane[rd_addr + (disp_buf ? PLANE_PX : 0)];
 		assign spr_entry      = !rd_in_range ? 10'd0 : spr_entry_raw;
 		assign tx_opaque_al   = tx_opaque;
 		assign tile_rgb_al    = tile_rgb;
 		assign rd_in_range_al = rd_in_range;
 	end else begin : g_composite_hw
 		reg [9:0] spr_entry_r;
-		always @(posedge clk_sys) spr_entry_r <= sprite_plane[{disp_buf, rd_addr}];
+		always @(posedge clk_sys) spr_entry_r <= sprite_plane[rd_addr + (disp_buf ? PLANE_PX : 0)];
 		reg        tx_opaque_r;
 		reg [23:0] tile_rgb_r;
 		reg        rd_in_range_r;
@@ -548,8 +571,8 @@ module video_macross2 #(
 		S_SPR_HEAD    = 6,
 		S_SPR_UNIT    = 7,
 		S_SPR_CHECK   = 8,
-		S_SPR_WAIT    = 13, // HW_ROMS=1 only: real block until sprites_ready (see rom_cache1_byte above); at HW_ROMS=0, sprites_ready is tied 1'b1, so this is a single pass-through cycle, unchanged from before this state existed
-		S_SPR_CHECK2  = 9,
+		S_SPR_WAIT    = 13, // retired: S_SPR_CHECK waits in place
+		S_SPR_CHECK2  = 9,  // retired: folded into S_SPR_CHECK
 		S_SPR_PLOT    = 10, // retired: folded into S_SPR_CHECK2
 		S_SPR_NEXT    = 11, // retired: folded into S_SPR_CHECK2
 		S_DONE        = 12,
@@ -560,6 +583,18 @@ module video_macross2 #(
 	reg [4:0]  state;
 	reg [16:0] clr_idx;
 	reg        draw_buf;      // = ~disp_buf for the duration of one draw pass
+	// A finished plane is NOT displayed the moment its pass ends — that
+	// happened at whatever scanline the pass reached, so the top of the
+	// frame was scanned from the old plane and the bottom from the new
+	// one, cutting every sprite that had moved between the two passes at
+	// a swap line that wandered from frame to frame (seen on hardware as
+	// lines through moving sprites that also seemed to flicker). It waits
+	// in pass_done and is swapped in at the sprite-DMA trigger (scanline
+	// 242, inside vblank), as the real hardware's frame-synchronous buffer
+	// swap does; the next pass does not start until then, so it cannot
+	// overwrite the waiting plane. A pass that outlasts a frame just
+	// delays the swap by a frame instead of tearing.
+	reg        pass_done;
 	reg        draw_snap_idx; // = ~snap_cur, latched for the duration of one draw pass
 
 	integer s_slot;
@@ -568,8 +603,14 @@ module video_macross2 #(
 	integer s_tx, s_ty, s_px, s_py;
 	integer s_unit_code, s_pixel_x_base, s_pixel_y_base;
 	integer s_pix_nib;
-	reg [21:0] s_byte_addr;
-	assign spr_byte_addr = s_byte_addr;
+	// Sprite ROM byte address, COMBINATIONAL from the pixel counters so
+	// the cache's `ready` (which follows its address input) is valid in
+	// the same cycle the pixel is examined: one cycle per cached pixel in
+	// S_SPR_CHECK below, instead of a register-then-wait-then-plot
+	// sequence of three. Layout: 128 bytes per 16x16 unit, left half
+	// (cols 0-7) at +0, right half at +64, 4 bytes per row.
+	wire [31:0] spr_byte_addr_full = s_unit_code * 128 + ((s_px >= 8) ? 64 : 0) + s_py * 4 + ((s_px & 7) >> 1);
+	assign spr_byte_addr = spr_byte_addr_full[21:0];
 
 	// S_SPR_HEAD_RD: read snap_buf's 6 needed words (offsets 0,1,3,4,6,7
 	// within the current slot's 8-word record) for one sprite slot,
@@ -657,18 +698,19 @@ module video_macross2 #(
 		if (reset) begin
 			state    <= S_RESET_CLR0;
 			clr_idx  <= 17'd0;
-			disp_buf <= 1'b0;
+			disp_buf  <= 1'b0;
+			pass_done <= 1'b0;
 		end else begin
 			case (state)
 				S_RESET_CLR0: begin
-					sprite_plane[{1'b0, clr_idx}] <= 10'd0;
+					sprite_plane[clr_idx] <= 10'd0;
 					if (clr_idx == SCREEN_W*SCREEN_H-1) begin
 						clr_idx <= 17'd0;
 						state <= S_RESET_CLR1;
 					end else clr_idx <= clr_idx + 17'd1;
 				end
 				S_RESET_CLR1: begin
-					sprite_plane[{1'b1, clr_idx}] <= 10'd0;
+					sprite_plane[clr_idx + PLANE_PX] <= 10'd0;
 					if (clr_idx == SCREEN_W*SCREEN_H-1) state <= S_IDLE;
 					else clr_idx <= clr_idx + 17'd1;
 				end
@@ -676,7 +718,7 @@ module video_macross2 #(
 				S_IDLE: begin
 					// Start a pass on the latest completed snapshot, never while
 					// a copy is in flight (see the snapshot engine above).
-					if (snap_ready && !snap_active) begin
+					if (snap_ready && !snap_active && !pass_done) begin
 						draw_buf      <= ~disp_buf;
 						draw_snap_idx <= snap_done_idx;
 						snap_consume  <= 1'b1;
@@ -686,7 +728,7 @@ module video_macross2 #(
 				end
 
 				S_CLEAR: begin
-					sprite_plane[{draw_buf, clr_idx}] <= 10'd0;
+					sprite_plane[clr_idx + (draw_buf ? PLANE_PX : 0)] <= 10'd0;
 					if (clr_idx == SCREEN_W*SCREEN_H-1) begin
 						s_slot <= 0;
 						clk_budget <= 0;
@@ -779,74 +821,82 @@ module video_macross2 #(
 					state <= S_SPR_CHECK;
 				end
 
+				// One state per pixel. The ROM byte address is combinational
+				// from (s_unit_code, s_px, s_py) — see spr_byte_addr — so when
+				// the byte is already in the cache (sprites_ready, 7 of every 8
+				// pixels with the 4-byte cache line) the pixel is plotted and
+				// the counters advance in this same cycle; otherwise the state
+				// simply repeats until the fetch lands. Tiles that lie wholly
+				// outside the screen are skipped on their first pixel (MAME
+				// clips them too); the game keeps plenty of off-screen objects
+				// in its table, and walking their 256 pixels each (and fetching
+				// their ROM data) was a large part of why a pass could outlast
+				// a frame, which halved the sprite update rate.
 				S_SPR_CHECK: begin
-					begin : spr_check_blk
-						integer half_offset, col_local, byte_addr;
-						half_offset = (s_px >= 8) ? 64 : 0;
-						col_local = s_px & 7;
-						byte_addr = s_unit_code * 128 + half_offset + s_py * 4 + (col_local >> 1);
-						s_byte_addr <= byte_addr[21:0];
-					end
-					state <= S_SPR_WAIT;
-				end
-				// Real blocking wait for the fetched byte (see rom_cache1_byte
-				// above) — at HW_ROMS=0 sprites_ready is tied 1'b1, so this
-				// exits after exactly one cycle, the same single settle cycle
-				// this FSM already had before HW_ROMS existed.
-				S_SPR_WAIT: begin
-					if (sprites_ready) state <= S_SPR_CHECK2;
-				end
-				// Plot (if opaque) and advance in ONE cycle — the former
-				// S_SPR_PLOT / S_SPR_NEXT states folded in: three cycles per
-				// pixel when the byte is cached instead of four or five,
-				// which is what bounds how many sprite tiles a pass can draw
-				// per frame on real hardware.
-				S_SPR_CHECK2: begin
-					s_pix_nib = tile_nibble(sprites_byte, s_px[0]);
-					begin : spr_plot_blk
+					begin : spr_pix_blk
 						integer sx, sy;
 						reg [16:0] plot_addr;
-						sx = (s_pixel_x_base + s_px) % 512; // wrap per pixel: a sprite straddling the
-						sy = (s_pixel_y_base + s_py) % 512; // top/left edge shows its visible part
-						plot_addr = sy * SCREEN_W + sx;
-						if (s_pix_nib != 15 && sx < SCREEN_W && sy < SCREEN_H) begin
-							sprite_plane[{draw_buf, plot_addr}] <= {1'b1, s_colour[4:0], s_pix_nib[3:0]};
+						reg        tile_visible, advance;
+						integer    px_eff, py_eff; // pixel position the advance logic sees (forced to the tile's last pixel when skipping)
+						tile_visible = ((s_pixel_x_base < SCREEN_W) || (s_pixel_x_base > 512 - 16)) &&
+						               ((s_pixel_y_base < SCREEN_H) || (s_pixel_y_base > 512 - 16));
+						advance = 1'b0; px_eff = s_px; py_eff = s_py;
+						if (!tile_visible) begin
+							// skip the whole tile: behave as if its last pixel was just done
+							px_eff = 15; py_eff = 15; advance = 1'b1;
+						end else if (sprites_ready) begin
+							s_pix_nib = tile_nibble(sprites_byte, s_px[0]);
+							sx = (s_pixel_x_base + s_px) % 512; // wrap per pixel: a sprite straddling the
+							sy = (s_pixel_y_base + s_py) % 512; // top/left edge shows its visible part
+							plot_addr = sy * SCREEN_W + sx;
+							if (s_pix_nib != 15 && sx < SCREEN_W && sy < SCREEN_H) begin
+								sprite_plane[plot_addr + (draw_buf ? PLANE_PX : 0)] <= {1'b1, s_colour[4:0], s_pix_nib[3:0]};
+							end
+							advance = 1'b1;
 						end
-					end
-					if (s_px == 15) begin
-						s_px <= 0;
-						if (s_py == 15) begin
-							s_py <= 0;
-							if (s_tx == s_w) begin
-								s_tx <= 0;
-								if (s_ty == s_h) begin
-									if (s_slot == 255) state <= S_DONE;
-									else begin s_slot <= s_slot + 1; state <= S_SPR_HEAD; end
+						if (advance) begin
+							if (px_eff == 15) begin
+								s_px <= 0;
+								if (py_eff == 15) begin
+									s_py <= 0;
+									if (s_tx == s_w) begin
+										s_tx <= 0;
+										if (s_ty == s_h) begin
+											if (s_slot == 255) state <= S_DONE;
+											else begin s_slot <= s_slot + 1; state <= S_SPR_HEAD; end
+										end else begin
+											s_ty <= s_ty + 1;
+											state <= S_SPR_UNIT;
+										end
+									end else begin
+										s_tx <= s_tx + 1;
+										state <= S_SPR_UNIT;
+									end
 								end else begin
-									s_ty <= s_ty + 1;
-									state <= S_SPR_UNIT;
+									s_py <= s_py + 1;
 								end
 							end else begin
-								s_tx <= s_tx + 1;
-								state <= S_SPR_UNIT;
+								s_px <= s_px + 1;
 							end
-						end else begin
-							s_py <= s_py + 1;
-							state <= S_SPR_CHECK;
 						end
-					end else begin
-						s_px <= s_px + 1;
-						state <= S_SPR_CHECK;
 					end
 				end
 
 				S_DONE: begin
-					disp_buf <= draw_buf;
+					pass_done <= 1'b1;
 					state <= S_IDLE;
 				end
 
 				default: state <= S_IDLE;
 			endcase
+
+			// Frame-synchronous plane swap (see pass_done above). Written
+			// after the case so a pass finishing in the trigger's own cycle
+			// is swapped in at once.
+			if (sprite_dma_trigger && (pass_done || state == S_DONE)) begin
+				disp_buf  <= draw_buf;
+				pass_done <= 1'b0;
+			end
 		end
 	end
 
