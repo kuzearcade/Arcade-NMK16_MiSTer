@@ -44,10 +44,9 @@ output_files_sdramtest/
 db/
 incremental_db/
 greybox_tmp/
-# .rbf bitstreams are regenerable build artifacts (quartus_map/fit/asm
-# from committed source) — releases/ keeps a local copy for actual use
-# on hardware, but only the hand-authored .mra files are committed.
-releases/*.rbf
+# releases/ holds the hand-authored .mra files AND the current .rbf
+# bitstream for each core, copied there from output_files/ after every
+# build so hardware users get a matching pair without running Quartus.
 /build_id.v
 /jtag.cdf
 sim/rtl/*/.cnxerr
