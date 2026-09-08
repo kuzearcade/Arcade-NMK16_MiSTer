@@ -127,7 +127,22 @@ module video_macross2 #(
 
 	localparam integer SCREEN_W = 384;
 	localparam integer SCREEN_H = 224;
-	localparam integer VIDEOSHIFT = 92; // set_scrolldx(28+64,28+64), see video_gunnail.sv's own header
+	localparam integer VIDEOSHIFT = 92; // set_scrolldx(28+64,28+64) and the sprite generator's videoshift(28+64) — both in MAME BITMAP coordinates, see BITMAP_X0 below
+	// MAME positions tilemaps and sprites in BITMAP coordinates: the bitmap
+	// spans the whole raster (512x278) and the visible area starts at
+	// bitmap (28,16) — the hblank/vblank widths. scrolldx(92) therefore
+	// means tilemap x = bitmap_x - 92 + scrollx = screen_x + 28 - 92 +
+	// scrollx (hence MAME's own "leftmost 64 pixels have to be retrieved
+	// from the other side" comment), tilemap y = screen_y + 16 + scrolly,
+	// and a sprite at X lands at bitmap X + 92 = screen X + 64. rd_x/rd_y
+	// here are SCREEN coordinates (0..383 / 0..223), so they are converted
+	// to bitmap coordinates before any of that math. Before this
+	// conversion the whole picture sat 28 pixels right and 16 lines down
+	// of MAME's (measured: shifting a sim frame by (-28,-16) matched MAME's
+	// snapshot on 96.5% of all pixels), pushing the rightmost 28 columns
+	// and bottom 16 rows off-screen — see docs/hw-bringup.md.
+	localparam integer BITMAP_X0 = 28;
+	localparam integer BITMAP_Y0 = 16;
 	localparam integer MAX_SPRITE_CLOCK = 134656; // 512*263, set_max_sprite_clock
 
 	// Palette bases — see header. Sprite is 5-bit (32 colours), not 4-bit.
@@ -306,8 +321,11 @@ module video_macross2 #(
 	// are fetched for the right line. Unused at HW_ROMS=0.
 	wire [8:0] x_look = rd_x + 9'd16;
 
-	wire [12:0] bg_line_x = (rd_x + 13'd4096 - VIDEOSHIFT[12:0] + bg_xscroll[12:0]) % 13'd4096;
-	wire [12:0] bg_line_y = (rd_y + 13'd512 + bg_yscroll[12:0]) % 13'd512;
+	wire [9:0]  bm_x      = rd_x + BITMAP_X0[9:0];   // bitmap x of the pixel being drawn
+	wire [9:0]  bm_x_look = x_look + BITMAP_X0[9:0]; // ... and of the lookahead pixel
+	wire [8:0]  bm_y      = rd_y + BITMAP_Y0[8:0];
+	wire [12:0] bg_line_x = (bm_x + 13'd4096 - VIDEOSHIFT[12:0] + bg_xscroll[12:0]) % 13'd4096;
+	wire [12:0] bg_line_y = (bm_y + 13'd512 + bg_yscroll[12:0]) % 13'd512;
 	wire [7:0]  bg_col = bg_line_x[11:4];
 	wire [3:0]  bg_px  = bg_line_x[3:0];
 	wire [4:0]  bg_row = bg_line_y[8:4];
@@ -318,7 +336,7 @@ module video_macross2 #(
 
 	// Same derivation for the lookahead pixel (same line, so the same
 	// row/py). HW_ROMS=1 drives bgvram_addr from this one.
-	wire [12:0] bgl_line_x = (x_look + 13'd4096 - VIDEOSHIFT[12:0] + bg_xscroll[12:0]) % 13'd4096;
+	wire [12:0] bgl_line_x = (bm_x_look + 13'd4096 - VIDEOSHIFT[12:0] + bg_xscroll[12:0]) % 13'd4096;
 	wire [7:0]  bgl_col      = bgl_line_x[11:4];
 	wire [3:0]  bgl_half_col = bgl_line_x[3:0];
 	wire [14:0] bg_vram_addr_look = {tilerambank, bg_row[4], bgl_col, bg_row[3:0]};
@@ -346,9 +364,17 @@ module video_macross2 #(
 	// header, video_gunnail.sv's own sizing), no scroll beyond the
 	// shared dx, transparent pen 15.
 	// ------------------------------------------------------------------
-	wire [9:0] tx_sum = {2'b0, rd_x[7:0]} + 10'd512 - VIDEOSHIFT[9:0];
+	// Full 9-bit rd_x: the TX tilemap is 64 tiles = 512 logical px wide
+	// and the screen is 384 wide, so screen x 256..383 maps to logical
+	// (x+420)%512 = 164..255. Truncating rd_x to 8 bits (as this once did,
+	// inherited from video_gunnail.sv) made those columns repeat logical
+	// 420..511 — the right third of the text layer was a copy of the left
+	// third (a second NMK logo on tdragon2's title, no HUD column, Macross
+	// II's "SPECIAL THANKS" cut at x=256). Found by comparing real-hardware
+	// captures against MAME snapshots, see docs/hw-bringup.md.
+	wire [9:0] tx_sum = bm_x + 10'd512 - VIDEOSHIFT[9:0];
 	wire [8:0] tx_line_x = tx_sum[8:0]; // mod 512 (logical width), truncation is the modulo
-	wire [7:0] tx_line_y = rd_y;        // 256 logical height, no scroll — direct
+	wire [7:0] tx_line_y = bm_y[7:0];   // 256 logical height, no scroll — bitmap y directly
 	wire [5:0] tx_col = tx_line_x[8:3]; // 6 bits — 64 columns
 	wire [2:0] tx_px  = tx_line_x[2:0];
 	wire [4:0] tx_row = tx_line_y[7:3];
@@ -359,7 +385,7 @@ module video_macross2 #(
 
 	// Lookahead-pixel derivation (same line): HW_ROMS=1 drives txvram_addr
 	// from this one and fetches fgl_byte_addr — see the BG block above.
-	wire [9:0]  txl_sum    = {2'b0, x_look[7:0]} + 10'd512 - VIDEOSHIFT[9:0];
+	wire [9:0]  txl_sum    = bm_x_look + 10'd512 - VIDEOSHIFT[9:0];
 	wire [8:0]  txl_line_x = txl_sum[8:0];
 	wire [5:0]  txl_col    = txl_line_x[8:3];
 	wire [2:0]  txl_px     = txl_line_x[2:0];
@@ -675,8 +701,9 @@ module video_macross2 #(
 							s_h <= h;
 							s_code <= head_w3;
 							s_colour <= head_w7[4:0];
-							s_sx <= (int'(head_w4) & 9'h1ff) + VIDEOSHIFT;
-							s_sy <= (int'(head_w6) & 9'h1ff);
+							// bitmap X+92 / Y, converted to screen coordinates (see BITMAP_X0)
+							s_sx <= (int'(head_w4) & 9'h1ff) + VIDEOSHIFT - BITMAP_X0;
+							s_sy <= ((int'(head_w6) & 9'h1ff) + 512 - BITMAP_Y0) % 512;
 							s_ty <= 0; s_tx <= 0; s_py <= 0; s_px <= 0;
 							state <= S_SPR_UNIT;
 						end
@@ -718,8 +745,8 @@ module video_macross2 #(
 					begin : spr_plot_blk
 						integer sx, sy;
 						reg [16:0] plot_addr;
-						sx = s_pixel_x_base + s_px;
-						sy = s_pixel_y_base + s_py;
+						sx = (s_pixel_x_base + s_px) % 512; // wrap per pixel: a sprite straddling the
+						sy = (s_pixel_y_base + s_py) % 512; // top/left edge shows its visible part
 						plot_addr = sy * SCREEN_W + sx;
 						if (sx < SCREEN_W && sy < SCREEN_H) begin
 							sprite_plane[{draw_buf, plot_addr}] <= {1'b1, s_colour[4:0], s_pix_nib[3:0]};

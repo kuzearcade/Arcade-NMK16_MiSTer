@@ -204,7 +204,7 @@ module video_raphero #(
 	// gunnail.sv's own sizing), no scroll beyond the shared dx,
 	// transparent pen 15.
 	// ------------------------------------------------------------------
-	wire [9:0] tx_sum = {2'b0, rd_x[7:0]} + 10'd512 - VIDEOSHIFT[9:0];
+	wire [9:0] tx_sum = {1'b0, rd_x} + 10'd512 - VIDEOSHIFT[9:0]; // full 9-bit rd_x: 384-wide screen over a 512-wide TX tilemap (see video_macross2.sv)
 	wire [8:0] tx_line_x = tx_sum[8:0]; // mod 512 (logical width), truncation is the modulo
 	wire [7:0] tx_line_y = rd_y;        // 256 logical height, no scroll — direct
 	wire [5:0] tx_col = tx_line_x[8:3]; // 6 bits — 64 columns

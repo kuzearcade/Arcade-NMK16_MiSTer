@@ -446,6 +446,81 @@ Verilator run and real hardware, read out as a 16px/bit barcode — was
 reliable end to end and is the recommended first tool for any future
 real-hardware divergence.
 
+## Real-hardware picture vs MAME: why it looked offset and cropped
+
+Compared real-hardware captures of both games against snapshots from the
+local MAME build (`mame -norotate -str N`, i.e. the raw 384x224
+framebuffer at N seconds). MAME's display parameters for these boards —
+384x224 visible, htotal 512 with the active area at 28..411, vtotal 278
+with the active area at 16..239, 8MHz pixel clock — are exactly the
+core's `video_timing.sv` constants and `rd_x = hcount - 28`, and the
+captured picture is centred in the output, so neither the raster timing
+nor the placeholder HSync/VSync placement moves the image. Four
+separate things did, the first two of which are core bugs:
+
+0. **The whole picture sat 28 pixels right and 16 lines down of MAME's.**
+   Measured by cross-correlating a settled reference-sim title frame
+   against the MAME snapshot: a shift of (-28, -16) matches on 83,015 of
+   86,016 pixels for tdragon2 and 79,850 for Macross II — i.e. the entire
+   scene, tilemaps and sprites alike, was displaced by exactly the
+   blanking widths, pushing the rightmost 28 columns and bottom 16 rows
+   off-screen and wrapping other-side content into the left/top margin
+   (the "junk strip" on the left of every capture). Cause: MAME
+   positions tilemaps and sprites in BITMAP coordinates, whose visible
+   area starts at (28,16); `scrolldx(92)` and the sprite `videoshift(92)`
+   are bitmap offsets, so tilemap x = screen_x + 28 - 92 + scrollx (which
+   is what MAME's own "leftmost 64 pixels have to be retrieved from the
+   other side" comment describes), tilemap y = screen_y + 16 + scrolly,
+   and a sprite at X lands at screen X + 64. The core applied 92 to the
+   screen-relative `rd_x` and nothing to `rd_y`. Fixed in
+   `video_macross2.sv` by converting `rd_x`/`rd_y` (and the lookahead x)
+   to bitmap coordinates (`BITMAP_X0`/`BITMAP_Y0`) before that math, and
+   giving sprite pixel positions a proper mod-512 wrap so a sprite
+   straddling the top or left edge shows its visible part. With both
+   fixes the HW_ROMS=0 reference sim's settled title frame is
+   pixel-identical to MAME's snapshot (86,016 of 86,016). This had
+   survived the oracle work because frame-level pixel rendering was the
+   one thing never compared against MAME (see the Tier 1 notes); the
+   sibling sim-only 384-wide modules (`video_gunnail.sv`,
+   `video_gunnailb.sv`, `video_powerins.sv`, `video_raphero.sv`) almost
+   certainly carry the same offset and have not been touched for it.
+1. **The TX (text) layer's right third was a copy of its left third.**
+   The TX tilemap is 64 tiles = 512 logical pixels wide with
+   `scrolldx(92)`, so screen x maps to logical `(x+420) mod 512` across
+   all 384 columns. `video_macross2.sv` (inherited from
+   `video_gunnail.sv`) computed that from `rd_x[7:0]`, so columns
+   256..383 repeated logical 420..511 — the content of screen x 0..127.
+   Symptoms, all confirmed side by side with MAME (on top of the global
+   offset above): tdragon2's title
+   showed the NMK logo and copyright twice and lost the "THUNDER DRAGON
+   2" lettering on the right; tdragon2's right-edge HUD column
+   ("PLAYER-1", "HIGH", "PLAYER-2", at x≈365..380 in the unrotated
+   framebuffer) was missing; Macross II showed its logo twice, "INSERT
+   COIN" as "INSERT C" and "SPECIAL THANKS" as "SPECIAL THAN". The same
+   duplication was present in the HW_ROMS=0 reference sim frames, i.e.
+   the earlier oracle comparison never covered the text layer's right
+   third. Fixed by using the full 9-bit `rd_x` (and `x_look`) in the TX
+   column math, here and in the four sibling 384-wide modules
+   (`video_gunnail.sv`, `video_gunnailb.sv`, `video_powerins.sv`,
+   `video_raphero.sv`); the 256-wide modules have the same expression
+   but never see `rd_x >= 256`, so they are unaffected.
+2. **tdragon2 is a vertical game and the core does not rotate it.** MAME
+   rotates its framebuffer 270° (the `rotate="270"` in `-listxml`); the
+   core outputs the raw landscape framebuffer, so on hardware the game
+   appears sideways with its HUD text running vertically. The .mra's
+   `<rotation>` tag does not rotate video by itself on MiSTer — the core
+   has to do it, and the framework ships the standard way in
+   `sys/arcade_video.v` (`screen_rotate`: a DDR3-backed rotating
+   framebuffer driven from `VGA_*`, exposing `FB_*`/`DDRAM_*` which
+   `Macross2.sv` currently ties off). Wiring that in, with the usual
+   "Orientation" OSD option, is the remaining follow-up.
+3. **The black borders are the MiSTer's own scaler setting.** The box's
+   `MiSTer.ini` has `vscale_mode=1` (integer vertical scale only): 224
+   lines fit 1080 at 4x = 896 lines (83% of the height), and the 4:3
+   aspect then gives 1195 of 1920 columns (62%) — exactly the 480x448
+   region measured in the 576x720 captures. That is a user preference,
+   not core behaviour; `vscale_mode=0` fills the height.
+
 ## Status
 
 `HW_ROMS=1` implemented for both games (`rtl/tdragon2/tdragon2_core.sv`
