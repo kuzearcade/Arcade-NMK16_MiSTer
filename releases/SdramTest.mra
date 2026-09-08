@@ -1,0 +1,36 @@
+<!--
+  Not a game — loader for SdramTest.rbf, a minimal standalone
+  real-hardware diagnostic core (see SdramTest.sv's own header). Loads
+  a single already-verified ROM part (tdragon2.zip's own 1.bin, 128KB,
+  CRC d488aafa — same file this project's own releases/tdragon2.mra
+  already uses and cross-checked against mame_roms/tdragon2.zip)
+  purely to exercise a REAL ioctl_download event, so this core can test
+  rtl/rom_cache1.sv's own real-time read-back path (not just the raw
+  rtl/sdram_req.sv path SdramTest.sv's own first test phase already
+  validated). Deliberately NOT a tiny file: an earlier version of this
+  .mra used 9.bpr (256 bytes), and Phase 2 never observed ioctl_download
+  going high at all — the leading hypothesis is that such a tiny
+  transfer completes within microseconds, comfortably inside the window
+  this core's own reset stays asserted waiting for pll_locked (a real
+  altpll typically takes tens of microseconds to lock), so the FSM
+  missed the whole download before it ever came out of reset. 128KB at
+  any plausible real HPS-bridge transfer rate should take comfortably
+  longer than any realistic PLL lock time, testing that hypothesis
+  without weakening the reset architecture itself. The core computes a
+  16-bit rotate-XOR checksum over the 65536 words read back through
+  rom_cache1 and compares it against 0xC2C7, precomputed directly from
+  1.bin's own real byte content.
+-->
+<misterromdescription>
+  <name>SdramTest</name>
+  <mratimestamp>202609070000</mratimestamp>
+  <mameversion>0270</mameversion>
+  <setname>sdramtest</setname>
+  <year>1993</year>
+  <manufacturer>NMK</manufacturer>
+  <category>Diagnostic</category>
+  <rbf>SdramTest</rbf>
+  <rom index="0" zip="tdragon2.zip" md5="none">
+    <part crc="d488aafa" name="1.bin"/>
+  </rom>
+</misterromdescription>

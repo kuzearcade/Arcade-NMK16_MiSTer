@@ -18,18 +18,38 @@
 // specific 4/5 ratio) — not a config mismatch, so it's given more time
 // to finish this time rather than assumed hung.
 module pll
+#(
+	// CLK1_PHASE_SHIFT: picoseconds, altpll's own clkN_phase_shift
+	// string format (e.g. "-3000" = -3ns). Default "0" makes outclk_1
+	// bit-identical to outclk_0 (same divide/multiply, zero shift) —
+	// harmless/inert for every existing consumer that leaves outclk_1
+	// unconnected. See this module's own SEPARATE_SDRAM_CLK-consumer
+	// comment in rtl/sdram.sv for why a second, phase-shiftable output
+	// exists at all: this project's own real-hardware bring-up work
+	// found genuine concurrent-multi-port SDRAM contention corrupts
+	// data in a way two purely-digital timing-margin fixes
+	// (RASCAS_DELAY, PRECHARGE_DELAY) both failed to resolve, and this
+	// hand-written PLL (see this file's own top header) never
+	// implemented the standard "give the SDRAM chip's own clock pin a
+	// separate, board-tuned phase shift" technique most working MiSTer
+	// SDRAM designs use — outclk_1 exists to test that directly.
+	parameter CLK1_PHASE_SHIFT = "0"
+)
 (
 	input  refclk,
 	input  rst,
 	output outclk_0,
+	output outclk_1,
 	output locked
 );
 
 	wire [4:0] sub_wire0;
 	wire       clk_out = sub_wire0[0];
+	wire       clk1_out = sub_wire0[1];
 	wire       locked_out;
 
 	assign outclk_0 = clk_out;
+	assign outclk_1 = clk1_out;
 	assign locked   = locked_out;
 
 	altpll #(
@@ -38,6 +58,10 @@ module pll
 		.clk0_duty_cycle(50),
 		.clk0_multiply_by(4),
 		.clk0_phase_shift("0"),
+		.clk1_divide_by(5),
+		.clk1_duty_cycle(50),
+		.clk1_multiply_by(4),
+		.clk1_phase_shift(CLK1_PHASE_SHIFT),
 		.compensate_clock("CLK0"),
 		.inclk0_input_frequency(20000),
 		.intended_device_family("Cyclone V"),
@@ -70,6 +94,7 @@ module pll
 		.port_scanread("PORT_UNUSED"),
 		.port_scanwrite("PORT_UNUSED"),
 		.port_clk0("PORT_USED"),
+		.port_clk1("PORT_USED"),
 		.width_clock(5)
 	) altpll_component (
 		.areset(rst),

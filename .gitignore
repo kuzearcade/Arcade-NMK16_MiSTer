@@ -40,6 +40,7 @@ sim/rtl/*/*.raw
 
 # Quartus build output and scratch state
 output_files/
+output_files_sdramtest/
 db/
 incremental_db/
 greybox_tmp/

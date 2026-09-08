@@ -1,0 +1,9 @@
+# SdramTest RBF — minimal standalone real-hardware SDRAM diagnostic
+# core. See SdramTest.sv's own header for what this exists to isolate.
+set_global_assignment -name SYSTEMVERILOG_FILE SdramTest.sv
+set_global_assignment -name VERILOG_FILE rtl/pll.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_req.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache1.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/bjtwin/video_timing.sv
+set_global_assignment -name SDC_FILE SdramTest.sdc
