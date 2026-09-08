@@ -23,7 +23,7 @@ SOURCES := tdragon2_hw_top.sv $(CORE_DIR)/tdragon2_core.sv $(MACROSS2_DIR)/video
            $(NMK112_DIR)/nmk112.sv $(BJTWIN_DIR)/video_timing.sv $(NMK_IRQ_DIR)/nmk_irq.sv \
            $(T80_DIR)/T80s.v $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
            $(RTL_DIR)/sdram.sv $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv \
-           $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache1_byte.sv $(MODEL_DIR)/sdram_model.sv
+           $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache1_byte.sv $(RTL_DIR)/tile_prefetch_byte.sv $(MODEL_DIR)/sdram_model.sv
 
 .PHONY: all roms run clean
 

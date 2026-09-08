@@ -50,9 +50,15 @@ int main(int argc, char **argv) {
 	if (argc > 1) g_run_cycles = strtoull(argv[1], nullptr, 0);
 	Vmacross2_hw_top top{&contextp};
 
+	// One clk_sys cycle = three clk_ram cycles (120MHz-equivalent SDRAM
+	// clock vs. the real 96MHz — see tb_tdragon2_hw.cpp for the rationale).
 	auto tick = [&]() {
 		top.clk_sys = 0; top.eval();
-		top.clk_sys = 1; top.eval();
+		for (int k = 0; k < 3; k++) {
+			top.clk_ram = 1; top.eval();
+			top.clk_ram = 0; top.eval();
+			if (k == 1) { top.clk_sys = 1; top.eval(); }
+		}
 	};
 
 	top.reset = 1;

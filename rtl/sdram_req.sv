@@ -58,6 +58,18 @@ module sdram_req
 	reg [15:0] din_r;
 	reg        req_prev;
 
+	// Clock-domain crossing: rtl/sdram.sv may run on a faster clock than
+	// this consumer (see its own CDC comment) — its toggle-style ack is
+	// brought into this domain through a 2-flop synchronizer. The
+	// payload direction is safe by construction: addr_r/we_r/din_r are
+	// held stable from the cycle sdram_req toggles until ack returns, and
+	// sdram.sv only samples them after ITS synchronizer has seen the
+	// toggle. Read data is safe because sdram.sv now latches it into a
+	// per-port register that only this port's next transaction can change.
+	reg [1:0]  ack_s = 2'b00;
+	always @(posedge clk) ack_s <= {ack_s[0], sdram_ack};
+	wire       ack_i = ack_s[1];
+
 	assign busy       = pending;
 	assign sdram_addr = addr_r;
 	assign sdram_wrl  = we_r & wrl_r;
@@ -91,7 +103,7 @@ module sdram_req
 			din_r     <= din;
 			sdram_req <= ~sdram_req;
 			pending   <= 1'b1;
-		end else if (pending && (sdram_ack == sdram_req)) begin
+		end else if (pending && (ack_i == sdram_req)) begin
 			pending <= 1'b0;
 			valid   <= 1'b1;
 		end

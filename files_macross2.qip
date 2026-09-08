@@ -23,6 +23,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_req.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache1.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache1_byte.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tile_prefetch_byte.sv
 
 set_global_assignment -name VERILOG_FILE rtl/third_party_gen/t80/T80s.v
 

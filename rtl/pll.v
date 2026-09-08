@@ -19,20 +19,18 @@
 // to finish this time rather than assumed hung.
 module pll
 #(
-	// CLK1_PHASE_SHIFT: picoseconds, altpll's own clkN_phase_shift
-	// string format (e.g. "-3000" = -3ns). Default "0" makes outclk_1
-	// bit-identical to outclk_0 (same divide/multiply, zero shift) —
-	// harmless/inert for every existing consumer that leaves outclk_1
-	// unconnected. See this module's own SEPARATE_SDRAM_CLK-consumer
-	// comment in rtl/sdram.sv for why a second, phase-shiftable output
-	// exists at all: this project's own real-hardware bring-up work
-	// found genuine concurrent-multi-port SDRAM contention corrupts
-	// data in a way two purely-digital timing-margin fixes
-	// (RASCAS_DELAY, PRECHARGE_DELAY) both failed to resolve, and this
-	// hand-written PLL (see this file's own top header) never
-	// implemented the standard "give the SDRAM chip's own clock pin a
-	// separate, board-tuned phase shift" technique most working MiSTer
-	// SDRAM designs use — outclk_1 exists to test that directly.
+	// outclk_1 = 96MHz (50MHz * 48/25), the SDRAM controller clock —
+	// rtl/sdram.sv's own timing constants (RASCAS_DELAY, CAS_LATENCY,
+	// the default REFRESH_CYCLES) were tuned for ~96MHz, and at this
+	// project's original 40MHz single-clock design the two 4bpp tilemap
+	// layers alone needed ~67% of the SDRAM bus per scanline through
+	// single-word transactions and could not be fed in time (visible as
+	// horizontal smearing on real hardware and in the HW_ROMS=1 sim) —
+	// see docs/hw-bringup.md. Both outputs share one VCO. CLK1_PHASE_SHIFT
+	// (picoseconds, altpll's own clkN_phase_shift string format) is kept
+	// tunable for board-level SDRAM_CLK trace-delay compensation; "0"
+	// matches what Arcade-TMNT_MiSTer runs this same controller at 96MHz
+	// with.
 	parameter CLK1_PHASE_SHIFT = "0"
 )
 (
@@ -58,9 +56,9 @@ module pll
 		.clk0_duty_cycle(50),
 		.clk0_multiply_by(4),
 		.clk0_phase_shift("0"),
-		.clk1_divide_by(5),
+		.clk1_divide_by(25),
 		.clk1_duty_cycle(50),
-		.clk1_multiply_by(4),
+		.clk1_multiply_by(48),
 		.clk1_phase_shift(CLK1_PHASE_SHIFT),
 		.compensate_clock("CLK0"),
 		.inclk0_input_frequency(20000),

@@ -126,11 +126,13 @@ wire [24:0] ioctl_addr = ioctl_addr_full[24:0];
 
 wire clk_sys;
 wire pll_locked;
+wire clk_ram;    // 96MHz SDRAM controller clock — see rtl/pll.v's own outclk_1 comment
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_sys),
+	.outclk_1(clk_ram),
 	.locked(pll_locked)
 );
 
@@ -229,12 +231,18 @@ wire        sdram_ready;
 // retention spec — confirmed to cause real data corruption on actual
 // hardware via SdramTest.sv, a standalone diagnostic core built during
 // this session's own real-hardware black-screen investigation.
-sdram #(.REFRESH_CYCLES(10'd240)) sdram_inst
+// The controller runs on the 96MHz clk_ram (see rtl/pll.v's own outclk_1
+// comment); every consumer stays on clk_sys and reaches it through
+// rtl/sdram_req.sv, which carries the clock crossing together with
+// rtl/sdram.sv's own req synchronizers. REFRESH_CYCLES=740 = 7.7us @
+// 96MHz, inside the 7.8125us JEDEC row-refresh interval (the earlier 240
+// was the same interval at 40MHz).
+sdram #(.REFRESH_CYCLES(10'd740)) sdram_inst
 (
 	.SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
 	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
 	.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CLK(SDRAM_CLK), .SDRAM_CKE(SDRAM_CKE), .ready(sdram_ready),
-	.init(~pll_locked), .clk(clk_sys), .prio_mode(2'd0),
+	.init(~pll_locked), .clk(clk_ram), .prio_mode(2'd0),
 	.addr0(sd0_addr), .wrl0(sd0_wrl), .wrh0(sd0_wrh), .din0(sd0_din), .dout0(sd0_dout), .req0(sd0_req), .ack0(sd0_ack),
 	.addr1(sd1_addr), .wrl1(1'b0), .wrh1(1'b0), .din1('0), .dout1(sd1_dout), .req1(sd1_req), .ack1(sd1_ack),
 	.addr2(sd2_addr), .wrl2(sd2_wrl), .wrh2(sd2_wrh), .din2(sd2_din), .dout2(sd2_dout), .req2(sd2_req), .ack2(sd2_ack),

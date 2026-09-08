@@ -51,6 +51,11 @@ module video_macross2 #(
 	// bgtile/sprites all read through rom_cache1_byte, sharing one
 	// physical SDRAM port via a 3-way sdram_arb.
 	parameter HW_ROMS = 0,
+	// DIAGNOSTIC (HW_ROMS=1 only): paint every pixel whose BG prefetch
+	// cache missed magenta and every TX miss cyan, so a real-hardware
+	// screenshot shows directly whether a visible artifact is a cache
+	// miss (bandwidth/latency) or a hit serving wrong data. 0 = normal.
+	parameter DBG_MISS_PAINT = 0,
 	parameter [22:0] BASE_WORD_FGTILE  = 23'd0,
 	parameter [22:0] BASE_WORD_BGTILE  = 23'd0,
 	parameter [22:0] BASE_WORD_SPRITES = 23'd0
@@ -69,6 +74,13 @@ module video_macross2 #(
 	input      [15:0] sd_dout,
 	output            sd_req,
 	input             sd_ack,
+	// HW_ROMS=1 only: a SECOND physical SDRAM port (read-only) for the TX
+	// prefetch + sprites, so the two real-time tile streams (BG on sd_*,
+	// TX here) fetch in parallel — see g_video_rom_hw below.
+	output     [24:1] sd_b_addr,
+	output            sd_b_req,
+	input      [15:0] sd_b_dout,
+	input             sd_b_ack,
 
 	input sprite_dma_trigger, // from nmk_irq: snapshot sprite RAM now
 
@@ -125,24 +137,33 @@ module video_macross2 #(
 	// Graphics ROMs (byte-addressed, see tools/mkgfxrom.py). No
 	// descrambling — read directly (see header).
 	// ------------------------------------------------------------------
-	// HW_ROMS=0: unchanged $readmemh 0-latency sim arrays. HW_ROMS=1: all
-	// three share one physical SDRAM port via a 3-way sdram_arb, each
-	// behind its own rom_cache1_byte. See docs/hw-bringup.md — BG/TX
-	// (fgtile) fetch is per-pixel/real-time (tied to ce_pix) and NOT
-	// gated on cache-ready: a cache miss just serves the last-cached
-	// byte for one extra pixel or two rather than stalling the whole
-	// raster pipeline out of sync with real-time video timing, an
-	// honest, documented, un-chased risk of a rare single-pixel visual
-	// artifact under worst-case SDRAM contention (never a functional
-	// hang — rom_cache1 itself is proven to always converge to the
-	// correct value, see its own standalone verification). Sprite fetch
-	// is different: it's an FSM-paced background compositing pass, not
-	// tied to ce_pix at all, so it gets a REAL blocking wait instead
-	// (see the sprite draw FSM below, S_SPR_WAIT).
-	wire [7:0] fgtile_rom_byte;
-	wire [7:0] bgtile_rom_byte;
+	// HW_ROMS=0: unchanged $readmemh 0-latency sim arrays. HW_ROMS=1: BG
+	// on one physical SDRAM port, TX + sprites on a second (fixed priority
+	// TX > sprites) — see g_video_rom_hw. BG/TX fetch is per-pixel/real-time
+	// (tied to ce_pix) and NOT gated on cache-ready: each goes through a
+	// tile_prefetch_byte, whose lookahead stream (the pixel 16 ahead of the
+	// one being drawn — `x_look` below — owns the VRAM read port) fetches
+	// words four ahead of use, so the use pixel hits a small cache instead
+	// of waiting on an on-demand fetch it could never win (see
+	// tile_prefetch_byte's own header and docs/hw-bringup.md for the
+	// visible artifacts a 1-word on-demand cache left even at 96MHz). A
+	// miss still just serves the previous word rather than stalling the
+	// raster out of sync with real-time video timing. Sprite fetch is
+	// different: it's an FSM-paced background compositing pass, not tied
+	// to ce_pix at all, so it keeps a 1-word cache with a REAL blocking
+	// wait (see the sprite draw FSM below, S_SPR_WAIT).
+	wire [7:0] fgtile_rom_byte;   // TX byte for the pixel being drawn
+	wire [7:0] bgtile_rom_byte;   // BG byte for the pixel being drawn
 	wire [7:0] sprites_rom_byte;
 	wire       sprites_ready;
+	// VRAM word of the tile the pixel being drawn belongs to (its colour
+	// bits [15:12] select the palette row). HW_ROMS=0: the live VRAM read,
+	// whose address follows that pixel. HW_ROMS=1: the VRAM read port
+	// follows the LOOKAHEAD pixel instead, so this comes back out of the
+	// prefetch cache entry that was filled from it.
+	wire [15:0] bg_vram_use;
+	wire [15:0] tx_vram_use;
+	wire        bg_hit, tx_hit; // prefetch-cache hit flags (DBG_MISS_PAINT only; tied 1 at HW_ROMS=0)
 	generate
 	if (!HW_ROMS) begin : g_video_rom_sim
 		reg [7:0] fgtile_rom  [0:131071];  // mcrs2j.1, 8x8x4bpp packed_msb, 32B/tile
@@ -155,37 +176,65 @@ module video_macross2 #(
 		assign bgtile_rom_byte  = bgtile_rom[bg_byte_addr];
 		assign sprites_rom_byte = sprites_rom[spr_byte_addr[21:0]];
 		assign sprites_ready = 1'b1;
+		assign bgvram_addr = bg_vram_addr_use;
+		assign txvram_addr = tx_vram_addr_use;
+		assign bg_vram_use = bgvram_data;
+		assign tx_vram_use = txvram_data;
+		assign bg_hit = 1'b1;
+		assign tx_hit = 1'b1;
 		assign sd_addr = 24'd0; assign sd_wrl = 1'b0; assign sd_wrh = 1'b0; assign sd_din = 16'd0; assign sd_req = 1'b0;
+		assign sd_b_addr = 24'd0; assign sd_b_req = 1'b0;
 	end else begin : g_video_rom_hw
-		wire        arb_busy [0:2];
-		wire        arb_valid[0:2];
-		wire [24:1] arb_addr [0:2];
-		wire        arb_req  [0:2];
-		wire [15:0] arb_dout [0:2];
-
-		sdram_arb #(.N(3)) video_arb_inst (
+		// Port A (sd_*): the BG prefetch stream alone, straight onto its own
+		// sdram_req. Port B (sd_b_*): TX prefetch + sprites, fixed priority.
+		// Two physical ports because the two real-time tile streams each
+		// need a word per 4 pixels and a fetch's full round trip (arbiter,
+		// both clock crossings, waiting behind the other ports' transactions
+		// in rtl/sdram.sv, the transaction itself) is close to that on real
+		// hardware: serialised on ONE port they could not both be fed (the
+		// miss-painting diagnostic showed BG missing on two thirds of the
+		// screen); on separate ports their round trips overlap.
+		wire        bg_sd_busy, bg_sd_valid;
+		wire [15:0] bg_sd_dout;
+		wire [24:1] bg_sd_addr;
+		wire        bg_sd_req;
+		sdram_req bg_req_inst (
 			.clk(clk_sys), .reset(reset),
-			.i_addr(arb_addr), .i_we('{1'b0,1'b0,1'b0}), .i_wrl('{1'b0,1'b0,1'b0}), .i_wrh('{1'b0,1'b0,1'b0}), .i_din('{16'd0,16'd0,16'd0}),
-			.i_req(arb_req), .i_busy(arb_busy), .i_valid(arb_valid), .i_dout(arb_dout),
+			.addr(bg_sd_addr), .we(1'b0), .wrl(1'b0), .wrh(1'b0), .din(16'd0),
+			.req(bg_sd_req), .busy(bg_sd_busy), .valid(bg_sd_valid), .dout(bg_sd_dout),
 			.sdram_addr(sd_addr), .sdram_wrl(sd_wrl), .sdram_wrh(sd_wrh), .sdram_din(sd_din),
 			.sdram_dout(sd_dout), .sdram_req(sd_req), .sdram_ack(sd_ack)
 		);
-		wire fgtile_ready;
-		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_FGTILE)) fgtile_cache_inst (
+		wire        arb_busy [0:1];
+		wire        arb_valid[0:1];
+		wire [24:1] arb_addr [0:1];
+		wire        arb_req  [0:1];
+		wire [15:0] arb_dout [0:1];
+		sdram_arb #(.N(2), .FIXED_PRIO(1)) video_arb_inst (
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({7'd0, fg_byte_addr_sim}), .data(fgtile_rom_byte), .ready(fgtile_ready),
+			.i_addr(arb_addr), .i_we('{1'b0,1'b0}), .i_wrl('{1'b0,1'b0}), .i_wrh('{1'b0,1'b0}), .i_din('{16'd0,16'd0}),
+			.i_req(arb_req), .i_busy(arb_busy), .i_valid(arb_valid), .i_dout(arb_dout),
+			.sdram_addr(sd_b_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
+			.sdram_dout(sd_b_dout), .sdram_req(sd_b_req), .sdram_ack(sd_b_ack)
+		);
+		assign bgvram_addr = bg_vram_addr_look;
+		assign txvram_addr = tx_vram_addr_look;
+		tile_prefetch_byte #(.TAG_W(19), .ENTRIES(8), .BASE_WORD_OFFSET(BASE_WORD_FGTILE)) fgtile_cache_inst (
+			.clk(clk_sys), .reset(reset),
+			.pf_tag(tx_look_tag), .pf_byte_addr({7'd0, fgl_byte_addr}), .pf_vram(txvram_data),
+			.use_tag(tx_use_tag), .use_odd(tx_px[1]), .data(fgtile_rom_byte), .vram(tx_vram_use), .hit(tx_hit),
 			.sd_addr(arb_addr[0]), .sd_req(arb_req[0]), .sd_busy(arb_busy[0]), .sd_valid(arb_valid[0]), .sd_dout(arb_dout[0])
 		);
-		wire bgtile_ready;
-		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_BGTILE)) bgtile_cache_inst (
+		tile_prefetch_byte #(.TAG_W(19), .ENTRIES(8), .BASE_WORD_OFFSET(BASE_WORD_BGTILE)) bgtile_cache_inst (
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({3'd0, bg_byte_addr}), .data(bgtile_rom_byte), .ready(bgtile_ready),
-			.sd_addr(arb_addr[1]), .sd_req(arb_req[1]), .sd_busy(arb_busy[1]), .sd_valid(arb_valid[1]), .sd_dout(arb_dout[1])
+			.pf_tag(bg_look_tag), .pf_byte_addr({3'd0, bgl_byte_addr}), .pf_vram(bgvram_data),
+			.use_tag(bg_use_tag), .use_odd(bg_half_col[1]), .data(bgtile_rom_byte), .vram(bg_vram_use), .hit(bg_hit),
+			.sd_addr(bg_sd_addr), .sd_req(bg_sd_req), .sd_busy(bg_sd_busy), .sd_valid(bg_sd_valid), .sd_dout(bg_sd_dout)
 		);
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_SPRITES)) sprites_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({2'd0, spr_byte_addr}), .data(sprites_rom_byte), .ready(sprites_ready),
-			.sd_addr(arb_addr[2]), .sd_req(arb_req[2]), .sd_busy(arb_busy[2]), .sd_valid(arb_valid[2]), .sd_dout(arb_dout[2])
+			.sd_addr(arb_addr[1]), .sd_req(arb_req[1]), .sd_busy(arb_busy[1]), .sd_valid(arb_valid[1]), .sd_dout(arb_dout[1])
 		);
 	end
 	endgenerate
@@ -240,6 +289,19 @@ module video_macross2 #(
 	// logical px) — video_macross.sv's own geometry, frame-constant
 	// X/Y scroll (not per-row, see header).
 	// ------------------------------------------------------------------
+	// Lookahead pixel for the HW_ROMS=1 prefetch streams (see
+	// g_video_rom_hw above): 16 pixels ahead of the one being drawn, four
+	// 4-pixel words (80 clk_sys of slack per word — an 8-pixel lookahead
+	// still left a few hundred misses per frame on real hardware in the
+	// lines right after vblank, where the 68000's port is busiest, and in
+	// sprite-heavy columns). The 9-bit wrap mirrors rd_x's own derivation
+	// from hcount (rd_x = hcount - 28 mod 512), so during the horizontal
+	// blank before a line — rd_x 496..511 — x_look already runs 0..15 and
+	// the line's first words are fetched before its first visible pixel;
+	// vcount has advanced by then (it steps at the hcount wrap), so they
+	// are fetched for the right line. Unused at HW_ROMS=0.
+	wire [8:0] x_look = rd_x + 9'd16;
+
 	wire [12:0] bg_line_x = (rd_x + 13'd4096 - VIDEOSHIFT[12:0] + bg_xscroll[12:0]) % 13'd4096;
 	wire [12:0] bg_line_y = (rd_y + 13'd512 + bg_yscroll[12:0]) % 13'd512;
 	wire [7:0]  bg_col = bg_line_x[11:4];
@@ -248,16 +310,32 @@ module video_macross2 #(
 	wire [3:0]  bg_py  = bg_line_y[3:0];
 
 	// tilemap_scan_pages: (row&0xf) | ((col&0xff)<<4) | ((row&0x10)<<8)
-	assign bgvram_addr = {tilerambank, bg_row[4], bg_col, bg_row[3:0]};
+	wire [14:0] bg_vram_addr_use = {tilerambank, bg_row[4], bg_col, bg_row[3:0]};
+
+	// Same derivation for the lookahead pixel (same line, so the same
+	// row/py). HW_ROMS=1 drives bgvram_addr from this one.
+	wire [12:0] bgl_line_x = (x_look + 13'd4096 - VIDEOSHIFT[12:0] + bg_xscroll[12:0]) % 13'd4096;
+	wire [7:0]  bgl_col      = bgl_line_x[11:4];
+	wire [3:0]  bgl_half_col = bgl_line_x[3:0];
+	wire [14:0] bg_vram_addr_look = {tilerambank, bg_row[4], bgl_col, bg_row[3:0]};
+	// Tile-space word identity ({line_y, line_x>>2}) — see
+	// tile_prefetch_byte's own header for why the tags are positions,
+	// not ROM addresses.
+	wire [18:0] bg_use_tag  = {bg_line_y[8:0], bg_line_x[11:2]};
+	wire [18:0] bg_look_tag = {bg_line_y[8:0], bgl_line_x[11:2]};
 
 	// common_get_bg_tile_info<0,1>: (code&0xfff)|(m_bgbank<<12) — 14-bit
 	// code for macross2's own 16384-tile ROM (bg_bank[1:0], same as
-	// macross's own — see header).
+	// macross's own — see header). bg_code is whichever tile the VRAM
+	// port currently points at: the use pixel's at HW_ROMS=0 (feeding
+	// bg_byte_addr), the lookahead pixel's at HW_ROMS=1 (feeding
+	// bgl_byte_addr; bg_byte_addr is then unused).
 	wire [13:0] bg_code = {bg_bank[1:0], bgvram_data[11:0]};
 	wire [3:0]  bg_half_col = bg_px;
 	assign bg_byte_addr = {bg_code, 7'd0} + (bg_half_col >= 4'd8 ? 21'd64 : 21'd0) + {15'd0, bg_py, 2'd0} + {19'd0, bg_half_col[2:1]};
+	wire [20:0] bgl_byte_addr = {bg_code, 7'd0} + (bgl_half_col >= 4'd8 ? 21'd64 : 21'd0) + {15'd0, bg_py, 2'd0} + {19'd0, bgl_half_col[2:1]};
 	wire [3:0] bg_pix_nib = bg_tile_pixel_nib(bgtile_byte, bg_half_col & 4'h7);
-	wire [9:0] bg_pal_addr = BG_PAL_BASE + {bgvram_data[15:12], bg_pix_nib};
+	wire [9:0] bg_pal_addr = BG_PAL_BASE + {bg_vram_use[15:12], bg_pix_nib};
 
 	// ------------------------------------------------------------------
 	// TX tilemap: fixed 8x8 tiles, 64x32 (512x256 logical px — see
@@ -273,18 +351,31 @@ module video_macross2 #(
 	wire [2:0] tx_py  = tx_line_y[2:0];
 
 	// TILEMAP_SCAN_COLS, 64x32: tile_index = col*32 + row (11 bits, 0-2047)
-	assign txvram_addr = {tx_col, 5'd0} + {6'd0, tx_row};
+	wire [10:0] tx_vram_addr_use = {tx_col, 5'd0} + {6'd0, tx_row};
+
+	// Lookahead-pixel derivation (same line): HW_ROMS=1 drives txvram_addr
+	// from this one and fetches fgl_byte_addr — see the BG block above.
+	wire [9:0]  txl_sum    = {2'b0, x_look[7:0]} + 10'd512 - VIDEOSHIFT[9:0];
+	wire [8:0]  txl_line_x = txl_sum[8:0];
+	wire [5:0]  txl_col    = txl_line_x[8:3];
+	wire [2:0]  txl_px     = txl_line_x[2:0];
+	wire [10:0] tx_vram_addr_look = {txl_col, 5'd0} + {6'd0, tx_row};
+	wire [18:0] tx_use_tag  = {4'd0, tx_line_y, tx_line_x[8:2]};
+	wire [18:0] tx_look_tag = {4'd0, tx_line_y, txl_line_x[8:2]};
+	wire [16:0] fgl_byte_addr = {txvram_data[11:0], 5'd0} + {12'd0, tx_py, 2'd0} + {15'd0, txl_px[2:1]};
 
 	wire [3:0] tx_pix_nib = tile_nibble(fgtile_rom_byte, tx_px[0]);
 	wire       tx_opaque = (tx_pix_nib != 4'hF);
-	wire [9:0] tx_pal_addr = TX_PAL_BASE + {2'd0, txvram_data[15:12], tx_pix_nib};
+	wire [9:0] tx_pal_addr = TX_PAL_BASE + {2'd0, tx_vram_use[15:12], tx_pix_nib};
 
 	// ------------------------------------------------------------------
 	// Live per-pixel palette tap, shared by both tilemap layers — TX
 	// wins when opaque (pen!=15), else BG.
 	// ------------------------------------------------------------------
 	assign palette_addr = tx_opaque ? tx_pal_addr : bg_pal_addr;
-	wire [23:0] tile_rgb = decode_rgb(palette_data);
+	wire [23:0] tile_rgb = (DBG_MISS_PAINT && !bg_hit) ? 24'hFF00FF :
+	                       (DBG_MISS_PAINT && !tx_hit) ? 24'h00FFFF :
+	                       decode_rgb(palette_data);
 
 	// ------------------------------------------------------------------
 	// Sprite RAM double-buffered snapshot — unchanged from

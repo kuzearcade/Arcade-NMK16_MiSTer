@@ -50,9 +50,25 @@ int main(int argc, char **argv) {
 	if (argc > 1) g_run_cycles = strtoull(argv[1], nullptr, 0);
 	Vtdragon2_hw_top top{&contextp};
 
+	// One clk_sys cycle = three clk_ram cycles (a 120MHz-equivalent SDRAM
+	// clock vs. the real 96MHz — the 96/40 ratio isn't an integer, so
+	// the sim is slightly MORE generous with SDRAM bandwidth than real
+	// hardware; the clock crossing itself is exercised faithfully). The
+	// clk_sys rising edge lands mid-way through the clk_ram sequence so
+	// the two domains are never edge-aligned.
+	// TB_RAM_PER2: clk_ram cycles per TWO clk_sys cycles (default 6 = the
+	// 3:1 above; 5 = alternating 2/3, a 100MHz-equivalent much closer to
+	// the real 96MHz, for reproducing hardware-only bandwidth effects).
+	const int ram_per2 = std::getenv("TB_RAM_PER2") ? std::atoi(std::getenv("TB_RAM_PER2")) : 6;
+	int tick_phase = 0;
 	auto tick = [&]() {
+		const int n = (tick_phase++ & 1) ? (ram_per2 - ram_per2 / 2) : (ram_per2 / 2);
 		top.clk_sys = 0; top.eval();
-		top.clk_sys = 1; top.eval();
+		for (int k = 0; k < n; k++) {
+			top.clk_ram = 1; top.eval();
+			top.clk_ram = 0; top.eval();
+			if (k == n / 2) { top.clk_sys = 1; top.eval(); }
+		}
 	};
 
 	top.reset = 1;

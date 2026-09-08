@@ -128,7 +128,9 @@ module tdragon2_core #(
 	// (the real hardware top-level only): every ROM region instead reads
 	// through rom_cache1/sdram_arb over the real rtl/sdram.sv controller,
 	// loaded via ioctl_download rather than $readmemh.
-	parameter HW_ROMS        = 0
+	parameter HW_ROMS        = 0,
+	// DIAGNOSTIC passthrough to video_macross2.sv — see its own comment.
+	parameter DBG_MISS_PAINT = 0
 ) (
 	input clk_sys,        // 40 MHz (68000 bus clk_sys/4=10MHz; pixel/raster clk_sys/5=8MHz)
 	input reset,            // async, active high
@@ -183,14 +185,15 @@ module tdragon2_core #(
 	output            sd0_req,
 	input             sd0_ack,
 
-	// SDRAM port 1: Z80 audiocpu program-ROM reads only.
+	// SDRAM port 1: Z80 audiocpu program-ROM reads + OKI0/OKI1 sample
+	// reads, 3-way arbitrated internally (all low-bandwidth).
 	output     [24:1] sd1_addr,
 	output            sd1_req,
 	input      [15:0] sd1_dout,
 	input             sd1_ack,
 
 	// SDRAM port 2: passed straight through to video_macross2.sv's own
-	// HW_ROMS ports (that module owns the 3-way BG/TX/sprite arbiter).
+	// HW_ROMS port A — the BG-tile prefetch stream alone.
 	output     [24:1] sd2_addr,
 	output            sd2_wrl,
 	output            sd2_wrh,
@@ -199,7 +202,10 @@ module tdragon2_core #(
 	output            sd2_req,
 	input             sd2_ack,
 
-	// SDRAM port 3: OKI0/OKI1 sample reads, 2-way arbitrated internally.
+	// SDRAM port 3: passed straight through to video_macross2.sv's own
+	// HW_ROMS port B — TX-tile prefetch + sprite fetch, 2-way arbitrated
+	// there (TX first). Both real-time tile streams thus fetch on
+	// separate physical ports, in parallel — see docs/hw-bringup.md.
 	output     [24:1] sd3_addr,
 	output            sd3_req,
 	input      [15:0] sd3_dout,
@@ -1523,6 +1529,16 @@ module tdragon2_core #(
 	// this reduces to the original always-1 WAIT_n exactly).
 	wire z80_wait_n = ~((sel_z80_rom | sel_z80_bank) & z80_mem_re & ~audiocpu_ready);
 	wire [23:0] audiocpu_byte_addr = sel_z80_rom ? {9'd0, z80_a[14:0]} : {7'd0, z80_bank_phys[16:0]};
+	// SDRAM port 1 is shared three ways — Z80 program ROM (channel 0) and
+	// the two OKI sample ROMs (channels 1-2, whose caches live in g_oki_hw
+	// further down and reach the arbiter here through these module-level
+	// arrays). All three are low-bandwidth. See the port comments above:
+	// the OKIs used to own port 3, which the TX-tile/sprite fetch needs.
+	wire        p1_busy [0:2];
+	wire        p1_valid[0:2];
+	wire [24:1] p1_addr [0:2];
+	wire        p1_req  [0:2];
+	wire [15:0] p1_dout [0:2];
 	generate
 	if (!HW_ROMS) begin : g_audiocpu_sim
 		reg [7:0] audiocpu_rom [0:131071];
@@ -1530,23 +1546,23 @@ module tdragon2_core #(
 		assign audiocpu_dout  = audiocpu_rom[audiocpu_byte_addr[16:0]];
 		assign audiocpu_ready = 1'b1;
 		assign sd1_addr = 24'd0; assign sd1_req = 1'b0;
+		assign p1_busy  = '{1'b0, 1'b0, 1'b0};
+		assign p1_valid = '{1'b0, 1'b0, 1'b0};
+		assign p1_dout  = '{16'd0, 16'd0, 16'd0};
+		assign p1_addr  = '{24'd0, 24'd0, 24'd0};
+		assign p1_req   = '{1'b0, 1'b0, 1'b0};
 	end else begin : g_audiocpu_hw
-		wire        cache_busy, cache_valid;
-		wire [15:0] cache_dout;
-		wire [24:1] cache_sd_addr;
-		wire        cache_sd_req;
-
-		sdram_req sd1_inst (
+		sdram_arb #(.N(3)) p1_arb_inst (
 			.clk(clk_sys), .reset(por_rst),
-			.addr(cache_sd_addr), .we(1'b0), .wrl(1'b0), .wrh(1'b0), .din(16'd0),
-			.req(cache_sd_req), .busy(cache_busy), .valid(cache_valid), .dout(cache_dout),
+			.i_addr(p1_addr), .i_we('{1'b0, 1'b0, 1'b0}), .i_wrl('{1'b0, 1'b0, 1'b0}), .i_wrh('{1'b0, 1'b0, 1'b0}), .i_din('{16'd0, 16'd0, 16'd0}),
+			.i_req(p1_req), .i_busy(p1_busy), .i_valid(p1_valid), .i_dout(p1_dout),
 			.sdram_addr(sd1_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
 			.sdram_dout(sd1_dout), .sdram_req(sd1_req), .sdram_ack(sd1_ack)
 		);
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_AUDIOCPU)) audiocpu_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr(audiocpu_byte_addr), .data(audiocpu_dout), .ready(audiocpu_ready),
-			.sd_addr(cache_sd_addr), .sd_req(cache_sd_req), .sd_busy(cache_busy), .sd_valid(cache_valid), .sd_dout(cache_dout)
+			.sd_addr(p1_addr[0]), .sd_req(p1_req[0]), .sd_busy(p1_busy[0]), .sd_valid(p1_valid[0]), .sd_dout(p1_dout[0])
 		);
 	end
 	endgenerate
@@ -1661,30 +1677,17 @@ module tdragon2_core #(
 		assign oki1_rom_data = oki1_rom_data_r;
 		assign oki0_rom_ok = 1'b1;
 		assign oki1_rom_ok = 1'b1;
-		assign sd3_addr = 24'd0; assign sd3_req = 1'b0;
 	end else begin : g_oki_hw
-		wire        arb_busy [0:1];
-		wire        arb_valid[0:1];
-		wire [24:1] arb_addr [0:1];
-		wire        arb_req  [0:1];
-		wire [15:0] arb_dout [0:1];
-
-		sdram_arb #(.N(2)) oki_arb_inst (
-			.clk(clk_sys), .reset(por_rst),
-			.i_addr(arb_addr), .i_we('{1'b0, 1'b0}), .i_wrl('{1'b0, 1'b0}), .i_wrh('{1'b0, 1'b0}), .i_din('{16'd0, 16'd0}),
-			.i_req(arb_req), .i_busy(arb_busy), .i_valid(arb_valid), .i_dout(arb_dout),
-			.sdram_addr(sd3_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
-			.sdram_dout(sd3_dout), .sdram_req(sd3_req), .sdram_ack(sd3_ack)
-		);
+		// Channels 1 and 2 of SDRAM port 1's arbiter (g_audiocpu_hw above).
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_OKI1)) oki0_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({2'd0, oki0_rom_addr}), .data(oki0_rom_data), .ready(oki0_rom_ok),
-			.sd_addr(arb_addr[0]), .sd_req(arb_req[0]), .sd_busy(arb_busy[0]), .sd_valid(arb_valid[0]), .sd_dout(arb_dout[0])
+			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1])
 		);
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_OKI2)) oki1_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({2'd0, oki1_rom_addr}), .data(oki1_rom_data), .ready(oki1_rom_ok),
-			.sd_addr(arb_addr[1]), .sd_req(arb_req[1]), .sd_busy(arb_busy[1]), .sd_valid(arb_valid[1]), .sd_dout(arb_dout[1])
+			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2])
 		);
 	end
 	endgenerate
@@ -1823,6 +1826,7 @@ module tdragon2_core #(
 		.BGTILE_FILE(BGTILE_FILE),
 		.SPRITES_FILE(SPRITES_FILE),
 		.HW_ROMS(HW_ROMS),
+		.DBG_MISS_PAINT(DBG_MISS_PAINT),
 		.BASE_WORD_FGTILE(BASE_WORD_FGTILE),
 		.BASE_WORD_BGTILE(BASE_WORD_BGTILE),
 		.BASE_WORD_SPRITES(BASE_WORD_SPRITES)
@@ -1839,7 +1843,8 @@ module tdragon2_core #(
 		.tilerambank(tilerambank_reg),
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),
-		.sd_dout(sd2_dout), .sd_req(sd2_req), .sd_ack(sd2_ack)
+		.sd_dout(sd2_dout), .sd_req(sd2_req), .sd_ack(sd2_ack),
+		.sd_b_addr(sd3_addr), .sd_b_req(sd3_req), .sd_b_dout(sd3_dout), .sd_b_ack(sd3_ack)
 	);
 
 	reg frame_done_r;

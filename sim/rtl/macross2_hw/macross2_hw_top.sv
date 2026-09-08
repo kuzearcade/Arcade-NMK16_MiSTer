@@ -18,6 +18,7 @@
 module macross2_hw_top
 (
 	input  clk_sys,
+	input  clk_ram, // SDRAM controller clock — see sdram_inst below
 	input  reset,
 
 	input         ioctl_download,
@@ -84,11 +85,15 @@ module macross2_hw_top
 	// comment. sim/models/sdram_model.sv doesn't model charge decay so
 	// this doesn't change simulated behavior, but keeps this testbench
 	// consistent with real hardware's own instantiation.
-	sdram #(.REFRESH_CYCLES(10'd240)) sdram_inst (
+	// The controller runs on clk_ram (real hardware: 96MHz; this testbench
+	// drives it at 3 edges per clk_sys cycle, a 120MHz-equivalent — see
+	// tb_macross2_hw.cpp) with the req/ack clock crossing inside
+	// rtl/sdram.sv + rtl/sdram_req.sv.
+	sdram #(.REFRESH_CYCLES(10'd740)) sdram_inst (
 		.SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
 		.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
 		.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CLK(SDRAM_CLK), .SDRAM_CKE(SDRAM_CKE), .ready(sdram_ready),
-		.init(reset), .clk(clk_sys), .prio_mode(2'd0),
+		.init(reset), .clk(clk_ram), .prio_mode(2'd0),
 		.addr0(p0_addr), .wrl0(p0_wrl), .wrh0(p0_wrh), .din0(p0_din), .dout0(p0_dout), .req0(p0_req), .ack0(p0_ack),
 		.addr1(p1_addr), .wrl1(1'b0), .wrh1(1'b0), .din1('0), .dout1(p1_dout), .req1(p1_req), .ack1(p1_ack),
 		.addr2(p2_addr), .wrl2(p2_wrl), .wrh2(p2_wrh), .din2(p2_din), .dout2(p2_dout), .req2(p2_req), .ack2(p2_ack),

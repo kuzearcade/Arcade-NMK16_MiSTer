@@ -36,8 +36,15 @@ derive_clock_uncertainty
 # removal slack line quartus_sta reported. This adds it as its own
 # group, exclusive from every other top-level clock domain sys_top.sdc
 # already keeps mutually exclusive from each other.
+# Both of rtl/pll.v's outputs (clk_sys 40MHz, clk_ram 96MHz) MUST each be
+# their own exclusive group — see Macross2.sdc's own comment on why one
+# shared group would falsely time the sdram_req<->sdram.sv clock crossing.
+set core_pll_groups {}
+foreach_in_collection c [get_clocks {emu|pll|altpll_component|*PLL_OUTPUT_COUNTER|divclk}] {
+	lappend core_pll_groups -group [get_clock_info -name $c]
+}
 set_clock_groups -exclusive \
-	-group [get_clocks {emu|pll|altpll_component|*PLL_OUTPUT_COUNTER|divclk}] \
+	{*}$core_pll_groups \
 	-group [get_clocks {pll_hdmi|pll_hdmi_inst|altera_pll_i|*[0].*|divclk}] \
 	-group [get_clocks {pll_audio|pll_audio_inst|altera_pll_i|*[0].*|divclk}] \
 	-group [get_clocks {spi_sck}] \

@@ -152,21 +152,14 @@ wire [24:0] ioctl_addr = ioctl_addr_full[24:0];
 ///////////////////////   CLOCKS   ///////////////////////////////
 
 wire clk_sys;
-wire clk_sdram;
+wire clk_ram;    // 96MHz SDRAM controller clock — see rtl/pll.v's own outclk_1 comment
 wire pll_locked;
-// CLK1_PHASE_SHIFT: real-hardware timing-margin hypothesis #3, after
-// RASCAS_DELAY and PRECHARGE_DELAY (both purely digital, both already
-// tested and found NOT to fix BACKGROUND LOAD's own real corruption —
-// see rtl/sdram.sv's own SEPARATE_SDRAM_CLK parameter comment for the
-// full rationale). -3000 (=-3ns) is a commonly-cited starting value for
-// this kind of SDRAM_CLK trace-delay compensation on similar boards;
-// not yet empirically tuned for this specific board.
-pll #(.CLK1_PHASE_SHIFT("-3000")) pll
+pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_sys),
-	.outclk_1(clk_sdram),
+	.outclk_1(clk_ram),
 	.locked(pll_locked)
 );
 
@@ -205,20 +198,18 @@ wire [15:0] sd3_din;
 wire [15:0] sd3_dout;
 wire        sd3_req, sd3_ack;
 
-// REFRESH_CYCLES=240 (6us @ 40MHz clk_sys) — see rtl/sdram.sv's own
-// parameter comment. This exact override, and confirming it fixes the
-// data corruption this core exists to detect, is what this core is for.
-// RASCAS_DELAY/PRECHARGE_DELAY back to their own defaults (0/2) here —
-// both already tested at raised values and found NOT to fix BACKGROUND
-// LOAD's own real corruption; SEPARATE_SDRAM_CLK/clk_sdram (timing-
-// margin hypothesis #3 — see rtl/sdram.sv's own parameter comment) is
-// the one being isolated and tested now.
-sdram #(.REFRESH_CYCLES(10'd240), .SEPARATE_SDRAM_CLK(1)) sdram_inst
+// The controller now runs on the 96MHz clk_ram (see rtl/pll.v's own
+// outclk_1 comment and rtl/sdram.sv's CDC comment); every test FSM in
+// this file stays on clk_sys and talks to it through sdram_req.sv, which
+// carries the clock crossing. REFRESH_CYCLES=740 = 7.7us @ 96MHz, inside
+// the 7.8125us JEDEC row-refresh interval (see rtl/sdram.sv's own
+// parameter comment — the earlier 240 was the same interval at 40MHz).
+sdram #(.REFRESH_CYCLES(10'd740)) sdram_inst
 (
 	.SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
 	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),
 	.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CLK(SDRAM_CLK), .SDRAM_CKE(SDRAM_CKE), .ready(sdram_ready),
-	.init(~pll_locked), .clk(clk_sys), .clk_sdram(clk_sdram), .prio_mode(2'd0),
+	.init(~pll_locked), .clk(clk_ram), .prio_mode(2'd0),
 	.addr0(sd0_addr), .wrl0(sd0_wrl), .wrh0(sd0_wrh), .din0(sd0_din), .dout0(sd0_dout), .req0(sd0_req), .ack0(sd0_ack),
 	.addr1(sd1_addr), .wrl1(sd1_wrl), .wrh1(sd1_wrh), .din1(sd1_din), .dout1(sd1_dout), .req1(sd1_req), .ack1(sd1_ack),
 	.addr2(sd2_addr), .wrl2(sd2_wrl), .wrh2(sd2_wrh), .din2(sd2_din), .dout2(sd2_dout), .req2(sd2_req), .ack2(sd2_ack),

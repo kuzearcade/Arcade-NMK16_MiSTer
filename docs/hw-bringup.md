@@ -93,55 +93,180 @@ tiny round-robin arbiter:
   play, core held in reset) **and** 68000 program-ROM reads (mutually
   exclusive in time with download, so no arbiter needed, just a mux on
   `ioctl_download`).
-- **Port 1** — Z80 `audiocpu` program-ROM reads.
-- **Port 2** — BG tile / TX tile / sprite tile reads, round-robin
-  arbitrated. All three already tolerate added latency structurally:
-  BG/TX only need a new byte at tile-column boundaries (every 8-16
-  pixels, not every pixel — see below), and sprite fetch is already a
-  multi-state FSM (`S_SPR_CHECK`/`S_SPR_CHECK2`), not tied to `ce_pix`.
-- **Port 3** — OKI0 + OKI1 sample reads, round-robin arbitrated (very
-  low bandwidth, ~1MHz-ish access rate, ample slack).
+- **Port 1** — Z80 `audiocpu` program-ROM reads + OKI0 + OKI1 sample
+  reads, 3-way round-robin arbitrated (all low-bandwidth; the OKIs are
+  ~1MHz-ish access rate with ample slack).
+- **Port 2** — BG tile reads, alone (`video_macross2.sv`'s port A).
+- **Port 3** — TX tile reads + sprite tile reads, fixed priority TX
+  first (`video_macross2.sv`'s port B).
 
-## BG/TX tile fetch: per-tile cache, not a full line buffer
+This is the second layout. The first put BG + TX + sprites on port 2
+behind one 3-way arbiter and the OKIs on port 3, and `rtl/sdram.sv`'s
+mode 0 served port 3 only when the others were idle. That failed on real
+hardware for a throughput reason the simulation could not show (see
+"SDRAM clock" below for the numbers): the two real-time tile layers each
+need a word per 4 pixels, and every single-word transaction costs a
+full handshake round trip — consumer to `sdram_req`, toggle, two clock
+crossings, arbitration behind up to three other ports, the transaction,
+the copy, the ack back — of which the SDRAM itself is only ~4 of ~12
+`clk_sys` cycles. Serialised on one port the two layers could not both
+be fed; on two ports their round trips overlap. Mode 0 is now a plain
+4-port round-robin so port 3 gets a fair share.
 
-`video_macross2.sv` currently computes `bg_byte_addr`/`bgtile_byte`
-(and the fg/TX equivalent) combinationally every `ce_pix`, assuming
-instant array lookup. Real hardware needs a new byte only when the
-raster beam crosses into a new 16x16 (BG) or 8x8 (TX) tile — a 128-byte
-(BG) or 32-byte (TX) chunk is fetched once per tile-column and cached
-in a small register, served combinationally for the remaining
-15/7 pixels. This is a much smaller, simpler change than a full
-line-ahead prefetch buffer, and the existing per-tile granularity of
-`video_macross2.sv`'s own address computation (`bg_byte_addr` already
-depends on `bg_code`/`bg_py`, not `bg_px` for the byte- vs
-nibble-select split) makes the boundary detection straightforward
-(compare this pixel's `{bg_code,bg_py}` against the cached tag).
+## BG/TX tile fetch: prefetching word cache, not a line buffer
 
-## Single clock domain — `rtl/sdram.sv` runs at `clk_sys` itself, no CDC
+`video_macross2.sv` computes the wanted ROM byte combinationally from
+the pixel being drawn (its address math is per-pixel: `bg_byte_addr`
+from `{bg_code, bg_py, bg_px}`, the TX equivalent from
+`{code, tx_py, tx_px}`). The first hardware version put a 1-word
+on-demand cache (`rom_cache1_byte`) behind that, non-blocking: a miss
+served the previous word rather than stalling the raster. That is only
+as good as the fetch round trip is short — the request can only start
+when the first pixel that needs the word is already on screen — and
+even at 96MHz it left a garbage column at x=0..6 (cold cache at line
+start) and dashes wherever the sprite pass was busy.
 
-`rtl/sdram.sv`'s own comments describe it as usable "at up to 128MHz,"
-which suggested a separate fast PLL clock plus cross-domain
-synchronization for the req/ack toggle handshake into/out of the
-existing 40MHz `clk_sys` domain used by every already-verified
-clock-enable derivation in these cores (`cpu_div`, `z80_div`, `ym_cen`,
-`oki_cen`, etc.). Rejected in favor of a much lower-risk option: CAS
-latency and RAS-to-CAS delay on real SDR SDRAM parts are specified in
-*clock cycles*, not absolute time, and remain valid across a wide
-frequency range for a given speed grade — running `rtl/sdram.sv` (and
-the real `SDRAM_CLK` pin) directly at the existing `clk_sys` (40MHz) is
-well within a real MT48LC16M16A2-7's rated range for `CAS_LATENCY=3`,
-and 40MHz gives `RASCAS_DELAY=2` cycles = 50ns, comfortably over the
-chip's 20ns tRCD minimum. This means **zero clock-domain-crossing
-logic anywhere in this design** — every consumer (`sdram_req.sv`
-instance) lives in the same `clk_sys` domain as `rtl/sdram.sv` itself,
-and none of the already oracle-verified clock-enable arithmetic changes
-at all. The cost is some peak SDRAM bandwidth headroom (~8 `clk_sys`
-cycles = 200ns per transaction, up to ~32 cycles = 800ns worst case
-under full 4-port contention) — comfortably inside the slack every
-consumer here already has (BG/TX only need a new fetch every 8-16
-pixels = 1-2us; sprite fetch is FSM-paced, not tied to `ce_pix`; Z80/
-68000/OKI are all low-bandwidth and already tolerate documented cycle
-timing drift elsewhere in this project).
+The real-time layers now go through `rtl/tile_prefetch_byte.sv`, which
+separates the request stream from the use stream. A **lookahead**
+pixel, 16 ahead of the one being drawn (`x_look`; the 9-bit wrap
+mirrors `rd_x = hcount - 28`, so the line's first words are fetched
+during the preceding horizontal blank, after `vcount` has stepped),
+owns the VRAM read port and issues fetches four words ahead; the **use**
+pixel looks its word up in a small fully-associative cache by
+tile-space tag (`{line_y, line_x>>2}` — a position, not a ROM address,
+because the use pixel has no VRAM read of its own; the entry carries the
+VRAM word so the palette bits come from the right tile too). Steady
+state holds word(x)..word(x+16), ~80 `clk_sys` of slack per fetch
+instead of zero. `HW_ROMS=0` is untouched and stays bit-identical to the
+oracle-verified sims (checked by hash after every change here).
+
+Sprites keep the 1-word cache with a real blocking wait: their fetch is
+an FSM-paced compositing pass, not tied to `ce_pix`.
+
+## SDRAM clock: 96MHz `clk_ram`, toggle-handshake CDC into `clk_sys`
+
+The first version of this design ran `rtl/sdram.sv` (and the real
+`SDRAM_CLK` pin) directly at the 40MHz `clk_sys`, on the reasoning that
+SDR SDRAM timing is specified in clock cycles (so `CAS_LATENCY=3` and
+`RASCAS_DELAY=2` stay legal at 40MHz) and that a single clock domain
+means zero clock-domain-crossing logic. That reasoning was correct as
+far as it went, and it was what got the games booting on real hardware.
+It was wrong about bandwidth. Both games showed **horizontal smearing
+of every tilemap row on real hardware**, reproduced exactly in the
+`HW_ROMS=1` Verilator frames (`sim/rtl/tdragon2_hw/`), and the arithmetic
+is unforgiving:
+
+- BG and TX tiles are 4bpp, so each layer needs a fresh 16-bit word
+  every 4 pixels. At the 6.4MHz-equivalent pixel rate (`ce_pix` every
+  ~5 `clk_sys` cycles) that is one word per ~20 `clk_sys` cycles **per
+  layer**, plus sprites on the same port.
+- `rtl/sdram.sv` performs single-word transactions of ~9 cycles each
+  (ACTIVATE, `RASCAS_DELAY`, READ, `CAS_LATENCY`, auto-precharge), one
+  at a time across all four ports, plus refresh.
+- That is ~192 tilemap transactions per ~2560-cycle scanline, ~67% of
+  the whole bus by itself, before the 68000/Z80/OKI ports get a turn.
+  The per-tile caches in `video_macross2.sv` are deliberately
+  non-blocking (a miss serves the previous byte rather than stalling
+  the raster), so every miss is a horizontal streak.
+
+The fix is the standard MiSTer arrangement, and the one
+Arcade-TMNT_MiSTer runs this identical controller with: a second
+output of `rtl/pll.v` at **96MHz** (`clk_ram`, 50MHz × 48/25, same VCO
+as the 40MHz `clk_sys`) clocks `rtl/sdram.sv`, so a transaction takes
+~94ns instead of ~225ns and the tilemap layers use roughly a quarter of
+the bus. Every consumer stays on `clk_sys`; nothing in the already
+oracle-verified clock-enable arithmetic changes. The crossing lives in
+exactly two places:
+
+- `rtl/sdram.sv` brings each port's toggle-style `reqN` in through a
+  2-flop synchronizer before arbitration, and read data goes into a
+  **per-port** `doutN_r` register (the original single shared `dout`
+  was only safe when the consumer sampled it the cycle after `ack`).
+- `rtl/sdram_req.sv` — which every consumer already goes through,
+  including `sdram_arb.sv`'s internal instance — brings `ack` back
+  through a 2-flop synchronizer. The payload direction needs nothing:
+  `addr/we/din` are held stable from the `req` toggle until `ack`, and
+  the controller only samples them after its own synchronizer has seen
+  the toggle. Both synchronizers are unconditional; in a single-clock
+  configuration they just add two cycles of latency (the standalone
+  `sdram_test`/`rom_cache1_test`/`sdram_arb_test` sims still pass).
+
+Two lessons from getting this onto hardware, both worth more than the
+design itself:
+
+1. **`SDRAM_DQ` must be captured by exactly one register.** The first
+   96MHz build latched `SDRAM_DQ` straight into the four per-port
+   registers. Timing closed, synthesis and the fitter were silent, and
+   both games booted — with fine vertical noise in every tile and
+   broken sample playback. The QSF's `FAST_INPUT_REGISTER ON -to
+   SDRAM_DQ[*]` can only pack one register into the pad's I/O cell; the
+   other three sampled the pins through unconstrained routing, which at
+   a 10.4ns period is a coin toss. The controller now captures into the
+   single `dout` (I/O-cell packable) and copies it into the completing
+   port's register one cycle later, toggling that port's `ack` in the
+   same cycle; the arbiter masks a port out while that copy is in
+   flight (`done_port`), because otherwise it looks pending for one
+   extra cycle and gets re-granted as a duplicate transaction whose
+   completion toggles `ack` a second time (the standalone sims caught
+   that one immediately: reads of 0x0000).
+2. **Each PLL output needs its own exclusive clock group in the SDC.**
+   Both clocks come from one VCO, so a single group containing both
+   would make TimeQuest time every `clk_sys`↔`clk_ram` path
+   synchronously against the worst-case edge relationship of a
+   25ns/10.4ns pair (~2ns, every 125ns) and fail on the payload paths
+   the handshake makes irrelevant. `Macross2.sdc`/`SdramTest.sdc` build
+   the groups with a `foreach_in_collection` over
+   `emu|pll|altpll_component|*PLL_OUTPUT_COUNTER|divclk`, so it stays
+   correct whatever Quartus names the counters (`generic_pll1`/
+   `generic_pll2` today).
+
+`REFRESH_CYCLES` moved from 240 (7.8µs at 40MHz) to 740 (7.7µs at
+96MHz). `SdramTest` rebuilt at 96MHz shows the full-512KB Phase 1 clean
+apart from its documented shared-address-0 artifact, and the Macross2
+build closes timing on both domains with margin (96MHz domain: ~1.2-1.6ns
+setup / 0.45ns hold slack, Fmax ~108MHz; 40MHz domain: ~3.2-5.4ns setup).
+The Verilator harnesses (`sim/rtl/*_hw/`) drive `clk_ram` at three
+edges per `clk_sys` cycle by default — a 120MHz-equivalent, more
+generous than real hardware since 96/40 is not an integer ratio;
+`TB_RAM_PER2=5` gives a 100MHz-equivalent — and the smearing is gone
+from their frames.
+
+Three more things the hardware taught after the clock change, none of
+which the 3:1 simulation reproduced:
+
+1. **Throughput, not latency, is the limit for single-word fetches.**
+   With the prefetch cache on a single shared video port the BG layer
+   still missed on two thirds of the screen — measured directly with
+   `DBG_MISS_PAINT` (a `video_macross2.sv`/`tdragon2_core.sv` parameter
+   that paints BG-cache misses magenta and TX misses cyan; the miss
+   counts in a capture are then a pixel count). Each fetch's round trip
+   is ~12 `clk_sys` uncontended and more behind other ports, against the
+   20 `clk_sys` the two layers have per word between them. Hence the
+   port split above.
+2. **`sdram_arb.sv` re-granted a just-served channel as a duplicate
+   transaction.** Every hold-req-until-valid caller drops `req` one
+   cycle after `valid`, and the arbiter re-scanned in that same cycle;
+   the duplicate's completion was then delivered as the caller's NEXT
+   request's data. It had been silently doubling every arbitrated video
+   fetch, and became a hard failure — a silent, spinning Z80 executing
+   corrupted program bytes — the moment the Z80 ROM fetch moved from a
+   direct `sdram_req` (rising-edge triggered, immune) onto port 1's
+   arbiter. The arbiter now holds a served channel off until its `req`
+   has been seen low. The `*_hw` testbenches' Z80 write counters
+   (YM2203/OKI writes) caught it in simulation once the port move was
+   simulated: 41 YM2203 writes instead of ~21,000.
+3. **What is left.** With the split ports, the 16-pixel lookahead and
+   the arbiter fix, painted misses are 0-15 pixels per frame in normal
+   play and ~0.5% of the frame in two specific moments (the lines right
+   after vblank in the Macross II attract HUD, where the 68000's port is
+   busiest; the tdragon2 base scene's TX HUD column, where sprite fetch
+   saturates port 3). Those did not change between 8- and 16-pixel
+   lookahead, i.e. they are throughput-bound. The structural fix is to
+   return **two words per transaction** (a second READ to `col+1` in the
+   same activation, auto-precharge on the second; per-port 32-bit dout;
+   8-pixel tags in the prefetch cache; a 2-word line in `rom_cache1`),
+   which halves every consumer's transaction count for the same
+   handshake cost. Not done yet.
 
 ## ROM-loading / `.mra` scheme
 
@@ -306,7 +431,13 @@ serving both at runtime, `rtl/macross2/video_macross2.sv`, `rtl/sdram_req.sv`,
 `Macross2.sv`/`.qsf`/`.sdc`, `releases/tdragon2.mra`/`macross2.mra`),
 Verilator-verified under real SDRAM wait-state latency, and — with the
 `ioctl_index` fix above — booting on a real DE10-Nano with the ROM
-checksum matching simulation. Remaining known limitations: HSync/VSync
+checksum matching simulation. With `rtl/sdram.sv` on the 96MHz
+`clk_ram`, the prefetching tile cache, BG and TX on separate SDRAM
+ports and the arbiter duplicate-grant fix (see the SDRAM sections
+above) both games render without the horizontal smearing the
+single-clock design showed, with audio, on hardware and in the
+`HW_ROMS=1` sim frames; a residual ~0.5%-of-frame stale-word artifact
+in two HUD-heavy moments awaits the two-words-per-transaction change. Remaining known limitations: HSync/VSync
 placement is still the documented placeholder (the scaler locks and
 reports 384x224 @ 56.2Hz, but it has not been tuned against a reference),
 and player-input mapping has been cross-checked against

@@ -131,7 +131,7 @@ module sdram
 	// parameter's own comment) — left unconnected by every existing
 	// consumer, matching the file's own established default-off pattern.
 	input             clk_sdram,
-	input       [1:0] prio_mode,	// 00=RR equal, 01=video first, 10=CPU first, 11=video 75%
+	input       [1:0] prio_mode,	// 00=RR over all 4 ports, 01=video first, 10=CPU first, 11=video 75%
 
 	input      [24:1] addr0,
 	input             wrl0,
@@ -217,15 +217,44 @@ reg        active = 0;
 reg  [3:0] ram_req = 0;
 reg  [1:0] next_port = 0;  // round-robin: 0-3
 reg  [3:0] idle_wait_cnt = 0; // PRECHARGE_DELAY countdown — see that parameter's own comment
+
+// Clock-domain crossing. This controller may run on a faster clock than
+// its consumers (this project: 96MHz here vs. a 40MHz clk_sys — see
+// docs/hw-bringup.md's own "SDRAM bandwidth" section). The toggle-style
+// req/ack protocol is CDC-safe by construction (a single-bit toggle plus
+// a payload the consumer holds stable from its toggle until ack): each
+// reqN is brought into this domain through a 2-flop synchronizer, and
+// the consumer side (rtl/sdram_req.sv) synchronizes ackN the same way.
+// Always on — in a single-clock configuration the synchronizers just
+// add two cycles of latency, which no consumer's correctness depends on.
+reg [1:0] req0_s = 0, req1_s = 0, req2_s = 0, req3_s = 0;
+always @(posedge clk) begin
+	req0_s <= {req0_s[0], req0};
+	req1_s <= {req1_s[0], req1};
+	req2_s <= {req2_s[0], req2};
+	req3_s <= {req3_s[0], req3};
+end
+wire req0_i = req0_s[1];
+wire req1_i = req1_s[1];
+wire req2_i = req2_s[1];
+wire req3_i = req3_s[1];
+
+// Per-port read-data registers, each latched only by its own port's
+// completing transaction. The original single shared `dout` was only
+// safe because a same-clock consumer sampled it exactly one cycle after
+// its ack; with synchronizer delay on the consumer side, another port's
+// transaction could complete and overwrite it first.
+reg [15:0] dout0_r = 0, dout1_r = 0, dout2_r = 0, dout3_r = 0;
+reg [3:0]  done_port = 0; // one-hot: which port's read data landed in `dout` last cycle
 wire [3:0] wr = {wrl3|wrh3,wrl2|wrh2,wrl1|wrh1,wrl0|wrh0};
 
 reg [15:0] dout;
 
 
-assign dout0 = dout;
-assign dout1 = dout;
-assign dout2 = dout;
-assign dout3 = dout;
+assign dout0 = dout0_r;
+assign dout1 = dout1_r;
+assign dout2 = dout2_r;
+assign dout3 = dout3_r;
 
 
 // access manager
@@ -259,43 +288,39 @@ always @(posedge clk) begin
 			// Priority-selectable arbitration via prio_mode[1:0]
 			reg p0, p1, p2, p3;
 			reg granted;
-			p0 = (ack0 != req0);
-			p1 = (ack1 != req1);
-			p2 = (ack2 != req2);
-			p3 = (ack3 != req3);
+			// A port whose read data is still being copied (done_port, see
+			// the STATE_READY block) has NOT had its ack toggled yet, so it
+			// would otherwise look pending for exactly one more cycle and
+			// be re-granted as a duplicate transaction — whose completion
+			// toggles ack a second time and desynchronizes the handshake.
+			p0 = (ack0 != req0_i) && !done_port[0];
+			p1 = (ack1 != req1_i) && !done_port[1];
+			p2 = (ack2 != req2_i) && !done_port[2];
+			p3 = (ack3 != req3_i) && !done_port[3];
 			granted = 0;
 
 			case (prio_mode)
 			2'd0: begin
-				// MODE 0: Round-robin ports 0-2, port 3 on idle only
-				if (next_port == 2'd0 ? p0 : next_port == 2'd1 ? p1 : p2) begin
-					case (next_port)
-						2'd0: begin {ba,a} <= addr0; data <= din0; we <= wr[0]; dqm <= wr[0] ? ~{wrh0,wrl0} : 2'b00; ram_req[0] <= 1; end
-						2'd1: begin {ba,a} <= addr1; data <= din1; we <= wr[1]; dqm <= wr[1] ? ~{wrh1,wrl1} : 2'b00; ram_req[1] <= 1; end
-						default: begin {ba,a} <= addr2; data <= din2; we <= wr[2]; dqm <= wr[2] ? ~{wrh2,wrl2} : 2'b00; ram_req[2] <= 1; end
-					endcase
-					next_port <= (next_port == 2'd2) ? 2'd0 : next_port + 2'd1;
-					granted = 1;
-				end
-				else if (next_port == 2'd0 ? p1 : next_port == 2'd1 ? p2 : p0) begin
-					case (next_port)
-						2'd0: begin {ba,a} <= addr1; data <= din1; we <= wr[1]; dqm <= wr[1] ? ~{wrh1,wrl1} : 2'b00; ram_req[1] <= 1; next_port <= 2'd2; end
-						2'd1: begin {ba,a} <= addr2; data <= din2; we <= wr[2]; dqm <= wr[2] ? ~{wrh2,wrl2} : 2'b00; ram_req[2] <= 1; next_port <= 2'd0; end
-						default: begin {ba,a} <= addr0; data <= din0; we <= wr[0]; dqm <= wr[0] ? ~{wrh0,wrl0} : 2'b00; ram_req[0] <= 1; next_port <= 2'd1; end
-					endcase
-					granted = 1;
-				end
-				else if (next_port == 2'd0 ? p2 : next_port == 2'd1 ? p0 : p1) begin
-					case (next_port)
-						2'd0: begin {ba,a} <= addr2; data <= din2; we <= wr[2]; dqm <= wr[2] ? ~{wrh2,wrl2} : 2'b00; ram_req[2] <= 1; next_port <= 2'd0; end
-						2'd1: begin {ba,a} <= addr0; data <= din0; we <= wr[0]; dqm <= wr[0] ? ~{wrh0,wrl0} : 2'b00; ram_req[0] <= 1; next_port <= 2'd1; end
-						default: begin {ba,a} <= addr1; data <= din1; we <= wr[1]; dqm <= wr[1] ? ~{wrh1,wrl1} : 2'b00; ram_req[1] <= 1; next_port <= 2'd2; end
-					endcase
-					granted = 1;
-				end
-				else if (p3) begin
-					{ba,a} <= addr3; data <= din3; we <= wr[3]; dqm <= wr[3] ? ~{wrh3,wrl3} : 2'b00; ram_req[3] <= 1;
-					granted = 1;
+				// MODE 0: round-robin over ALL FOUR ports. (Originally ports 0-2
+				// round-robin with port 3 served only when the others were idle.
+				// This project runs the real-time TX-tile/sprite fetch on port 3
+				// — see docs/hw-bringup.md's port table — which needs a fair
+				// share; the former port-3 consumer, OKI sample fetch, is
+				// low-bandwidth enough to share port 1 with the Z80 instead.)
+				begin : rr4
+					integer k;
+					reg [1:0] idx;
+					for (k = 0; k < 4; k = k + 1) begin
+						idx = next_port + k;
+						if (!granted) begin
+							case (idx)
+								2'd0: if (p0) begin {ba,a} <= addr0; data <= din0; we <= wr[0]; dqm <= wr[0] ? ~{wrh0,wrl0} : 2'b00; ram_req[0] <= 1; next_port <= 2'd1; granted = 1; end
+								2'd1: if (p1) begin {ba,a} <= addr1; data <= din1; we <= wr[1]; dqm <= wr[1] ? ~{wrh1,wrl1} : 2'b00; ram_req[1] <= 1; next_port <= 2'd2; granted = 1; end
+								2'd2: if (p2) begin {ba,a} <= addr2; data <= din2; we <= wr[2]; dqm <= wr[2] ? ~{wrh2,wrl2} : 2'b00; ram_req[2] <= 1; next_port <= 2'd3; granted = 1; end
+								default: if (p3) begin {ba,a} <= addr3; data <= din3; we <= wr[3]; dqm <= wr[3] ? ~{wrh3,wrl3} : 2'b00; ram_req[3] <= 1; next_port <= 2'd0; granted = 1; end
+							endcase
+						end
+					end
 				end
 			end
 
@@ -378,15 +403,31 @@ always @(posedge clk) begin
 		end
 	end
 
+	// SDRAM_DQ is captured by exactly ONE register, `dout`, so the fitter
+	// can pack it into the pad's own fast input register (the QSF's
+	// FAST_INPUT_REGISTER assignment on SDRAM_DQ[*]) — the only way the
+	// read-data window at 96MHz (10.4ns) is met. Capturing SDRAM_DQ
+	// directly into the four per-port registers instead fanned the pad
+	// out to four registers, at most one of which can live in the I/O
+	// cell; the rest sampled through unconstrained routing, and real
+	// hardware read visibly corrupted graphics/sample data at 96MHz. So
+	// the per-port copy and its ack happen one cycle later, from `dout`.
+	done_port <= 4'b0000;
 	if(state == STATE_READY && ram_req) begin
 		dout <= SDRAM_DQ;
+		done_port <= ram_req;
 		active <= 0;
 		ram_req <= 0;
-		if (ram_req[0]) ack0 <= req0;
-		else if (ram_req[1]) ack1 <= req1;
-		else if (ram_req[2]) ack2 <= req2;
-		else if (ram_req[3]) ack3 <= req3;
 	end
+	// Copy into the completing port's own register and mirror the
+	// SYNCHRONIZED req (the value that was actually granted) into its ack
+	// — see the CDC comment above. The consumer cannot observe this ack
+	// for at least two of ITS clock cycles (its own synchronizer), long
+	// after this copy has landed.
+	if (done_port[0]) begin dout0_r <= dout; ack0 <= req0_i; end
+	if (done_port[1]) begin dout1_r <= dout; ack1 <= req1_i; end
+	if (done_port[2]) begin dout2_r <= dout; ack2 <= req2_i; end
+	if (done_port[3]) begin dout3_r <= dout; ack3 <= req3_i; end
 
 	if(mode != MODE_NORMAL || state != STATE_IDLE || reset) begin
 		state <= state + 1'd1;
