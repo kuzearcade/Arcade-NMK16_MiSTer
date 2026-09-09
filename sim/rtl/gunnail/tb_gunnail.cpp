@@ -5,6 +5,7 @@
 // (40MHz, /4=10MHz 68000, /5=8MHz NMK004/pixel, /10=4MHz protcpu).
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 
 #include "Vgunnail_core.h"
 #include "verilated.h"
@@ -13,13 +14,14 @@
 #include "../common/nmktrace.h"
 
 static constexpr uint64_t RESET_CYCLES = 200;
-static constexpr uint64_t RUN_CYCLES   = 300000000;
+static uint64_t RUN_CYCLES = 300000000; // override via argv[1]
 static constexpr int SCREEN_W = 384;
 static constexpr int SCREEN_H = 224;
 
 int main(int argc, char **argv) {
 	VerilatedContext contextp;
 	contextp.commandArgs(argc, argv);
+	if (argc > 1) RUN_CYCLES = strtoull(argv[1], nullptr, 0);
 
 	Vgunnail_core top{&contextp};
 	FILE *nmk004_trace = std::fopen("nmk004_sys.trace", "w");
@@ -66,12 +68,37 @@ int main(int argc, char **argv) {
 	uint32_t oki0_we_count = 0, oki1_we_count = 0;
 	bool log_oki = std::getenv("TB_LOG_OKI") != nullptr;
 
+	// TB_DUMP_AUDIO=<path>: raw signed 16-bit mono at 48kHz. TB_LOG_HOST:
+	// print every 68000->NMK004 command and NMK004->68000 reply (the boot
+	// handshake), with the frame number, for comparison with a MAME Lua tap.
+	FILE *audio_f = std::getenv("TB_DUMP_AUDIO") ? std::fopen(std::getenv("TB_DUMP_AUDIO"), "wb") : nullptr;
+	uint64_t audio_phase = 0;
+	bool log_host = std::getenv("TB_LOG_HOST") != nullptr;
+	bool prev_cmd_we = false, prev_reply_we = false;
+	int  last_reply = -1;
+	uint32_t host_cmds = 0, host_replies = 0;
+
 	auto tick = [&]() {
 		top.clk_sys = 0;
 		top.eval();
 		top.clk_sys = 1;
 		top.eval();
 		clk_sys_ticks++;
+
+		if (audio_f) {
+			audio_phase += 48000;
+			if (audio_phase >= 40000000ULL) {
+				audio_phase -= 40000000ULL;
+				int16_t s = (int16_t)top.audio_l;
+				fwrite(&s, 2, 1, audio_f);
+			}
+		}
+		{
+			bool cw = top.dbg_host_cmd_we, rw = top.dbg_mcu_reply_we;
+			if (cw && !prev_cmd_we) { host_cmds++; if (log_host) std::fprintf(stderr, "F%03u 68K W cmd %02x\n", frame_count, (unsigned)top.dbg_host_cmd); }
+			if (rw && !prev_reply_we && (int)top.dbg_mcu_reply != last_reply) { host_replies++; last_reply = top.dbg_mcu_reply; if (log_host) std::fprintf(stderr, "F%03u MCU reply %02x\n", frame_count, (unsigned)top.dbg_mcu_reply); }
+			prev_cmd_we = cw; prev_reply_we = rw;
+		}
 
 		bool dbg_valid_now = top.dbg_nmk004_valid;
 		if (dbg_valid_now && !prev_dbg_valid) {
@@ -182,7 +209,8 @@ int main(int argc, char **argv) {
 			uint64_t cpu_cycle = clk_sys_ticks / 4;
 			trace.frame(cpu_cycle, frame_count, frame_crc);
 
-			if (std::getenv("TB_DUMP_PPM") != nullptr) {
+			static const unsigned ppm_from = std::getenv("TB_PPM_FROM") ? (unsigned)strtoul(std::getenv("TB_PPM_FROM"), nullptr, 0) : 0; // TB_PPM_FROM=N: only dump frames >= N
+			if (std::getenv("TB_DUMP_PPM") != nullptr && frame_count >= ppm_from) {
 				char fname[64];
 				std::snprintf(fname, sizeof(fname), "gunnail_frame_%02u.ppm", frame_count);
 				FILE *ppm = std::fopen(fname, "wb");
@@ -221,6 +249,8 @@ int main(int argc, char **argv) {
 	if (prot_reg_trace) std::fclose(prot_reg_trace);
 	std::fclose(m68k_trace);
 	std::fclose(m68k_cyc_trace);
+	if (audio_f) std::fclose(audio_f);
+	std::printf("tb_gunnail: host latch: %u commands, %u distinct replies\n", host_cmds, host_replies);
 	std::printf("tb_gunnail: ran %llu clk_sys cycles (~%llu 68000 bus cycles), NMK004 executed %llu instructions (last PC=$%04X)\n",
 	            (unsigned long long)RUN_CYCLES, (unsigned long long)(RUN_CYCLES / 4), (unsigned long long)nmk004_instrs, (unsigned)last_pc);
 	std::printf("tb_gunnail: protection MCU executed %llu instructions (last PC=$%04X), 68000 HALT asserted %llu times\n",

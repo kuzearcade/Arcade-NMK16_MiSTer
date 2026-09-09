@@ -110,10 +110,21 @@ module nmk_prot_core #(
 	// off (plain read/write latch, inert) for every caller that
 	// doesn't need this.
 	parameter P7_EXT_EN  = 1'b0,
-	parameter [7:0] P7_EXT_VAL = 8'h00
+	parameter [7:0] P7_EXT_VAL = 8'h00,
+	// USE_CEN=1: advance only on `cen` (clk_sys + enable, see
+	// nmk004_core.sv). USE_CEN=0 (sim wrappers): cen ignored.
+	parameter USE_CEN = 0
 ) (
 	input clk,
+	input cen,
 	input reset,
+
+	// Boot-ROM load port (hardware core: the .mra download writes the
+	// protection ROM into the on-chip array while the core is in reset;
+	// sim wrappers leave these unconnected and use BOOT_ROM_FILE).
+	input         rom_we,
+	input  [13:0] rom_waddr,
+	input  [7:0]  rom_wdata,
 
 	// 68000 shared-bus master interface — genuine full-map read/write,
 	// see header. bus_addr is a 20-bit BYTE address into the 68000's
@@ -178,8 +189,9 @@ module nmk_prot_core #(
 
 	wire [3:0] cpu_bx, cpu_by;
 
+	wire cen_eff = USE_CEN ? cen : 1'b1;
 	tlcs90 cpu (
-		.clk(clk), .cen(1'b1), .reset(reset),
+		.clk(clk), .cen(cen_eff), .reset(reset),
 		.din(cpu_din), .dout(cpu_dout), .addr(cpu_addr), .addr_bank(cpu_addr_bank),
 		.mem_rd(cpu_mem_rd), .mem_wr(cpu_mem_wr),
 		// irq_req: the on-chip TIMER peripheral's own interrupts, not an
@@ -213,10 +225,18 @@ module nmk_prot_core #(
 	// ------------------------------------------------------------------
 	reg [7:0] boot_rom [0:ROM_SIZE-1];
 	initial if (BOOT_ROM_FILE != "") $readmemh(BOOT_ROM_FILE, boot_rom);
+	always @(posedge clk) if (rom_we) boot_rom[rom_waddr] <= rom_wdata;
+	// Registered ROM read (block-RAM inference for the hardware core);
+	// the CPU samples din on an enabled edge >= 1 clk later, and with
+	// USE_CEN=0 the read is still one clk ahead of the CPU's next edge
+	// only if clk is the CPU clock itself — so keep it combinational there.
+	reg  [7:0] boot_rom_q;
+	always @(posedge clk) boot_rom_q <= boot_rom[cpu_addr[13:0]];
+	wire [7:0] boot_rom_byte = USE_CEN ? boot_rom_q : boot_rom[cpu_addr[13:0]];
 
 	reg [7:0] int_ram [0:RAM_SIZE-1];
 	wire [15:0] int_ram_addr = cpu_addr - RAM_BASE;
-	always @(posedge clk) if (cpu_mem_wr && sel_int_ram) int_ram[int_ram_addr] <= cpu_dout;
+	always @(posedge clk) if (cpu_mem_wr && sel_int_ram && cen_eff) int_ram[int_ram_addr] <= cpu_dout;
 	assign dbg_int_ram_at_hl = int_ram[dbg_hl - RAM_BASE];
 
 	// ------------------------------------------------------------------
@@ -245,14 +265,14 @@ module nmk_prot_core #(
 	wire [7:0] p6_read_value = p6_re_now ? bus_status_next : bus_status_reg;
 	always @(posedge clk) begin
 		if (reset) bus_status_reg <= 8'h04;
-		else if (p6_re_now) bus_status_reg <= bus_status_next;
+		else if (p6_re_now && cen_eff) bus_status_reg <= bus_status_next;
 	end
 
 	// Port 6 write: 0x08/0x0B assert/deassert the 68000's HALT — see header.
 	reg halt_r;
 	always @(posedge clk) begin
 		if (reset) halt_r <= 1'b0;
-		else if (p6_we) begin
+		else if (p6_we && cen_eff) begin
 			if (p6_wdata == 8'h08) halt_r <= 1'b1;
 			else if (p6_wdata == 8'h0b) halt_r <= 1'b0;
 		end
@@ -260,7 +280,7 @@ module nmk_prot_core #(
 	assign halt_68k = halt_r;
 
 	nmk004_periph periph (
-		.clk(clk), .cen(1'b1), .reset(reset),
+		.clk(clk), .cen(cen_eff), .reset(reset),
 		.reg_addr(cpu_addr[5:0]),
 		.wdata(cpu_dout),
 		.we(sel_periph & cpu_mem_wr),
@@ -293,11 +313,11 @@ module nmk_prot_core #(
 			nmk214_data_reg <= 8'h00;
 			p3_clock_prev   <= 1'b0;
 		end else begin
-			if (p7_we) nmk214_data_reg <= p7_wdata;
-			if (p3_we) p3_clock_prev   <= p3_wdata[2];
+			if (p7_we && cen_eff) nmk214_data_reg <= p7_wdata;
+			if (p3_we && cen_eff) p3_clock_prev   <= p3_wdata[2];
 		end
 	end
-	assign nmk214_cfg_we   = p3_we & ~p3_clock_prev & p3_wdata[2];
+	assign nmk214_cfg_we   = p3_we & cen_eff & ~p3_clock_prev & p3_wdata[2];
 	assign nmk214_cfg_data = nmk214_data_reg;
 
 	// ------------------------------------------------------------------
@@ -305,7 +325,7 @@ module nmk_prot_core #(
 	// ------------------------------------------------------------------
 	reg [7:0] rdata;
 	always @(*) begin
-		if (sel_boot_rom)     rdata = boot_rom[cpu_addr[13:0]];
+		if (sel_boot_rom)     rdata = boot_rom_byte;
 		else if (sel_int_ram) rdata = int_ram[int_ram_addr];
 		else if (sel_periph)  rdata = periph_rdata;
 		else if (sel_shared)  rdata = bus_rdata;

@@ -36,7 +36,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--zip", required=True, action="append", help="path to a romset zip (repeat for a split clone set: each file is read from the first zip that has it)")
     ap.add_argument("--region", required=True, action="append",
-                     help="OFFSET:file[,file...] — repeat per region; multiple comma-separated files concatenate in order (matching a multi-ROM_LOAD region)")
+                     help="OFFSET:file[,file...] — repeat per region; comma-separated files concatenate in order; 'lo+hi' interleaves a ROM_LOAD16_BYTE pair (low-byte chip on even addresses)")
     ap.add_argument("--out", required=True, help="output raw binary file")
     args = ap.parse_args()
 
@@ -62,7 +62,22 @@ def main():
             raise SystemExit(f"error: region at 0x{offset:x} overlaps previous data (buffer already {len(buf)} bytes)")
         buf.extend(b"\x00" * (offset - len(buf)))
         for fn in files:
-            buf.extend(read_member(fn))
+            if "+" in fn:
+                # "lo+hi": a ROM_LOAD16_BYTE pair, byte-interleaved so the
+                # LOW-byte chip lands on even stream addresses (the core
+                # rebuilds words by parity: even -> low byte). Same order
+                # a MiSTer .mra <interleave output="16"> with the low chip
+                # map="01" and the high chip map="10" produces.
+                lo_name, hi_name = fn.split("+", 1)
+                lo, hi = read_member(lo_name), read_member(hi_name)
+                if len(lo) != len(hi):
+                    raise SystemExit(f"error: {lo_name}/{hi_name} sizes differ")
+                out = bytearray(len(lo) * 2)
+                out[0::2] = lo
+                out[1::2] = hi
+                buf.extend(out)
+            else:
+                buf.extend(read_member(fn))
 
     with open(args.out, "wb") as f:
         f.write(buf)

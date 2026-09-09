@@ -28,10 +28,18 @@ OBJ_DIR := obj_dir
 TOP := gunnail_core
 Z1 := $(ROMS_DIR)/gunnail.zip
 
-SOURCES := $(CORE_DIR)/$(TOP).sv $(CORE_DIR)/video_gunnail.sv $(NMK214_DIR)/nmk214.sv \
+MACROSS2_DIR := ../../../rtl/macross2
+RTL_DIR := ../../../rtl
+# Video is rtl/macross2/video_macross2.sv (gfx_macross parameters,
+# RASTER_SCROLL, NMK214 descramble) — the hardware-ready module, so the
+# reference sim and Gunnail.rbf share one video path. The SDRAM/cache
+# modules are listed so their HW_ROMS=1 generate branches resolve.
+SOURCES := $(CORE_DIR)/$(TOP).sv $(MACROSS2_DIR)/video_macross2.sv $(NMK214_DIR)/nmk214.sv \
            $(TLCS90_DIR)/tlcs90.sv $(TLCS90_DIR)/nmk004_periph.sv $(TLCS90_DIR)/nmk004_core.sv $(TLCS90_DIR)/nmk_prot_core.sv \
            $(BJTWIN_DIR)/video_timing.sv $(NMK_IRQ_DIR)/nmk_irq.sv \
-           $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v
+           $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
+           $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache1_byte.sv \
+           $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv
 
 .PHONY: all rom prot-rom ext-rom oki-roms vtiming-rom gfx-roms run clean
 
@@ -71,7 +79,7 @@ gfx-roms:
 	python3 $(TOOLS_DIR)/mkgfxrom.py --zip $(Z1) --mode word_swap --files 92077-7.u134 --out roms/gunnail_sprites.hex
 
 $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gunnail.cpp $(FX68K_DIR)/fx68k.sv roms/gunnail_maincpu.hex roms/gunnail_prot.hex roms/gunnail_oki1.hex roms/gunnail_oki2.hex roms/gunnail_vtiming.hex roms/gunnail_fgtile.hex roms/gunnail_bgtile.hex roms/gunnail_sprites.hex ../tlcs90/roms/gunnail_ext.hex
-	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT --top-module $(TOP) \
+	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --top-module $(TOP) $(EXTRA_VFLAGS) \
 		-y $(FX68K_DIR) -y $(TLCS90_DIR) -y $(NMK214_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl \
 		-GROM_FILE=\"roms/gunnail_maincpu.hex\" \
 		-GNMK004_BOOT_FILE=\"../tlcs90/roms/nmk004_boot.hex\" \
