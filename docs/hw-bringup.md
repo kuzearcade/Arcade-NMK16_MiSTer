@@ -696,6 +696,25 @@ Note on the MiSTer screenshot rows for the overlay: the native
 and repeat lines (the box now runs the 640x480 output mode), so decode
 overlay rows by their marker colour, never by absolute y.
 
+## Keyboard input (MAME default keys)
+
+`Macross2.sv` decodes hps_io's `ps2_key` stream into held-key
+registers and ORs them into IN0/IN1 next to the joysticks, always on,
+using MAME's default bindings: P1 arrows + LCtrl/LAlt/Space + `1`;
+P2 R/F/D/G + A/S/Q + `2`; coins `5`/`6`; service `9`; F2 toggles the
+DSW1 SW1:8 service-mode switch (a toggle, like MAME's Service Mode
+key, applied on top of the OSD DIP value). Scan codes are PS/2 set 2
+with the E0 prefix carried as bit 8 of the matched code.
+
+The game samples the service switch only at boot (checked in MAME:
+flipping the field mid-attract from Lua changes nothing until a
+reset), so F2 then an OSD reset enters test mode, exactly as F2 then
+F3 does in MAME. Verified on the MiSTer without a physical keyboard:
+`tools/mister_keys.py` creates a uinput keyboard on the box (python3
+and /dev/uinput are present) and presses keys from the command line —
+`5 5` gave CREDITS 2, `1` started player 1, `9 9 9` gave CREDITS 3,
+`2` started player 2, arrows/R and LCtrl/A moved and fired.
+
 ## Sprite-on-sprite stacking: what MAME really does (a reverted "fix")
 
 Reported as a transparency problem on tdragon2's desert-stage palm

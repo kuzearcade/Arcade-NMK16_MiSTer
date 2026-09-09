@@ -176,8 +176,57 @@ wire reset = RESET | status[0] | buttons[1] | ioctl_download | ~pll_locked;
 // already matches joystick_0/1[6:0] directly, bit for bit, for both
 // games.
 // ------------------------------------------------------------------
-wire [15:0] in0_i = ~{11'd0, joystick_1[7], joystick_0[7], 1'b0, joystick_1[8], joystick_0[8]};
-wire [15:0] in1_i = ~{1'b0, joystick_1[6:0], 1'b0, joystick_0[6:0]};
+// ------------------------------------------------------------------
+// Keyboard: MAME's default key bindings, always active, ORed with the
+// joysticks. hps_io's ps2_key is {toggle, pressed, extended, code}
+// (PS/2 scan-code set 2; toggle flips on every event). Keys held are
+// tracked in the kb_* registers below; "extended" (E0-prefixed) codes
+// are matched with bit 8 set.
+//   P1: Up/Down/Left/Right arrows, B1 LCtrl, B2 LAlt, B3 Space, Start 1
+//   P2: R/F/D/G, B1 A, B2 S, B3 Q, Start 2
+//   Coin 1 = 5, Coin 2 = 6, Service (IPT_SERVICE1) = 9
+//   Test / Service Mode = F2: a TOGGLE, as in MAME, flipping DSW1 SW1:8
+//   (PORT_SERVICE_DIPLOC, active low) — see dsw1_i below.
+// ------------------------------------------------------------------
+reg [6:0] kb_p1 = 7'd0, kb_p2 = 7'd0;   // [0]=R [1]=L [2]=D [3]=U [4]=B1 [5]=B2 [6]=B3, joystick bit order
+reg kb_start1 = 1'b0, kb_start2 = 1'b0, kb_coin1 = 1'b0, kb_coin2 = 1'b0, kb_service = 1'b0;
+reg kb_test_mode = 1'b0;   // toggled by each F2 press
+reg kb_f2_held = 1'b0;
+reg kb_toggle_d = 1'b0;
+always @(posedge clk_sys) begin
+	kb_toggle_d <= ps2_key[10];
+	if (kb_toggle_d != ps2_key[10]) begin
+		case (ps2_key[8:0])
+			9'h175: kb_p1[3] <= ps2_key[9];   // Up arrow
+			9'h172: kb_p1[2] <= ps2_key[9];   // Down arrow
+			9'h16B: kb_p1[1] <= ps2_key[9];   // Left arrow
+			9'h174: kb_p1[0] <= ps2_key[9];   // Right arrow
+			9'h014: kb_p1[4] <= ps2_key[9];   // Left Ctrl  = P1 button 1
+			9'h011: kb_p1[5] <= ps2_key[9];   // Left Alt   = P1 button 2
+			9'h029: kb_p1[6] <= ps2_key[9];   // Space      = P1 button 3
+			9'h02D: kb_p2[3] <= ps2_key[9];   // R = P2 up
+			9'h02B: kb_p2[2] <= ps2_key[9];   // F = P2 down
+			9'h023: kb_p2[1] <= ps2_key[9];   // D = P2 left
+			9'h034: kb_p2[0] <= ps2_key[9];   // G = P2 right
+			9'h01C: kb_p2[4] <= ps2_key[9];   // A = P2 button 1
+			9'h01B: kb_p2[5] <= ps2_key[9];   // S = P2 button 2
+			9'h015: kb_p2[6] <= ps2_key[9];   // Q = P2 button 3
+			9'h016: kb_start1  <= ps2_key[9]; // 1
+			9'h01E: kb_start2  <= ps2_key[9]; // 2
+			9'h02E: kb_coin1   <= ps2_key[9]; // 5
+			9'h036: kb_coin2   <= ps2_key[9]; // 6
+			9'h046: kb_service <= ps2_key[9]; // 9
+			9'h006: begin                     // F2: toggle on press (ignore key repeat while held)
+				if (ps2_key[9] && !kb_f2_held) kb_test_mode <= ~kb_test_mode;
+				kb_f2_held <= ps2_key[9];
+			end
+			default: ;
+		endcase
+	end
+end
+
+wire [15:0] in0_i = ~{11'd0, joystick_1[7] | kb_start2, joystick_0[7] | kb_start1, kb_service, joystick_1[8] | kb_coin2, joystick_0[8] | kb_coin1};
+wire [15:0] in1_i = ~{1'b0, joystick_1[6:0] | kb_p2, 1'b0, joystick_0[6:0] | kb_p1};
 // DIP switches — the MiSTer .mra loader auto-generates its own "DIP
 // Switches" OSD submenu directly from each loaded .mra's own
 // <switches>/<dip bits="N" .../> declarations (no CONF_STR "O" entry
@@ -299,7 +348,9 @@ always @(posedge clk_sys) begin
 	if (ioctl_download && ioctl_wr && (ioctl_index == 16'd254) && !ioctl_addr[24:3])
 		dip_sw[ioctl_addr[2:0]] <= ioctl_dout;
 end
-assign dsw1_i = {8'hFF, dip_sw[0]};
+// DSW1 bit 0 is SW1:8 "Service Mode" (active low). F2 toggles it like
+// MAME's Service Mode key, on top of whatever the OSD DIP setting is.
+assign dsw1_i = {8'hFF, dip_sw[0] ^ {7'd0, kb_test_mode}};
 assign dsw2_i = {8'hFF, dip_sw[1]};
 // OR'd with status[16] so game select still works if a MiSTer build ever
 // does mirror <switches> into status[] as well; either path alone selects
