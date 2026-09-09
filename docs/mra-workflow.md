@@ -46,3 +46,17 @@ Per `docs/PLAN.md`, given MAME's `ROM_START` regions map fairly mechanically to 
   </rom>
 </misterromdescription>
 ```
+
+## Family C files and naming (2026-09-09)
+
+`releases/` names each .mra after the MAME description from the GAME()
+line, as the official MiSTer MRA collection does; "/" cannot appear in
+a file name and becomes " - " (the `<name>` element keeps the exact MAME
+string). The two parents are hand-authored; the five clones
+(macross2g, macross2k, tdragon2a, bigbang, bigbanga) are written by
+`tools/gen_family_c_mra.py` from a table transcribed from ROM_START —
+same DIPs, buttons and hidden game-select byte as their parent, ROM
+parts in the shared core's fixed layout, and `zip="clone.zip|parent.zip"`
+so files shared with the parent are found in either archive. Every
+part name and CRC32 was checked against the real zip members. Note the
+`<dip bits="a,b">` attribute is a start,end RANGE, not a bit list.

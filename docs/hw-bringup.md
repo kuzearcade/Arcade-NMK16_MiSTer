@@ -896,7 +896,7 @@ large explosion before renders it continuous now.
 
 `HW_ROMS=1` implemented for both games (`rtl/tdragon2/tdragon2_core.sv`
 serving both at runtime, `rtl/macross2/video_macross2.sv`, `rtl/sdram_req.sv`,
-`Macross2.sv`/`.qsf`/`.sdc`, `releases/tdragon2.mra`/`macross2.mra`),
+`Macross2.sv`/`.qsf`/`.sdc`, the `releases/*.mra` files),
 Verilator-verified under real SDRAM wait-state latency, and — with the
 `ioctl_index` fix above — booting on a real DE10-Nano with the ROM
 checksum matching simulation, with sprites rendering in the attract
