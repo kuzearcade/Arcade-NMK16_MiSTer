@@ -73,14 +73,14 @@
        HIDDEN game-select bit (status[16]=0 -> tdragon2, no <dip> entry
        declares it — see this file's own header). -->
   <switches default="F7,FF,00">
-    <dip bits="0" name="Service Mode" ids="Off,On"/>
+    <dip bits="0" name="Service Mode" ids="On,Off"/> <!-- PORT_SERVICE_DIPLOC, active low: bit clear = service mode ON -->
     <dip bits="1" name="Demo Sounds" ids="Off,On"/>
     <dip bits="2" name="Flip Screen" ids="On,Off"/>
     <dip bits="3" name="Unused" ids="Off,On"/>
     <dip bits="4,5" name="Difficulty" ids="Hardest,Easy,Hard,Normal"/>
     <dip bits="6,7" name="Lives" ids="1,2,4,3"/>
-    <dip bits="8,9,10,11" name="Coin B" ids="5C_3C,2C_1C,3C_2C,1C_4C,4C_1C,1C_6C,2C_5C,1C_2C,4C_3C,1C_7C,3C_1C,1C_3C,3C_4C,1C_5C,2C_3C,1C_1C"/>
-    <dip bits="12,13,14,15" name="Coin A" ids="Free_Play,2C_1C,3C_2C,1C_4C,4C_1C,1C_6C,2C_5C,1C_2C,4C_3C,1C_7C,3C_1C,1C_3C,3C_4C,1C_5C,2C_3C,1C_1C"/>
+    <dip bits="8,11" name="Coin B" ids="5C_3C,2C_1C,3C_2C,1C_4C,4C_1C,1C_6C,2C_5C,1C_2C,4C_3C,1C_7C,3C_1C,1C_3C,3C_4C,1C_5C,2C_3C,1C_1C"/>
+    <dip bits="12,15" name="Coin A" ids="Free_Play,2C_1C,3C_2C,1C_4C,4C_1C,1C_6C,2C_5C,1C_2C,4C_3C,1C_7C,3C_1C,1C_3C,3C_4C,1C_5C,2C_3C,1C_1C"/>
   </switches>
 
   <!-- IN1: 3 buttons/player (nmk16.cpp:2906-2908, 2914-2916). IN0 also

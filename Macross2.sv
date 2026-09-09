@@ -83,6 +83,13 @@ localparam CONF_STR = {
 	// through the OSD's own settings save.
 	"H0O[9],Orientation,Horz,Vert;",
 	"-;",
+	// "DIP;" is where MiSTer inserts the DIP-switch submenu it builds from
+	// the loaded .mra's <switches>/<dip> entries (releases/*.mra declare
+	// every DSW1/DSW2 option from nmk16.cpp). Changes are sent through
+	// ioctl index 254 (dip_sw below) and MiSTer saves them itself to
+	// config/dips/<mra>.dip, restored on the next load of that .mra.
+	"DIP;",
+	"-;",
 	"R[0],Reset;",
 	// Fixed at synthesis time as tdragon2's own superset (3 buttons) —
 	// serves macross2 too, whose own .mra just declares fewer <buttons>
