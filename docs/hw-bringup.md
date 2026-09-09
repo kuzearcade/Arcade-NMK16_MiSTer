@@ -696,6 +696,17 @@ Note on the MiSTer screenshot rows for the overlay: the native
 and repeat lines (the box now runs the 640x480 output mode), so decode
 overlay rows by their marker colour, never by absolute y.
 
+## Autofire (tdragon2)
+
+OSD `P1 Autofire` / `P2 Autofire` (status[12:10] / [15:13], default
+Off, hidden for macross2 through status_menumask bit 1). The pattern is
+clocked by the game's own vblank (~56 Hz): 10Hz = 3 frames on / 3 off,
+12Hz = 2/3, 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1. The phase counter
+restarts on each new press so a tap fires on its first frame. While a
+player's autofire is on, that player's button 3 is a plain
+non-autofire button 1 and its own bit is not sent to the game. Saved
+with the other status bits by OSD > System > Save settings.
+
 ## DIP switches in the OSD
 
 Both .mra files already declared every DSW1/DSW2 option from

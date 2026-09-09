@@ -82,6 +82,13 @@ localparam CONF_STR = {
 	// path is unavailable. MiSTer keeps status bits across sessions
 	// through the OSD's own settings save.
 	"H0O[9],Orientation,Horz,Vert;",
+	// Autofire on button 1 (tdragon2 only — hidden, H1, for macross2):
+	// Off, or a frames-on/frames-off pattern clocked by the game's own
+	// vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3, 15Hz = 2/2, 20Hz = 1/2,
+	// 30Hz = 1/1. While enabled for a player, that player's button 3 is
+	// a plain (non-autofire) button 1. See the autofire block below.
+	"H1O[12:10],P1 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
+	"H1O[15:13],P2 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
 	"-;",
 	// "DIP;" is where MiSTer inserts the DIP-switch submenu it builds from
 	// the loaded .mra's <switches>/<dip> entries (releases/*.mra declare
@@ -124,7 +131,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({game_macross2 | direct_video}),
+	.status_menumask({game_macross2, game_macross2 | direct_video}), // [1] hides the autofire entries, [0] Orientation
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -244,7 +251,50 @@ always @(posedge clk_sys) begin
 end
 
 wire [15:0] in0_i = ~{11'd0, joystick_1[7] | kb_start2, joystick_0[7] | kb_start1, kb_service, joystick_1[8] | kb_coin2, joystick_0[8] | kb_coin1};
-wire [15:0] in1_i = ~{1'b0, joystick_1[6:0] | kb_p2, 1'b0, joystick_0[6:0] | kb_p1};
+
+// ------------------------------------------------------------------
+// Autofire (status[12:10] P1, status[15:13] P2; 0 = off). The pattern
+// counter advances once per game frame (vblank_core rising edge) and
+// restarts on each new press, so a tap always fires on its first frame.
+// Button 1 out = (held & pattern) | button 3; button 3 out = 0 while
+// enabled — its ordinary input is not sent to the game in that mode.
+// ------------------------------------------------------------------
+wire        hblank_core, vblank_core;   // from the core, also used by the video output below
+wire [6:0] p1_raw = joystick_0[6:0] | kb_p1;
+wire [6:0] p2_raw = joystick_1[6:0] | kb_p2;
+reg  vbl_d = 1'b0;
+wire frame_tick = vblank_core & ~vbl_d;
+always @(posedge clk_sys) vbl_d <= vblank_core;
+
+function automatic [3:0] af_on(input [2:0] m);   // frames on
+	case (m) 3'd1: af_on = 4'd3; 3'd2: af_on = 4'd2; 3'd3: af_on = 4'd2; 3'd4: af_on = 4'd1; 3'd5: af_on = 4'd1; default: af_on = 4'd0; endcase
+endfunction
+function automatic [3:0] af_len(input [2:0] m);  // frames per cycle (on + off)
+	case (m) 3'd1: af_len = 4'd6; 3'd2: af_len = 4'd5; 3'd3: af_len = 4'd4; 3'd4: af_len = 4'd3; 3'd5: af_len = 4'd2; default: af_len = 4'd1; endcase
+endfunction
+
+reg [3:0] af1_phase = 4'd0, af2_phase = 4'd0;
+reg       af1_held_d = 1'b0, af2_held_d = 1'b0;
+wire [2:0] af1_mode = status[12:10];
+wire [2:0] af2_mode = status[15:13];
+always @(posedge clk_sys) begin
+	af1_held_d <= p1_raw[4];
+	af2_held_d <= p2_raw[4];
+	if (p1_raw[4] & ~af1_held_d) af1_phase <= 4'd0;                                   // new press: start of pattern
+	else if (frame_tick) af1_phase <= (af1_phase + 4'd1 >= af_len(af1_mode)) ? 4'd0 : af1_phase + 4'd1;
+	if (p2_raw[4] & ~af2_held_d) af2_phase <= 4'd0;
+	else if (frame_tick) af2_phase <= (af2_phase + 4'd1 >= af_len(af2_mode)) ? 4'd0 : af2_phase + 4'd1;
+end
+wire af1_en = (af1_mode != 3'd0) & ~game_macross2;
+wire af2_en = (af2_mode != 3'd0) & ~game_macross2;
+wire p1_b1 = af1_en ? ((p1_raw[4] & (af1_phase < af_on(af1_mode))) | p1_raw[6]) : p1_raw[4];
+wire p2_b1 = af2_en ? ((p2_raw[4] & (af2_phase < af_on(af2_mode))) | p2_raw[6]) : p2_raw[4];
+wire p1_b3 = af1_en ? 1'b0 : p1_raw[6];
+wire p2_b3 = af2_en ? 1'b0 : p2_raw[6];
+wire [6:0] p1_btn = {p1_b3, p1_raw[5], p1_b1, p1_raw[3:0]};
+wire [6:0] p2_btn = {p2_b3, p2_raw[5], p2_b1, p2_raw[3:0]};
+
+wire [15:0] in1_i = ~{1'b0, p2_btn, 1'b0, p1_btn};
 // DIP switches — the MiSTer .mra loader auto-generates its own "DIP
 // Switches" OSD submenu directly from each loaded .mra's own
 // <switches>/<dip bits="N" .../> declarations (no CONF_STR "O" entry
@@ -376,7 +426,7 @@ assign dsw2_i = {8'hFF, dip_sw[1]};
 assign game_macross2 = dip_sw[2][0] | status[16];
 wire        ce_pix_core;
 wire [9:0]  hcount_core, vcount_core;
-wire        hblank_core, vblank_core;
+// hblank_core/vblank_core are declared above the autofire block (frame tick).
 wire signed [15:0] audio_l, audio_r;
 
 // rd_x/rd_y are screen-relative (0..383/0..223, see video_macross2.sv's
