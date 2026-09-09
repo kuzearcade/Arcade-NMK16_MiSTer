@@ -94,6 +94,8 @@ module tdragon2_hw_top
 	output [19:0] ioctl_csum_count_o,
 	output        ioctl_csum_done_o,
 
+	input  [15:0] in0_i,   // player/coin inputs (active low), driven by the testbench's autoplay
+	input  [15:0] in1_i,
 	input         clk_ram, // SDRAM controller clock — see sdram_inst below
 	input  [6:0]  dbg_bucket_sel_i,
 	output [15:0] dbg_bucket_state_o,
@@ -101,7 +103,30 @@ module tdragon2_hw_top
 	output [15:0] dbg_fine_state_o,
 	output        dbg_fine_touched_o,
 	output [15:0] dbg_word_state_o,
-	output        dbg_word_touched_o
+	output        dbg_word_touched_o,
+
+	// 68000 throughput audit (see docs/hw-bringup.md, slowdown section):
+	// counts of bus cycles / ROM bus cycles / ROM cache misses, and clk_sys
+	// cycles the CPU spent with DTACKn held off by each wait source.
+	output reg [31:0] dbg_bus_cycles,
+	output reg [31:0] dbg_rom_cycles,
+	output reg [31:0] dbg_rom_misses,
+	output reg [31:0] dbg_rom_wait_clks,
+	output reg [31:0] dbg_ram_wait_clks,
+	output reg [31:0] dbg_dma_wait_clks,
+	output reg [31:0] dbg_miss_lat_clks,
+	output reg [31:0] dbg_miss_lat_max,
+
+	// Sprite compositing pass audit: clk_sys cycles the pass FSM was busy
+	// (S_CLEAR..S_DONE), cycles it sat waiting for a sprite ROM byte,
+	// 16x16 tile units started, and DMA triggers that found the previous
+	// pass still running (a delayed plane swap = the sprites updated a
+	// frame late).
+	output reg [31:0] dbg_spr_pass_clks,
+	output reg [31:0] dbg_spr_stall_clks,
+	output reg [31:0] dbg_spr_units,
+	output reg [31:0] dbg_spr_late_swaps,
+	output reg [31:0] dbg_spr_pass_max
 );
 
 	// Same computation as Macross2.sv's own rd_x_screen/rd_y_screen —
@@ -183,7 +208,7 @@ module tdragon2_hw_top
 
 		.audio_l(audio_l), .audio_r(),
 		.ce_pix_o(ce_pix_o), .hcount_o(hcount_o), .vcount_o(vcount_o), .hblank_o(hblank_o), .vblank_o(vblank_o),
-		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF),
+		.in0_i(in0_i), .in1_i(in1_i), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF),
 
 		.rom_csum_o(rom_csum_o), .rom_csum_count_o(rom_csum_count_o), .rom_csum_done_o(rom_csum_done_o),
 		.rom_fetch_csum_o(rom_fetch_csum_o), .rom_fetch_csum_count_o(rom_fetch_csum_count_o), .rom_fetch_csum_done_o(rom_fetch_csum_done_o),
@@ -196,5 +221,50 @@ module tdragon2_hw_top
 		.dbg_word_state_o(dbg_word_state_o), .dbg_word_touched_o(dbg_word_touched_o),
 		.rom_fetch_word_touched_o(), .rom_fetch_word_sim_touched_o(), .rom_fetch_word_fail_o()
 	);
+
+	reg prev_asn_a = 1'b1, prev_pending = 1'b0;
+	reg [31:0] lat = 0;
+	reg [31:0] pass_len = 0;
+	reg [4:0]  spr_state_d = 5'd0;
+	always @(posedge clk_sys) begin
+		spr_state_d <= core_inst.video.state;
+		if (reset) begin
+			dbg_spr_pass_clks <= 0; dbg_spr_stall_clks <= 0; dbg_spr_units <= 0; dbg_spr_late_swaps <= 0; dbg_spr_pass_max <= 0; pass_len <= 0;
+		end else begin
+			if (core_inst.video.state >= 5'd5 && core_inst.video.state <= 5'd12) begin
+				dbg_spr_pass_clks <= dbg_spr_pass_clks + 1; pass_len <= pass_len + 1;
+			end
+			if (core_inst.video.state == 5'd12) begin
+				if (pass_len > dbg_spr_pass_max) dbg_spr_pass_max <= pass_len;
+				pass_len <= 0;
+			end
+			if (core_inst.video.state == 5'd8 && !core_inst.video.sprites_ready) dbg_spr_stall_clks <= dbg_spr_stall_clks + 1;
+			if (core_inst.video.state == 5'd7 && spr_state_d != 5'd7) dbg_spr_units <= dbg_spr_units + 1;
+			if (core_inst.video.sprite_dma_trigger && core_inst.video.state != 5'd2 && core_inst.video.state != 5'd12) dbg_spr_late_swaps <= dbg_spr_late_swaps + 1;
+		end
+	end
+	always @(posedge clk_sys) begin
+		prev_asn_a <= core_inst.ASn;
+		prev_pending <= core_inst.g_rom_hw.rom_cache_inst.pending;
+		if (reset) begin
+			dbg_bus_cycles <= 0; dbg_rom_cycles <= 0; dbg_rom_misses <= 0; dbg_rom_wait_clks <= 0;
+			dbg_ram_wait_clks <= 0; dbg_dma_wait_clks <= 0; dbg_miss_lat_clks <= 0; dbg_miss_lat_max <= 0; lat <= 0;
+		end else begin
+			if (prev_asn_a && !core_inst.ASn) begin
+				dbg_bus_cycles <= dbg_bus_cycles + 1;
+				if (core_inst.sel_rom) dbg_rom_cycles <= dbg_rom_cycles + 1;
+			end
+			if (core_inst.rom_wait) dbg_rom_wait_clks <= dbg_rom_wait_clks + 1;
+			if (core_inst.mainram_wait | core_inst.bgvram_wait | core_inst.txvram_wait) dbg_ram_wait_clks <= dbg_ram_wait_clks + 1;
+			if (core_inst.mainram_dma_wait) dbg_dma_wait_clks <= dbg_dma_wait_clks + 1;
+			if (!prev_pending && core_inst.g_rom_hw.rom_cache_inst.pending) begin
+				dbg_rom_misses <= dbg_rom_misses + 1; lat <= 1;
+			end else if (core_inst.g_rom_hw.rom_cache_inst.pending) lat <= lat + 1;
+			if (prev_pending && !core_inst.g_rom_hw.rom_cache_inst.pending) begin
+				dbg_miss_lat_clks <= dbg_miss_lat_clks + lat;
+				if (lat > dbg_miss_lat_max) dbg_miss_lat_max <= lat;
+			end
+		end
+	end
 
 endmodule

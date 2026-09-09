@@ -27,6 +27,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_req.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache1.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache_n.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache_n_byte.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache1_byte.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/oki_rom_cache.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tile_prefetch_byte.sv

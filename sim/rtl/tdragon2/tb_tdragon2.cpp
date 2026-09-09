@@ -215,6 +215,7 @@ int main(int argc, char **argv) {
 				}
 				std::fclose(ppm);
 			}
+			{ static uint64_t p_instr = 0; std::printf("CPUFRAME %u instr=%llu\n", frame_count, (unsigned long long)(m68k_instrs - p_instr)); p_instr = m68k_instrs; }
 			frame_count++;
 		}
 		prev_frame_done = frame_done_now;

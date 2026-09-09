@@ -62,6 +62,12 @@ module video_macross2 #(
 	// screenshot shows directly whether a visible artifact is a cache
 	// miss (bandwidth/latency) or a hit serving wrong data. 0 = normal.
 	parameter DBG_MISS_PAINT = 0,
+	// HW_ROMS=1 only. 0: port B carries TX prefetch + sprite fetch (TX
+	// first). 1: the TX prefetch stream leaves through the txc_* consumer
+	// channel (one sdram_arb channel in the core, where it must get top
+	// priority) and the sprite fetch owns port B alone — see the
+	// sprite-fetch comments in g_video_rom_hw.
+	parameter TX_EXTERNAL = 0,
 	parameter [22:0] BASE_WORD_FGTILE  = 23'd0,
 	parameter [22:0] BASE_WORD_BGTILE  = 23'd0,
 	parameter [22:0] BASE_WORD_SPRITES = 23'd0,
@@ -106,6 +112,14 @@ module video_macross2 #(
 	input      [15:0] sd_b_dout,
 	input      [31:0] sd_b_dout_pair,
 	input             sd_b_ack,
+	// TX_EXTERNAL=1: TX prefetch as a consumer-level channel (sdram_arb
+	// shape: hold req until valid). Tied off otherwise.
+	output     [24:1] txc_addr,
+	output            txc_req,
+	input             txc_busy,
+	input             txc_valid,
+	input      [15:0] txc_dout,
+	input      [31:0] txc_dout_pair,
 
 	input sprite_dma_trigger, // from nmk_irq: snapshot sprite RAM now
 	// High while the sprite-table copy is in progress. The real board's
@@ -249,6 +263,7 @@ module video_macross2 #(
 		assign tx_hit = 1'b1;
 		assign sd_addr = 24'd0; assign sd_wrl = 1'b0; assign sd_wrh = 1'b0; assign sd_din = 16'd0; assign sd_req = 1'b0;
 		assign sd_b_addr = 24'd0; assign sd_b_req = 1'b0;
+		assign txc_addr = 24'd0; assign txc_req = 1'b0;
 	end else begin : g_video_rom_hw
 		// Port A (sd_*): the BG prefetch stream alone, straight onto its own
 		// sdram_req. Port B (sd_b_*): TX prefetch + sprites, fixed priority.
@@ -271,19 +286,45 @@ module video_macross2 #(
 			.sdram_addr(sd_addr), .sdram_wrl(sd_wrl), .sdram_wrh(sd_wrh), .sdram_din(sd_din),
 			.sdram_dout(sd_dout), .sdram_dout_pair(sd_dout_pair), .sdram_req(sd_req), .sdram_ack(sd_ack)
 		);
+		// Consumer-level channels of the TX prefetch and the sprite fetch.
+		// TX_EXTERNAL=0: both share port B through a fixed-priority
+		// arbiter, TX first. TX_EXTERNAL=1: TX leaves through txc_* and
+		// the sprite fetch has port B to itself — the compositing pass is
+		// bound by its ROM fetch round trips (32 aligned 4-byte groups per
+		// 16x16 unit, ~12 clk_sys each through an arbiter), so sharing the
+		// port with the real-time TX stream cost it about a quarter of its
+		// frame budget at gameplay sprite loads (docs/hw-bringup.md,
+		// "Slowdown").
 		wire        arb_busy [0:1];
 		wire        arb_valid[0:1];
 		wire [24:1] arb_addr [0:1];
 		wire        arb_req  [0:1];
 		wire [15:0] arb_dout [0:1];
 		wire [31:0] arb_dout_pair [0:1];
-		sdram_arb #(.N(2), .FIXED_PRIO(1)) video_arb_inst (
-			.clk(clk_sys), .reset(reset),
-			.i_addr(arb_addr), .i_we('{1'b0,1'b0}), .i_wrl('{1'b0,1'b0}), .i_wrh('{1'b0,1'b0}), .i_din('{16'd0,16'd0}),
-			.i_req(arb_req), .i_busy(arb_busy), .i_valid(arb_valid), .i_dout(arb_dout), .i_dout_pair(arb_dout_pair),
-			.sdram_addr(sd_b_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
-			.sdram_dout(sd_b_dout), .sdram_dout_pair(sd_b_dout_pair), .sdram_req(sd_b_req), .sdram_ack(sd_b_ack)
-		);
+		if (TX_EXTERNAL) begin : g_tx_ext
+			assign txc_addr     = arb_addr[0];
+			assign txc_req      = arb_req[0];
+			assign arb_busy[0]  = txc_busy;
+			assign arb_valid[0] = txc_valid;
+			assign arb_dout[0]  = txc_dout;
+			assign arb_dout_pair[0] = txc_dout_pair;
+			sdram_req spr_req_inst (
+				.clk(clk_sys), .reset(reset),
+				.addr(arb_addr[1]), .we(1'b0), .wrl(1'b0), .wrh(1'b0), .din(16'd0),
+				.req(arb_req[1]), .busy(arb_busy[1]), .valid(arb_valid[1]), .dout(arb_dout[1]), .dout_pair(arb_dout_pair[1]),
+				.sdram_addr(sd_b_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
+				.sdram_dout(sd_b_dout), .sdram_dout_pair(sd_b_dout_pair), .sdram_req(sd_b_req), .sdram_ack(sd_b_ack)
+			);
+		end else begin : g_tx_int
+			assign txc_addr = 24'd0; assign txc_req = 1'b0;
+			sdram_arb #(.N(2), .FIXED_PRIO(1)) video_arb_inst (
+				.clk(clk_sys), .reset(reset),
+				.i_addr(arb_addr), .i_we('{1'b0,1'b0}), .i_wrl('{1'b0,1'b0}), .i_wrh('{1'b0,1'b0}), .i_din('{16'd0,16'd0}),
+				.i_req(arb_req), .i_busy(arb_busy), .i_valid(arb_valid), .i_dout(arb_dout), .i_dout_pair(arb_dout_pair),
+				.sdram_addr(sd_b_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
+				.sdram_dout(sd_b_dout), .sdram_dout_pair(sd_b_dout_pair), .sdram_req(sd_b_req), .sdram_ack(sd_b_ack)
+			);
+		end
 		assign bgvram_addr = bg_vram_addr_look;
 		assign txvram_addr = tx_vram_addr_look;
 		tile_prefetch_byte #(.TAG_W(19), .ENTRIES(8), .BASE_WORD_OFFSET(BASE_WORD_FGTILE)) fgtile_cache_inst (
@@ -310,7 +351,16 @@ module video_macross2 #(
 		// 2-pixel column pairs swapped: the jagged "combing" seen in
 		// native screenshots on hardware while the sim was pixel-exact.
 		// BG/TX/OKI/Z80 regions are plain ROM_LOADs and stay as they are.
+		// rom_cache_n_byte (8 pairs + next-pair prefetch), not the 1-pair
+		// rom_cache1_byte: see its header — with one pair every 4-byte
+		// group of a unit cost a full arbiter round trip and the pass
+		// outlasted the frame at gameplay sprite loads.
+`ifdef SPR_CACHE1_BASELINE
+		// measurement builds only (sim/rtl/tdragon2_hw): the previous 1-pair cache
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_SPRITES)) sprites_cache_inst (
+`else
+		rom_cache_n_byte #(.BASE_WORD_OFFSET(BASE_WORD_SPRITES), .LINES(8), .PREFETCH(1), .REGION_BYTES(SPRITES_BYTES)) sprites_cache_inst (
+`endif
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({1'd0, spr_byte_addr ^ 23'd1}), .data(sprites_rom_byte), .word(sprites_rom_word), .ready(sprites_ready),
 			.sd_addr(arb_addr[1]), .sd_req(arb_req[1]), .sd_busy(arb_busy[1]), .sd_valid(arb_valid[1]), .sd_dout(arb_dout[1]), .sd_dout_pair(arb_dout_pair[1])

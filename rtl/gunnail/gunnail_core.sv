@@ -436,7 +436,9 @@ module gunnail_core #(
 		reg [18:1] rom_addr_held;
 		always @(posedge clk_sys) if (sel_rom) rom_addr_held <= byte_addr[18:1];
 		wire [18:1] rom_cache_addr = sel_rom ? byte_addr[18:1] : rom_addr_held;
-		rom_cache1 rom_cache_inst (
+		// 16 pairs + next-pair prefetch instead of rom_cache1's single
+		// pair: see rtl/rom_cache_n.sv (68000 slowdown vs MAME).
+		rom_cache_n #(.LINES(16), .PREFETCH(1), .LAST_PAIR(22'h01FFFF)) rom_cache_inst (
 			.clk(clk_sys), .reset(reset | ioctl_download),
 			.addr(rom_cache_addr), .data(rom_dout), .ready(rom_ready),
 			.sd_addr(cache_sd_addr), .sd_req(cache_sd_req),
@@ -865,12 +867,12 @@ module gunnail_core #(
 	assign dbg_nmk004_stall = snd_stall;
 
 	// SDRAM port 1, four channels: NMK004 ROM, OKI0, OKI1, protection ROM.
-	wire        p1_busy [0:3];
-	wire        p1_valid[0:3];
-	wire [24:1] p1_addr [0:3];
-	wire        p1_req  [0:3];
-	wire [15:0] p1_dout [0:3];
-	wire [31:0] p1_dout_pair [0:3];
+	wire        p1_busy [0:4];
+	wire        p1_valid[0:4];
+	wire [24:1] p1_addr [0:4];
+	wire        p1_req  [0:4];
+	wire [15:0] p1_dout [0:4];
+	wire [31:0] p1_dout_pair [0:4];
 	wire [7:0]  prot_rom_din;
 	wire        prot_rom_ready;
 	generate
@@ -879,32 +881,38 @@ module gunnail_core #(
 		assign nmk004_rom_ready = 1'b1;
 		assign prot_rom_din     = 8'h00;
 		assign prot_rom_ready   = 1'b1;
-		assign sd1_addr = 24'd0; assign sd1_req = 1'b0;
-		assign p1_busy  = '{1'b0, 1'b0, 1'b0, 1'b0};
-		assign p1_valid = '{1'b0, 1'b0, 1'b0, 1'b0};
-		assign p1_dout  = '{16'd0, 16'd0, 16'd0, 16'd0};
-		assign p1_dout_pair = '{32'd0, 32'd0, 32'd0, 32'd0};
-		assign p1_addr  = '{24'd0, 24'd0, 24'd0, 24'd0};
-		assign p1_req   = '{1'b0, 1'b0, 1'b0, 1'b0};
+		assign sd3_addr = 24'd0; assign sd3_req = 1'b0;
+		assign p1_busy  = '{1'b0, 1'b0, 1'b0, 1'b0, 1'b0};
+		assign p1_valid = '{1'b0, 1'b0, 1'b0, 1'b0, 1'b0};
+		assign p1_dout  = '{16'd0, 16'd0, 16'd0, 16'd0, 16'd0};
+		assign p1_dout_pair = '{32'd0, 32'd0, 32'd0, 32'd0, 32'd0};
+		// channel 0 (TX prefetch) is driven by the video module's txc_* outputs
+		assign p1_addr[1] = 24'd0; assign p1_addr[2] = 24'd0; assign p1_addr[3] = 24'd0; assign p1_addr[4] = 24'd0;
+		// channel 0 (TX prefetch) is driven by the video module's txc_* outputs
+		assign p1_req[1] = 1'b0; assign p1_req[2] = 1'b0; assign p1_req[3] = 1'b0; assign p1_req[4] = 1'b0;
 	end else begin : g_p1_hw
-		sdram_arb #(.N(4)) p1_arb_inst (
+		// Physical port 3: channel 0 is the video module's TX prefetch
+		// stream (top priority, it is real-time), the sound consumers
+		// follow. The sprite fetch has physical port 1 to itself (video
+		// sd_b_*) — see video_macross2.sv TX_EXTERNAL.
+		sdram_arb #(.N(5), .FIXED_PRIO(1)) p1_arb_inst (
 			.clk(clk_sys), .reset(por_rst),
-			.i_addr(p1_addr), .i_we('{1'b0, 1'b0, 1'b0, 1'b0}), .i_wrl('{1'b0, 1'b0, 1'b0, 1'b0}), .i_wrh('{1'b0, 1'b0, 1'b0, 1'b0}), .i_din('{16'd0, 16'd0, 16'd0, 16'd0}),
+			.i_addr(p1_addr), .i_we('{1'b0, 1'b0, 1'b0, 1'b0, 1'b0}), .i_wrl('{1'b0, 1'b0, 1'b0, 1'b0, 1'b0}), .i_wrh('{1'b0, 1'b0, 1'b0, 1'b0, 1'b0}), .i_din('{16'd0, 16'd0, 16'd0, 16'd0, 16'd0}),
 			.i_req(p1_req), .i_busy(p1_busy), .i_valid(p1_valid), .i_dout(p1_dout), .i_dout_pair(p1_dout_pair),
-			.sdram_addr(sd1_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
-			.sdram_dout(sd1_dout), .sdram_dout_pair(sd1_dout_pair), .sdram_req(sd1_req), .sdram_ack(sd1_ack)
+			.sdram_addr(sd3_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
+			.sdram_dout(sd3_dout), .sdram_dout_pair(sd3_dout_pair), .sdram_req(sd3_req), .sdram_ack(sd3_ack)
 		);
 		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_NMK004)) nmk004_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr(nmk004_cache_addr), .data(nmk004_rom_din), .ready(nmk004_rom_ready), .stall(),
-			.sd_addr(p1_addr[0]), .sd_req(p1_req[0]), .sd_busy(p1_busy[0]), .sd_valid(p1_valid[0]), .sd_dout(p1_dout[0]), .sd_dout_pair(p1_dout_pair[0])
+			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1]), .sd_dout_pair(p1_dout_pair[1])
 		);
 		// Protection MCU reads of the 68000 ROM (none in this game's
 		// firmware, wired for completeness): its own 1-line byte cache.
 		rom_cache1_byte #(.BASE_WORD_OFFSET(23'd0)) prot_rom_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({5'd0, prot_addr[18:0]}), .data(prot_rom_din), .word(), .ready(prot_rom_ready),
-			.sd_addr(p1_addr[3]), .sd_req(p1_req[3]), .sd_busy(p1_busy[3]), .sd_valid(p1_valid[3]), .sd_dout(p1_dout[3]), .sd_dout_pair(p1_dout_pair[3])
+			.sd_addr(p1_addr[4]), .sd_req(p1_req[4]), .sd_busy(p1_busy[4]), .sd_valid(p1_valid[4]), .sd_dout(p1_dout[4]), .sd_dout_pair(p1_dout_pair[4])
 		);
 	end
 	endgenerate
@@ -991,12 +999,12 @@ module gunnail_core #(
 		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI1)) oki1_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({3'd0, oki1_phys}), .data(oki1_rom_data), .ready(oki1_rom_ok), .stall(oki1_stall),
-			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1]), .sd_dout_pair(p1_dout_pair[1])
+			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2]), .sd_dout_pair(p1_dout_pair[2])
 		);
 		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI2)) oki2_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({3'd0, oki2_phys}), .data(oki2_rom_data), .ready(oki2_rom_ok), .stall(oki2_stall),
-			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2]), .sd_dout_pair(p1_dout_pair[2])
+			.sd_addr(p1_addr[3]), .sd_req(p1_req[3]), .sd_busy(p1_busy[3]), .sd_valid(p1_valid[3]), .sd_dout(p1_dout[3]), .sd_dout_pair(p1_dout_pair[3])
 		);
 `ifdef VERILATOR
 		reg [31:0] oki0_adpcm_total_r = 32'd0, oki0_adpcm_unserved_r = 32'd0;
@@ -1230,6 +1238,7 @@ module gunnail_core #(
 	// + NMK214 descramble.
 	// ------------------------------------------------------------------
 	video_macross2 #(
+		.TX_EXTERNAL(1),
 		.FGTILE_FILE(FGTILE_FILE),
 		.BGTILE_FILE(BGTILE_FILE),
 		.SPRITES_FILE(SPRITES_FILE),
@@ -1262,7 +1271,8 @@ module gunnail_core #(
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),
 		.sd_dout(sd2_dout), .sd_dout_pair(sd2_dout_pair), .sd_req(sd2_req), .sd_ack(sd2_ack),
-		.sd_b_addr(sd3_addr), .sd_b_req(sd3_req), .sd_b_dout(sd3_dout), .sd_b_dout_pair(sd3_dout_pair), .sd_b_ack(sd3_ack)
+		.sd_b_addr(sd1_addr), .sd_b_req(sd1_req), .sd_b_dout(sd1_dout), .sd_b_dout_pair(sd1_dout_pair), .sd_b_ack(sd1_ack),
+		.txc_addr(p1_addr[0]), .txc_req(p1_req[0]), .txc_busy(p1_busy[0]), .txc_valid(p1_valid[0]), .txc_dout(p1_dout[0]), .txc_dout_pair(p1_dout_pair[0])
 	);
 
 	reg frame_done_r;
