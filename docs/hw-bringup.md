@@ -696,6 +696,29 @@ Note on the MiSTer screenshot rows for the overlay: the native
 and repeat lines (the box now runs the 640x480 output mode), so decode
 overlay rows by their marker colour, never by absolute y.
 
+## DIP switches in the OSD
+
+Both .mra files already declared every DSW1/DSW2 option from
+nmk16.cpp, but MiSTer only renders its DIP submenu where the core's
+CONF_STR carries a `"DIP;"` line — `Macross2.sv` now has one, between
+Orientation and Reset. The submenu lists the eight options per game,
+Enter cycles a value (Right/Left switch OSD pages instead), and MiSTer
+saves every change by itself to `config/dips/<setname>.dip` (8 bytes,
+the `<switches>` bytes) and restores it on the next load of that .mra;
+"Reset to apply" because the games sample the switches at boot. The
+core side is unchanged: the bytes arrive through ioctl index 254
+(`dip_sw`), with F2's service-mode toggle XORed on top.
+
+Two .mra corrections found while testing: `bits` is a RANGE
+("start,end"), so the coin fields must be `bits="8,11"` and
+`bits="12,15"` — as `"8,9,10,11"` they were read as a 2-bit field and
+1C_1C showed as 1C_4C; and Service Mode is active low
+(PORT_SERVICE_DIPLOC), so its ids are "On,Off". Verified on the box by
+driving the OSD with `tools/mister_keys.py`: Lives 3 -> 1 saved as
+37 FF, still 1 after a core reload, back to 3 (F7 FF) afterwards;
+macross2's submenu shows Language and 1C_1C coins. F12 from inside a
+submenu returns to the core page; a second F12 closes the OSD.
+
 ## Orientation option (tdragon2 upright over HDMI)
 
 tdragon2 is MAME ROT270: the board draws it on its side. `Macross2.sv`
