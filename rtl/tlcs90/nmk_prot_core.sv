@@ -179,7 +179,7 @@ module nmk_prot_core #(
 	wire [3:0] cpu_bx, cpu_by;
 
 	tlcs90 cpu (
-		.clk(clk), .reset(reset),
+		.clk(clk), .cen(1'b1), .reset(reset),
 		.din(cpu_din), .dout(cpu_dout), .addr(cpu_addr), .addr_bank(cpu_addr_bank),
 		.mem_rd(cpu_mem_rd), .mem_wr(cpu_mem_wr),
 		// irq_req: the on-chip TIMER peripheral's own interrupts, not an
@@ -260,7 +260,7 @@ module nmk_prot_core #(
 	assign halt_68k = halt_r;
 
 	nmk004_periph periph (
-		.clk(clk), .reset(reset),
+		.clk(clk), .cen(1'b1), .reset(reset),
 		.reg_addr(cpu_addr[5:0]),
 		.wdata(cpu_dout),
 		.we(sel_periph & cpu_mem_wr),

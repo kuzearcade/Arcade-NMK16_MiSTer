@@ -34,7 +34,7 @@ import zipfile
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--zip", required=True, help="path to the romset zip")
+    ap.add_argument("--zip", required=True, action="append", help="path to a romset zip (repeat for a split clone set: each file is read from the first zip that has it)")
     ap.add_argument("--region", required=True, action="append",
                      help="OFFSET:file[,file...] — repeat per region; multiple comma-separated files concatenate in order (matching a multi-ROM_LOAD region)")
     ap.add_argument("--out", required=True, help="output raw binary file")
@@ -48,15 +48,21 @@ def main():
         regions.append((offset, files))
     regions.sort()
 
-    with zipfile.ZipFile(args.zip) as z:
-        buf = bytearray()
-        for offset, files in regions:
-            if offset < len(buf):
-                raise SystemExit(f"error: region at 0x{offset:x} overlaps previous data (buffer already {len(buf)} bytes)")
-            buf.extend(b"\x00" * (offset - len(buf)))
-            for fn in files:
-                data = z.read(fn)
-                buf.extend(data)
+    zips = [zipfile.ZipFile(zp) for zp in args.zip]
+
+    def read_member(fn):
+        for z in zips:
+            if fn in z.namelist():
+                return z.read(fn)
+        raise SystemExit(f"error: {fn} not found in any of {args.zip}")
+
+    buf = bytearray()
+    for offset, files in regions:
+        if offset < len(buf):
+            raise SystemExit(f"error: region at 0x{offset:x} overlaps previous data (buffer already {len(buf)} bytes)")
+        buf.extend(b"\x00" * (offset - len(buf)))
+        for fn in files:
+            buf.extend(read_member(fn))
 
     with open(args.out, "wb") as f:
         f.write(buf)
