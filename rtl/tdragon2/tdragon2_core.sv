@@ -715,9 +715,18 @@ module tdragon2_core #(
 		);
 		assign ioctl_wait = ioctl_download & cache_busy;
 
+		// The cache only ever sees ROM addresses — see raphero_core.sv's
+		// rom_addr_held and docs/hw-bringup.md: rom_cache1 refetches on any
+		// address change, so the raw bus address made every RAM/VRAM access
+		// start a speculative SDRAM read whose fill could overwrite the line
+		// between the 68000's DTACK sample and its data latch. Never seen at
+		// this core's 10 MHz, but the same race raphero hit at 14 MHz.
+		reg [18:1] rom_addr_held;
+		always @(posedge clk_sys) if (sel_rom) rom_addr_held <= byte_addr[18:1];
+		wire [18:1] rom_cache_addr = sel_rom ? byte_addr[18:1] : rom_addr_held;
 		rom_cache1 rom_cache_inst (
 			.clk(clk_sys), .reset(reset | ioctl_download),
-			.addr(byte_addr[18:1]), .data(rom_dout), .ready(rom_ready),
+			.addr(rom_cache_addr), .data(rom_dout), .ready(rom_ready),
 			.sd_addr(cache_sd_addr), .sd_req(cache_sd_req),
 			.sd_busy(cache_busy), .sd_valid(cache_valid), .sd_dout(cache_dout), .sd_dout_pair(cache_dout_pair)
 		);
@@ -1571,7 +1580,14 @@ module tdragon2_core #(
 	// fetch is outstanding (audiocpu_ready tied to 1'b1 at HW_ROMS=0, so
 	// this reduces to the original always-1 WAIT_n exactly).
 	wire z80_wait_n = ~((sel_z80_rom | sel_z80_bank) & z80_mem_re & ~audiocpu_ready);
-	wire [23:0] audiocpu_byte_addr = sel_z80_rom ? {9'd0, z80_a[14:0]} : {7'd0, z80_bank_phys[16:0]};
+	// Same guard for the Z80's byte cache: only ROM/bank-window addresses
+	// reach it (RAM/latch accesses used to start speculative fetches of
+	// bank-window words that could land mid-fetch).
+	wire        z80_rom_sel = sel_z80_rom | sel_z80_bank;
+	wire [23:0] audiocpu_byte_addr_live = sel_z80_rom ? {9'd0, z80_a[14:0]} : {7'd0, z80_bank_phys[16:0]};
+	reg  [23:0] audiocpu_byte_addr_held;
+	always @(posedge clk_sys) if (z80_rom_sel) audiocpu_byte_addr_held <= audiocpu_byte_addr_live;
+	wire [23:0] audiocpu_byte_addr = z80_rom_sel ? audiocpu_byte_addr_live : audiocpu_byte_addr_held;
 	// SDRAM port 1 is shared three ways — Z80 program ROM (channel 0) and
 	// the two OKI sample ROMs (channels 1-2, whose caches live in g_oki_hw
 	// further down and reach the arbiter here through these module-level
