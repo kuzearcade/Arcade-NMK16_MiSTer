@@ -35,11 +35,15 @@ module nmk214 #(
 	// single 13-line NMK214 only ever samples 13 *specific* lines of a
 	// much wider real address bus, not a contiguous low slice of it.
 	parameter                ADDR_WIDTH  = 21,
-	// 13 entries, LSB-first: ADDR_BITSWAP[i] = which raw address line
-	// (0..ADDR_WIDTH-1) feeds this device's own address bit i. Default
-	// = identity over the low 13 bits — real boards always override
-	// this per instance with the reference's own per-game table.
-	parameter [12:0][4:0]   ADDR_BITSWAP = {5'd12,5'd11,5'd10,5'd9,5'd8,5'd7,5'd6,5'd5,5'd4,5'd3,5'd2,5'd1,5'd0}
+	// 13 five-bit entries packed LSB-first into one flat vector (entry i
+	// = bits [i*5 +: 5]): which raw address line (0..ADDR_WIDTH-1) feeds
+	// this device's own address bit i. Default = identity over the low
+	// 13 bits — real boards always override this per instance with the
+	// reference's own per-game table. A flat vector rather than a packed
+	// [12:0][4:0] array: Quartus 17 flattened the 2-D form so that
+	// indexing it selected single bits, which scrambled every BG tile and
+	// sprite on hardware while Verilator (and the self-test) were right.
+	parameter [64:0]        ADDR_BITSWAP = {5'd12,5'd11,5'd10,5'd9,5'd8,5'd7,5'd6,5'd5,5'd4,5'd3,5'd2,5'd1,5'd0}
 ) (
 	input        clk,
 	input        reset,
@@ -162,27 +166,38 @@ module nmk214 #(
 	// m_gfx_unscramble_enabled goes true, but the device itself doesn't
 	// gate on it).
 	// ------------------------------------------------------------------
+	// (generate loops carry begin/end blocks and the function results
+	// go through intermediate wires before any bit-select — Quartus 17
+	// rejects both shorthand forms.)
 	wire [12:0] eff_addr;
 	genvar gi;
 	generate
-		for (gi = 0; gi < 13; gi = gi + 1)
-			assign eff_addr[gi] = addr[ADDR_BITSWAP[gi]];
+		for (gi = 0; gi < 13; gi = gi + 1) begin : g_eff
+			localparam [4:0] SRC = ADDR_BITSWAP[gi*5 +: 5];
+			assign eff_addr[gi] = addr[SRC];
+		end
 	endgenerate
 
-	wire [2:0] sel_addr = {eff_addr[sel_bit(init_config,2'd2)],
-	                        eff_addr[sel_bit(init_config,2'd1)],
-	                        eff_addr[sel_bit(init_config,2'd0)]};
+	wire [3:0] sel_bit2 = sel_bit(init_config, 2'd2);
+	wire [3:0] sel_bit1 = sel_bit(init_config, 2'd1);
+	wire [3:0] sel_bit0 = sel_bit(init_config, 2'd0);
+	wire [2:0] sel_addr = {eff_addr[sel_bit2], eff_addr[sel_bit1], eff_addr[sel_bit0]};
 
-	wire [2:0] bitswap_select = {cfg_byte(init_config,2'd2)[sel_addr],
-	                              cfg_byte(init_config,2'd1)[sel_addr],
-	                              cfg_byte(init_config,2'd0)[sel_addr]};
+	wire [7:0] cfg_byte2 = cfg_byte(init_config, 2'd2);
+	wire [7:0] cfg_byte1 = cfg_byte(init_config, 2'd1);
+	wire [7:0] cfg_byte0 = cfg_byte(init_config, 2'd0);
+	wire [2:0] bitswap_select = {cfg_byte2[sel_addr], cfg_byte1[sel_addr], cfg_byte0[sel_addr]};
 
 	genvar gw, gb;
 	generate
-		for (gw = 0; gw < 16; gw = gw + 1)
-			assign dout_word[gw] = din[word_bit(bitswap_select, gw[3:0])];
-		for (gb = 0; gb < 8; gb = gb + 1)
-			assign dout_byte[gb] = din8[byte_bit(bitswap_select, gb[2:0])];
+		for (gw = 0; gw < 16; gw = gw + 1) begin : g_word
+			wire [3:0] src = word_bit(bitswap_select, gw[3:0]);
+			assign dout_word[gw] = din[src];
+		end
+		for (gb = 0; gb < 8; gb = gb + 1) begin : g_byte
+			wire [2:0] src = byte_bit(bitswap_select, gb[2:0]);
+			assign dout_byte[gb] = din8[src];
+		end
 	endgenerate
 
 endmodule

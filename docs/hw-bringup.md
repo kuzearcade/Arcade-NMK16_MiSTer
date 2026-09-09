@@ -1003,6 +1003,136 @@ per-line raster case is verified only structurally (same expressions
 as `bg_update()`, both taps indexed by bitmap y) until a stage that
 uses it is reached.
 
+## GunNail (the "Gunnail" rbf): NMK004 sound MCU and NMK-215 protection on hardware
+
+`rtl/gunnail/gunnail_core.sv` is the third hardware core: raphero's
+`HW_ROMS=1` machinery around the Family D/NMK004 board — `Gunnail.sv`/
+`.qsf`/`.sdc`/`files_gunnail.qip`, `sim/rtl/gunnail_hw/`, two `.mra`
+files (`tools/gen_gunnail_mra.py`, GunNail and the location test).
+`video_macross2.sv` gained the gfx_macross parameters (`SPR_COLOUR_BITS=4`,
+`TX_PAL_BASE_P=0x200`, `BG_CODE_BITS=13`) and `NMK214=1`, which puts the
+two descramblers after the tile/sprite caches (a pure data bitswap keyed
+by the logical address, so the SDRAM image stays raw; the sprite word
+comes from a new `word` output of `rom_cache1_byte`). Cross-checked
+against `nmk16.cpp`'s `gunnail()`/`gunnail_prot()`:
+
+- **68000 at 10 MHz**, `gunnail_map` (I/O at 0x080000, BG VRAM 8192
+  words with no `tilerambank`, TX at 0x09C000 mirrored, plain main RAM).
+  maincpu is a `ROM_LOAD16_BYTE` pair: the `.mra` interleaves it with the
+  low-byte chip `3o.u133` on even stream addresses (`map="01"`) so the
+  core's byte-parity word rebuild gives the 68000's words —
+  `tools/mk_ioctl_stream.py` gained the matching `lo+hi` region syntax.
+- **NMK004** (`rtl/tlcs90/nmk004_core.sv`) on `clk_sys` with an 8 MHz
+  enable: the wrapper gained `USE_CEN`/`ROM_EXTERNAL` — its 8 KB boot ROM
+  (`nmk004.bin`, delivered by the `.mra` from `nmk004.zip`) and the 64 KB
+  game program both come through one `oki_rom_cache` on SDRAM port 1, the
+  enable withheld on a miss (0.04% of pulses in the hardware sim). The
+  OKIs (4 MHz, pin 7 low) use the NMK004's own bank writes for their upper
+  128 KB window, through `oki_rom_cache`s with the golden-byte audit.
+- **NMK-215 protection MCU** (`nmk_prot_core.sv`, `USE_CEN`, 4 MHz
+  enable): its 8 KB ROM is written into the on-chip array straight from
+  the ioctl stream (`rom_we` port). The shared-bus path steals each RAM's
+  CPU-side port when the 68000 is not mid-cycle there (the 68000's
+  combinational ready flag then holds DTACK one clock), the MCU's enable
+  waiting for `prot_rd_ready`/`prot_wr_done`; its 68000-ROM reads have
+  their own byte cache on port 1. What the firmware actually does in
+  this game (MAME Lua taps, 30 s of attract mode): loads the two NMK214
+  configs at boot (port 7 data, port 3 bit 2 strobe — 0x02 for the
+  sprite chip, 0x0E for the BG chip), then polls P5 for scanline 116 and
+  writes P6 = 0x03/0x0B once per frame; it never accesses the 68000 bus
+  and never writes the 0x08 that halts the 68000 in the NMK-110/113
+  firmware. `docs/tier2-system.md`'s "macross/gunnail never assert HALT
+  so they are not playable" was a misreading of that: the reference sim
+  was fine all along and simply ran out of cycles on the "PRESENTS"
+  splash, which MAME also holds until frame ~570.
+- **Per-line scroll**: `RASTER_SCROLL=1` with both tables indexed by
+  bitmap y (the old `video_gunnail.sv`, now deleted, indexed
+  `scrollramy` by screen y and had no bitmap offsets — its frames sat
+  (28,16) off MAME's). A Lua probe of the tables over 200 s of MAME's
+  attract mode never found a row entry differing from the others: like
+  raphero, this game drives the background through entry 0 of each
+  table; the row path is exercised with zero rows.
+
+Verification (`sim/rtl/gunnail`, `sim/rtl/gunnail_hw`, MAME 0.270):
+
+- Reference sim, 12 s: every MAME snapshot from frame 60 to 660 (ROM
+  check, logo animation, PRESENTS, fade) has a pixel-identical sim frame
+  within ±4 frames. Audio: 0.977 band correlation against MAME's
+  `-wavwrite`, the same silence/sound timeline second by second.
+- **NMK004 handshake**: the 68000↔NMK004 latch traffic (`TB_LOG_HOST`,
+  `dbg_host_cmd*`/`dbg_mcu_reply*`) reproduces MAME's boot protocol
+  byte for byte and frame for frame — reply 02/82 at power-on, then at
+  frame 31 (MAME 30) the three command rounds 00→82, 22→C7, 62→00,
+  00, 8C→2C, C7→6C, 00 / 3F→C7, 7F→00, 00, 89→29, C7→69, 00 / 2B→C7,
+  6B→00, 00, then FE (sound on) at frames 32/111/119 and CC/F0 (music)
+  at 152 — MAME: 31/110/117 and 150. The hardware sim (real SDRAM wait
+  states, cache-stalled NMK004) does the same one frame later.
+- Hardware sim: ROM golden-word audit 0 wrong of 3.8 M reads, OKI
+  golden-byte audit 0 wrong of 2 × 242 K sample latches, frames
+  pixel-identical to the reference sim ~30 frames later (the ROM check
+  is slower through real wait states), NMK214 configs 0x02/0x0E loaded
+  at frame 1, protection MCU running (940 K instructions in 2.5 s) with
+  0 bus accesses, as in MAME.
+- Regressions of the shared TLCS-90 wrappers (`cen`/`ROM_EXTERNAL`
+  parameters default off): mustang, hachamf (802 HALTs, unchanged),
+  tdragon1 (508 HALTs, unchanged) and macross rebuilt and rerun;
+  `sim/rtl/nmk214` self-test 80,102 checks / 0 failures after the
+  generate-loop rewrite Quartus 17 needed.
+
+The first hardware build ran the game (ROM check, NMK004 music, demo
+play) but drew every BG tile and sprite scrambled while the TX layer
+was right. Not the NMK214: rebuilding with its `ADDR_BITSWAP` parameter
+flattened to a 65-bit vector gave a byte-identical RBF (the flat form is
+kept — Quartus 17 also rejects `for (...) assign` without a named block
+and bit-selects on function results, which `tlcs90.sv` hit for raphero).
+The cause was the SDRAM layout: the `.mra` loader streams the `<part>`s
+back to back and cannot place one at an offset, and the first gunnail
+layout had a 0xC000 gap between the protection ROM (ends 0x094000) and
+`fgtile` (0x0A0000). Everything after the gap landed 0xC000 too low, so
+BG tiles, sprites and OKI samples were read from shifted data (the HUD
+font lives high enough in `fgtile` to survive). `tools/mk_ioctl_stream.py`
+pads regions to their offsets, so both sims were fine. The layout is now
+contiguous (fgtile 0x094000, bgtile 0x0B4000, sprites 0x1B4000, oki1
+0x3B4000, oki2 0x434000) — the rule for every core: no gaps between
+`BASE_BYTE_*` regions.
+
+Real hardware with the contiguous layout (DE10-Nano, `Gunnail.rbf`,
+Quartus 61% ALMs / 74% of the M10K blocks, worst setup slack +0.45 ns
+with the multicycle constraints on both MCUs): boots through the ROM
+check, logo and title into the attract demo. Native screenshots of the
+title, the stage high-score table and the demo's static moments are
+pixel-identical to MAME's snapshots of the same scenes; the scrolling
+demo frames match to within the capture-time offset (boss, ships,
+parallax backgrounds, HUD). A 45 s audio capture scores 0.92 band
+correlation against MAME's `-wavwrite` output with the same
+silence/jingle/music timeline (boot jingles, then the stage music)
+second by second, at the usual ~8 dB lower level. Coin/start/joystick/
+fire work through the keyboard path (Start and Coin are joystick bits
+6/7 on this two-button core), the OSD shows Orientation, both autofire
+entries and the DIP submenu, and the location-test set (`gunnailp`,
+single word-swapped program ROM from its own zip plus the parent's
+files) boots and plays.
+
+Per-line scroll, verified with real data: the game does use it — a
+screen shake during the death explosion (MAME frames 5369-5417 and
+8226-8250 of the attract demo, up to 223 rows with their own X offset,
+±8 px, alternating bands). The attract demo drifts from MAME's by a few
+frames well before that point (in the sim and on the board alike — it
+depends on timing the sims do not reproduce cycle-exactly), so no
+frame-exact comparison is possible there. Instead `sim/rtl/video_state`
+renders a MAME video-state dump (Lua: the `:scrollram`/`:scrollramy`/
+`:bgvideoram0`/`:txvideoram`/`:palette` shares, the sprite RAM copy and
+the tilebank at one `frame_done`, read through the shares because the
+scroll regions are write-only through the CPU map) through
+`video_macross2.sv` alone: the dump of frame 5396, whose X table holds 14
+distinct row values, renders pixel-identical to MAME's snapshot of that
+frame (0 differing pixels; the sprite table must be taken at the same
+`frame_done` as the snapshot, and the drawn sprite plane only shows
+after the next DMA trigger, so the harness pulses it twice). The HDMI
+recording of the board through the same explosion shows the same
+alternating-band shifts as MAME's frames, within what moving sprites
+allow the measurement to say.
+
 ## Status
 
 `HW_ROMS=1` implemented for both games (`rtl/tdragon2/tdragon2_core.sv`

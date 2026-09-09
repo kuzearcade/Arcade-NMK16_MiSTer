@@ -42,6 +42,7 @@ sim/rtl/*/*.raw
 output_files/
 output_files_sdramtest/
 output_files_raphero/
+output_files_gunnail/
 db/
 incremental_db/
 greybox_tmp/
@@ -87,3 +88,4 @@ sim/**/oracle_traces/
 *.swp
 sim/rtl/*/*.ppm
 __pycache__/
+sim/rtl/video_state/dump

@@ -13,6 +13,7 @@ module rom_cache1_byte #(
 
 	input  [23:0] byte_addr,  // relative to this region's own base
 	output [7:0]  data,
+	output [15:0] word,       // the whole cached word the byte came from (NMK214 word-mode descramble needs it)
 	output        ready,
 
 	output [24:1] sd_addr,
@@ -33,5 +34,6 @@ module rom_cache1_byte #(
 	);
 
 	assign data = byte_addr[0] ? word_data[15:8] : word_data[7:0];
+	assign word = word_data;
 
 endmodule

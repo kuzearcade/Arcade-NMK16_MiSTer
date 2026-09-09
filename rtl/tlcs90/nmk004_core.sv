@@ -23,10 +23,31 @@
 //   0xffc0-0xffef  on-chip peripherals (nmk004_periph.sv)
 module nmk004_core #(
 	parameter BOOT_ROM_FILE = "",
-	parameter EXT_ROM_FILE  = ""
+	parameter EXT_ROM_FILE  = "",
+	// USE_CEN=1: advance the CPU/peripherals only on `cen` (the wrapper
+	// runs this on clk_sys with an 8 MHz enable it may withhold while a
+	// ROM fetch is outstanding — raphero_core.sv's TLCS-90 pattern).
+	// USE_CEN=0 (every sim wrapper): `cen` is ignored, clk is the real
+	// divided CPU clock as before.
+	parameter USE_CEN = 0,
+	// ROM_EXTERNAL=1: the boot + external program ROMs are NOT the
+	// $readmemh arrays below but come through rom_addr/rom_din (a cache
+	// over SDRAM in the hardware core); rom_ready must be high when
+	// rom_din is valid for rom_addr — the wrapper withholds cen otherwise.
+	parameter ROM_EXTERNAL = 0
 ) (
 	input clk,
+	input cen,
 	input reset,
+
+	// ROM_EXTERNAL=1 only — see above. rom_addr is the CPU's 16-bit
+	// address (0x0000-0x1FFF boot ROM, 0x2000-0xEFFF external program);
+	// rom_rd is high for the whole read cycle.
+	output [15:0] rom_addr,
+	output        rom_rd,
+	input  [7:0]  rom_din,
+	input         rom_ready,
+	output        rom_stall,   // rom_rd & ~rom_ready: the wrapper gates cen with this
 
 	input nmi,
 
@@ -99,8 +120,9 @@ module nmk004_core #(
 	// itself, so this is additive, not a real arbitration.
 	wire [10:0] irq_req_to_cpu = {irq_req_periph[10:1], irq_req_periph[0] | ~ym_irq_n};
 
+	wire cen_eff = USE_CEN ? cen : 1'b1;
 	tlcs90 cpu (
-		.clk(clk), .cen(1'b1), .reset(reset),
+		.clk(clk), .cen(cen_eff), .reset(reset),
 		.din(cpu_din), .dout(cpu_dout), .addr(cpu_addr), .addr_bank(cpu_addr_bank),
 		.mem_rd(cpu_mem_rd), .mem_wr(cpu_mem_wr),
 		.nmi(nmi), .irq_req(irq_req_to_cpu), .irq_mask(irq_mask),
@@ -143,18 +165,37 @@ module nmk004_core #(
 	// ------------------------------------------------------------------
 	// ROMs
 	// ------------------------------------------------------------------
-	reg [7:0] boot_rom [0:8191];
-	reg [7:0] ext_rom  [0:65535];
-	initial if (BOOT_ROM_FILE != "") $readmemh(BOOT_ROM_FILE, boot_rom);
-	initial if (EXT_ROM_FILE  != "") $readmemh(EXT_ROM_FILE,  ext_rom);
+	wire [7:0] boot_rom_byte, ext_rom_byte;
+	assign rom_addr  = cpu_addr;
+	assign rom_rd    = (sel_boot_rom | sel_ext_rom) & cpu_mem_rd;
+	assign rom_stall = ROM_EXTERNAL ? (rom_rd & ~rom_ready) : 1'b0;
+	generate
+	if (!ROM_EXTERNAL) begin : g_rom_int
+		reg [7:0] boot_rom [0:8191];
+		reg [7:0] ext_rom  [0:65535];
+		initial if (BOOT_ROM_FILE != "") $readmemh(BOOT_ROM_FILE, boot_rom);
+		initial if (EXT_ROM_FILE  != "") $readmemh(EXT_ROM_FILE,  ext_rom);
+		assign boot_rom_byte = boot_rom[cpu_addr[12:0]];
+		assign ext_rom_byte  = ext_rom[cpu_addr];
+	end else begin : g_rom_ext
+		assign boot_rom_byte = rom_din;
+		assign ext_rom_byte  = rom_din;
+	end
+	endgenerate
 
 	// ------------------------------------------------------------------
 	// RAMs
 	// ------------------------------------------------------------------
+	// Writes are taken on the enabled edge that ends the CPU's write
+	// cycle (with USE_CEN=0, cen_eff is 1 and this is the old per-clk
+	// write). Reads stay combinational: with USE_CEN=1 the wrapper's
+	// clk_sys is at least 5x the CPU clock, so a 2 KB / 256 B array read
+	// settles long before the enabled edge (block RAM inference for these
+	// small arrays is not needed).
 	reg [7:0] ext_ram [0:2047];
 	reg [7:0] int_ram [0:255];
-	always @(posedge clk) if (cpu_mem_wr && sel_ext_ram) ext_ram[cpu_addr[10:0]] <= cpu_dout;
-	always @(posedge clk) if (cpu_mem_wr && sel_int_ram) int_ram[cpu_addr[7:0]]  <= cpu_dout;
+	always @(posedge clk) if (cpu_mem_wr && sel_ext_ram && cen_eff) ext_ram[cpu_addr[10:0]] <= cpu_dout;
+	always @(posedge clk) if (cpu_mem_wr && sel_int_ram && cen_eff) int_ram[cpu_addr[7:0]]  <= cpu_dout;
 	assign dbg_ram_hl = int_ram[dbg_hl[7:0]];
 
 	// ------------------------------------------------------------------
@@ -179,7 +220,7 @@ module nmk004_core #(
 	wire [7:0] periph_rdata;
 
 	nmk004_periph periph (
-		.clk(clk), .cen(1'b1), .reset(reset),
+		.clk(clk), .cen(cen_eff), .reset(reset),
 		.reg_addr(cpu_addr[5:0]),
 		.wdata(cpu_dout),
 		.we(sel_periph & cpu_mem_wr),
@@ -200,8 +241,8 @@ module nmk004_core #(
 	// ------------------------------------------------------------------
 	reg [7:0] rdata;
 	always @(*) begin
-		if (sel_boot_rom)      rdata = boot_rom[cpu_addr[12:0]];
-		else if (sel_ext_rom)  rdata = ext_rom[cpu_addr];
+		if (sel_boot_rom)      rdata = boot_rom_byte;
+		else if (sel_ext_rom)  rdata = ext_rom_byte;
 		else if (sel_ext_ram)  rdata = ext_ram[cpu_addr[10:0]];
 		else if (sel_int_ram)  rdata = int_ram[cpu_addr[7:0]];
 		else if (sel_periph)   rdata = periph_rdata;

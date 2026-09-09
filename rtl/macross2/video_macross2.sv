@@ -71,7 +71,17 @@ module video_macross2 #(
 	// Sprite ROM size in bytes: 0x400000 (macross2/tdragon2, 2 files) or
 	// 0x600000 (raphero, 3 files). Sizes the sim array and the tile-code
 	// wrap (MAME draws code % elements, elements = bytes/128).
-	parameter integer SPRITES_BYTES = 4194304
+	parameter integer SPRITES_BYTES = 4194304,
+	// gfx_macross (gunnail: get_colour_4bit, sprites 0x100 with 16
+	// colours, TX at 0x200) vs gfx_macross2 (5-bit sprite colour, TX at
+	// 0x300). BG_CODE_BITS: 14 for a 2 MB BG ROM (bg_bank[1:0]), 13 for
+	// 1 MB (bg_bank[0] only). NMK214=1: BG bytes and sprite words pass
+	// through the two NMK214 descramblers (nmk16.cpp base_nmk214_215),
+	// configured by the protection MCU through nmk214_cfg_we/data.
+	parameter SPR_COLOUR_BITS = 5,
+	parameter [9:0] TX_PAL_BASE_P = 10'h300,
+	parameter BG_CODE_BITS = 14,
+	parameter NMK214 = 0
 ) (
 	input clk_sys,
 	input reset,
@@ -150,6 +160,11 @@ module video_macross2 #(
 	output [7:0]  scroll_row_addr,
 	input  [15:0] scrollram_row, scrollramy_row,
 
+	// NMK214=1 only: config-load strobe from the NMK-215 protection MCU
+	// (nmk_prot_core.sv), delivered to both descramblers at once.
+	input        nmk214_cfg_we,
+	input  [7:0] nmk214_cfg_data,
+
 	// pixel readback for the testbench (mirrors MAME's screen:pixel(x,y))
 	input  [8:0] rd_x,
 	input  [7:0] rd_y,
@@ -179,7 +194,7 @@ module video_macross2 #(
 	// Palette bases — see header. Sprite is 5-bit (32 colours), not 4-bit.
 	localparam [9:0] BG_PAL_BASE  = 10'h000;
 	localparam [9:0] SPR_PAL_BASE = 10'h100;
-	localparam [9:0] TX_PAL_BASE  = 10'h300;
+	localparam [9:0] TX_PAL_BASE  = TX_PAL_BASE_P;
 
 	// ------------------------------------------------------------------
 	// Graphics ROMs (byte-addressed, see tools/mkgfxrom.py). No
@@ -203,6 +218,7 @@ module video_macross2 #(
 	wire [7:0] fgtile_rom_byte;   // TX byte for the pixel being drawn
 	wire [7:0] bgtile_rom_byte;   // BG byte for the pixel being drawn
 	wire [7:0] sprites_rom_byte;
+	wire [15:0] sprites_rom_word;   // the big-endian word the byte belongs to (NMK214 word-mode descramble)
 	wire       sprites_ready;
 	// VRAM word of the tile the pixel being drawn belongs to (its colour
 	// bits [15:12] select the palette row). HW_ROMS=0: the live VRAM read,
@@ -223,6 +239,7 @@ module video_macross2 #(
 		assign fgtile_rom_byte  = fgtile_rom[fg_byte_addr_sim[16:0]];
 		assign bgtile_rom_byte  = bgtile_rom[bg_byte_addr];
 		assign sprites_rom_byte = sprites_rom[spr_byte_addr];
+		assign sprites_rom_word = {sprites_rom[{spr_byte_addr[22:1], 1'b0}], sprites_rom[{spr_byte_addr[22:1], 1'b1}]}; // get_u16be
 		assign sprites_ready = 1'b1;
 		assign bgvram_addr = bg_vram_addr_use;
 		assign txvram_addr = tx_vram_addr_use;
@@ -295,7 +312,7 @@ module video_macross2 #(
 		// BG/TX/OKI/Z80 regions are plain ROM_LOADs and stay as they are.
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_SPRITES)) sprites_cache_inst (
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({1'd0, spr_byte_addr ^ 23'd1}), .data(sprites_rom_byte), .ready(sprites_ready),
+			.byte_addr({1'd0, spr_byte_addr ^ 23'd1}), .data(sprites_rom_byte), .word(sprites_rom_word), .ready(sprites_ready),
 			.sd_addr(arb_addr[1]), .sd_req(arb_req[1]), .sd_busy(arb_busy[1]), .sd_valid(arb_valid[1]), .sd_dout(arb_dout[1]), .sd_dout_pair(arb_dout_pair[1])
 		);
 	end
@@ -317,7 +334,7 @@ module video_macross2 #(
 	// (col 8-15) at +64, same as video_macross.sv's own derivation.
 	// ------------------------------------------------------------------
 	wire [20:0] bg_byte_addr;
-	wire [7:0]  bgtile_byte = bgtile_rom_byte;
+	wire [7:0]  bgtile_byte;
 
 	function automatic [3:0] bg_tile_pixel_nib(input [7:0] byte_val, input integer col_local);
 		bg_tile_pixel_nib = tile_nibble(byte_val, col_local[0]);
@@ -327,7 +344,7 @@ module video_macross2 #(
 	// Sprite tile-fetch address — plain byte read, no descrambling.
 	// ------------------------------------------------------------------
 	wire [22:0] spr_byte_addr;
-	wire [7:0] sprites_byte = sprites_rom_byte;
+	wire [7:0] sprites_byte;
 
 	// ------------------------------------------------------------------
 	// Palette decode: RRRRGGGGBBBBRGBx (emupal.cpp RRRRGGGGBBBBRGBx_decoder)
@@ -399,10 +416,15 @@ module video_macross2 #(
 	// port currently points at: the use pixel's at HW_ROMS=0 (feeding
 	// bg_byte_addr), the lookahead pixel's at HW_ROMS=1 (feeding
 	// bgl_byte_addr; bg_byte_addr is then unused).
-	wire [13:0] bg_code = {bg_bank[1:0], bgvram_data[11:0]};
+	wire [13:0] bg_code = (BG_CODE_BITS == 14) ? {bg_bank[1:0], bgvram_data[11:0]} : {1'b0, bg_bank[0], bgvram_data[11:0]};
 	wire [3:0]  bg_half_col = bg_px;
 	assign bg_byte_addr = {bg_code, 7'd0} + (bg_half_col >= 4'd8 ? 21'd64 : 21'd0) + {15'd0, bg_py, 2'd0} + {19'd0, bg_half_col[2:1]};
 	wire [20:0] bgl_byte_addr = {bg_code, 7'd0} + (bgl_half_col >= 4'd8 ? 21'd64 : 21'd0) + {15'd0, bg_py, 2'd0} + {19'd0, bgl_half_col[2:1]};
+	// Byte address of the USE pixel, from the VRAM word that travels
+	// with the cached byte (bg_vram_use == bgvram_data at HW_ROMS=0) —
+	// the NMK214 selects its data bitswap from bits of this address.
+	wire [13:0] bg_use_code = (BG_CODE_BITS == 14) ? {bg_bank[1:0], bg_vram_use[11:0]} : {1'b0, bg_bank[0], bg_vram_use[11:0]};
+	wire [20:0] bg_use_byte_addr = {bg_use_code, 7'd0} + (bg_half_col >= 4'd8 ? 21'd64 : 21'd0) + {15'd0, bg_py, 2'd0} + {19'd0, bg_half_col[2:1]};
 	wire [3:0] bg_pix_nib = bg_tile_pixel_nib(bgtile_byte, bg_half_col & 4'h7);
 	wire [9:0] bg_pal_addr = BG_PAL_BASE + {bg_vram_use[15:12], bg_pix_nib};
 
@@ -657,6 +679,43 @@ module video_macross2 #(
 	wire [31:0] spr_byte_addr_full = s_unit_wrapped * 128 + ((s_px >= 8) ? 64 : 0) + s_py * 4 + ((s_px & 7) >> 1);
 	assign spr_byte_addr = spr_byte_addr_full[22:0];
 
+	// ------------------------------------------------------------------
+	// NMK214 descramble (NMK214=1) — per-fetch, exactly what MAME's
+	// decode_nmk214() precomputes: BG byte at byte address A becomes
+	// decode_byte(A, rom[A]); the big-endian sprite word at word address
+	// W becomes decode_word(W, word). Data bitswaps only — no address
+	// remap — so this sits after the caches, keyed by the logical
+	// address of the byte in use. Address bitswap tables: nmk16.cpp
+	// nmk214_bg_address_bitswap / nmk214_sprites_address_bitswap.
+	// ------------------------------------------------------------------
+	generate
+	if (NMK214) begin : g_nmk214
+		wire [15:0] spr_dec_word;
+		nmk214 #(
+			.MODE(1'b1), .ADDR_WIDTH(21),
+			.ADDR_BITSWAP({5'd20,5'd19,5'd18,5'd17,5'd16,5'd15,5'd14,5'd13,5'd11,5'd3,5'd2,5'd1,5'd0})
+		) nmk214_bg (
+			.clk(clk_sys), .reset(reset),
+			.cfg_we(nmk214_cfg_we), .cfg_data(nmk214_cfg_data), .initialized(),
+			.addr(bg_use_byte_addr), .din(16'h0), .dout_word(),
+			.din8(bgtile_rom_byte), .dout_byte(bgtile_byte)
+		);
+		nmk214 #(
+			.MODE(1'b0), .ADDR_WIDTH(21),
+			.ADDR_BITSWAP({5'd19,5'd18,5'd17,5'd16,5'd15,5'd14,5'd13,5'd12,5'd10,5'd3,5'd2,5'd1,5'd0})
+		) nmk214_spr (
+			.clk(clk_sys), .reset(reset),
+			.cfg_we(nmk214_cfg_we), .cfg_data(nmk214_cfg_data), .initialized(),
+			.addr({1'b0, spr_byte_addr[22:1] & 22'hFFFFF}), .din(sprites_rom_word), .dout_word(spr_dec_word),
+			.din8(8'h0), .dout_byte()
+		);
+		assign sprites_byte = spr_byte_addr[0] ? spr_dec_word[7:0] : spr_dec_word[15:8];
+	end else begin : g_no_nmk214
+		assign bgtile_byte  = bgtile_rom_byte;
+		assign sprites_byte = sprites_rom_byte;
+	end
+	endgenerate
+
 	// S_SPR_HEAD_RD: read snap_buf's 6 needed words (offsets 0,1,3,4,6,7
 	// within the current slot's 8-word record) for one sprite slot,
 	// spread one word per clk_sys cycle over a dedicated, unconditional
@@ -848,7 +907,7 @@ module video_macross2 #(
 							s_w <= w;
 							s_h <= h;
 							s_code <= head_w3;
-							s_colour <= head_w7[4:0];
+							s_colour <= (SPR_COLOUR_BITS == 5) ? head_w7[4:0] : {1'b0, head_w7[3:0]}; // get_colour_5bit / get_colour_4bit
 							// bitmap X+92 / Y, converted to screen coordinates (see BITMAP_X0)
 							s_sx <= (int'(head_w4) & 9'h1ff) + VIDEOSHIFT - BITMAP_X0;
 							s_sy <= ((int'(head_w6) & 9'h1ff) + 512 - BITMAP_Y0) % 512;

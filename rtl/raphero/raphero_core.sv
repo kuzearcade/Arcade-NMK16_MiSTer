@@ -1155,6 +1155,7 @@ module raphero_core #(
 		.bg_xscroll(16'd0), .bg_yscroll(16'd0),
 		.scrollram_0(scrollram0_reg), .scrollramy_0(scrollramy0_reg),
 		.scroll_row_addr(vid_scroll_row_addr),
+		.nmk214_cfg_we(1'b0), .nmk214_cfg_data(8'h00),
 		.scrollram_row(vid_scrollram_row), .scrollramy_row(vid_scrollramy_row),
 		.bg_bank(bgbank_reg),
 		.tilerambank(tilerambank_reg),

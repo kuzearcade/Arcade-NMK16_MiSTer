@@ -2018,6 +2018,7 @@ module tdragon2_core #(
 		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout), .mainram_ready(vid_mainram_ready),
 		.bg_xscroll(bg_xscroll), .bg_yscroll(bg_yscroll),
 		.scrollram_0(16'd0), .scrollramy_0(16'd0), .scroll_row_addr(), .scrollram_row(16'd0), .scrollramy_row(16'd0),
+		.nmk214_cfg_we(1'b0), .nmk214_cfg_data(8'h00),
 		.bg_bank(bgbank_reg),
 		.tilerambank(tilerambank_reg),
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb_video),
