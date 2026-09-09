@@ -963,9 +963,11 @@ of every ROM read):
    at `$0025DA` and took an F-line exception into the game's error handler
    (a `clr.b $3.w; bra` watchdog loop, black screen). At 10 MHz the fill
    always landed before the next fetch's DTACK sample. Fix: the cache only
-   sees ROM addresses (`rom_cache_addr = sel_rom ? bus : held`). The
-   tdragon2 core has the same structure and has not shown the symptom;
-   it is worth applying the same guard there.
+   sees ROM addresses (`rom_cache_addr = sel_rom ? bus : held`). The same
+   guard is now in `tdragon2_core.sv` for both the 68000's `rom_cache1`
+   and the Z80's `rom_cache1_byte` (whose RAM/latch accesses used to start
+   speculative bank-window fetches the same way); the reference sim trace
+   is unchanged and the Macross2 rbf was rebuilt and re-verified.
 2. **Registered `ready` flags stale for one clock.** `mainram_ready <=
    (addr_r == addr)` is high for the first `clk_sys` after the address
    changes (it still reflects the previous address); at 14 MHz `enPhi2`
