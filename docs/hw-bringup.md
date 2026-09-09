@@ -696,43 +696,38 @@ Note on the MiSTer screenshot rows for the overlay: the native
 and repeat lines (the box now runs the 640x480 output mode), so decode
 overlay rows by their marker colour, never by absolute y.
 
-## Sprites stacked in the wrong order ("transparency" on trees, whale)
+## Sprite-on-sprite stacking: what MAME really does (a reverted "fix")
 
 Reported as a transparency problem on tdragon2's desert-stage palm
-trees and the ocean-stage whale, compared with a MAME snapshot. Native
-MiSTer screenshots of the desert stage showed the trees themselves
-rendered exactly like MAME's (stipple shadows and all), but the
-player's plane and its explosion drawn BEHIND the tree leaves where
-MAME has the plane on top — the plane looked as if it were showing
-through the tree.
+trees and the ocean-stage whale. Native MiSTer screenshots showed the
+trees rendered exactly like MAME's; what differed from expectation was
+stacking (an enemy plane behind a tree's leaves). A first fix reversed
+the draw walk on the strength of `nmk16spr.cpp`'s shape — collect the
+table front to back, then draw the list back to front — reasoning that
+entry 0 ends up on top. That was wrong, and it made ships fly under
+the slot-0 cloud sprite. The complete rule:
 
-Cause: sprite-on-sprite stacking order. `nmk16spr.cpp` walks the
-table front to back under the sprite clock budget, collecting tiles,
-then draws the collected list back to front, so table entry 0 lands
-on top of everything. `video_macross2.sv` plotted slots 0..255 in one
-forward walk, so the highest enabled slot won every overlap — the
-trees (slots 16-28 in the dumped table, code $33C9, 2x2, colour $0B)
-over the plane (slots 0-8). The table was dumped from MAME at desert
-frames with a Lua `-autoboot_script` reading main RAM + $8000 (the
-sprite DMA source) — a cheap way to see what a scene really consists
-of.
+* `prio_transpen` ORs bit 31 into `pmask` ("high bit of the mask is
+  implicitly on", drawgfx.cpp) and sets the priority buffer to 31
+  under every pixel it draws. So once a sprite pixel is on screen no
+  later sprite can replace it: in the back-to-front loop the LAST
+  collected entry is drawn first and wins. Net effect: the HIGHER table
+  slot is on top, which is what a single forward walk with plain
+  overwrite (the original `video_macross2.sv` behaviour, restored)
+  produces. Verified on MAME frame 1398 of the tdragon2 demo: enemy
+  lasers (slots 109/110) over the 128x160 cloud sprite (slot 0), and
+  the smoke cloud (139) under later explosions (140-146).
+* The TX layer is drawn with priority 2 and the sprites' pmask holds
+  bit 2, so TX always covers sprites; BG never does. The core's
+  composite (`tx_opaque ? tile : spr_valid ? spr : tile`) matches.
 
-Fix: each pass now walks the headers forward once only to find the
-last slot inside the budget (`scan_mode`, same accounting as before),
-then draws from that slot down to 0. The scan costs ~12 cycles per
-slot, nothing next to the plotting.
-
-Verification trap: whole-frame or same-index diffs against MAME do not
-show this. Explosion animations change code every frame and the sim's
-sprite plane is a frame late, so at any frame index the two show
-different explosion phases and the "wrong" stacking can look better.
-`+define+SPR_ORDER_DEBUG` (reference sim: `make EXTRA_VFLAGS=...`)
-prints the slot order each pass draws and every write to one chosen
-pixel; that showed the new order writing smoke (slot 139) over a
-higher-slot explosion (143) exactly as MAME's rule requires, and the
-fireball MAME shows on top there being a lower slot in a later phase
-the sim had not reached yet. On hardware the check is direct: shots
-and the player's plane now pass in front of the palm trees.
+So an enemy at slot 23 behind a tree at slot 24 is MAME-correct too.
+Tools kept from the investigation: MAME's sprite table can be dumped at
+chosen frames with a Lua `-autoboot_script` (main RAM + $8000, the
+sprite DMA source; frames = seconds x 56.2 on the hires boards), and
+same-index frame diffs against MAME are not a valid stacking check —
+the sim's sprite plane is a frame late and explosion phases change
+every frame, so look at a dumped table and a matching crop instead.
 
 ## Lines through moving sprites, and flicker
 
