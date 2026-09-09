@@ -48,7 +48,6 @@ assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
 
 assign VGA_SL = 0;
 assign VGA_F1 = 0;
@@ -66,14 +65,23 @@ assign LED_POWER = 0;
 assign BUTTONS = 0;
 
 wire [1:0] ar = status[122:121];
-assign VIDEO_ARX = (!ar) ? 12'd4 : (ar - 1'd1);
-assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
+// "Original" aspect follows the orientation: 4:3 as the board outputs
+// it, 3:4 once the framebuffer rotation turns tdragon2 upright.
+assign VIDEO_ARX = (!ar) ? (video_rotated ? 12'd3 : 12'd4) : (ar - 1'd1);
+assign VIDEO_ARY = (!ar) ? (video_rotated ? 12'd4 : 12'd3) : 12'd0;
 
 `include "build_id.v"
 localparam CONF_STR = {
 	"Macross2;;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	// tdragon2 is a vertical (MAME ROT270) game drawn on its side by the
+	// board; "Vert" rotates it upright through the framebuffer, as MAME
+	// presents it. Off by default; hidden (H0) for macross2, which is
+	// horizontal, and for direct (analog) video, where the framebuffer
+	// path is unavailable. MiSTer keeps status bits across sessions
+	// through the OSD's own settings save.
+	"H0O[9],Orientation,Horz,Vert;",
 	"-;",
 	"R[0],Reset;",
 	// Fixed at synthesis time as tdragon2's own superset (3 buttons) —
@@ -84,6 +92,8 @@ localparam CONF_STR = {
 };
 
 wire        forced_scandoubler;
+wire        direct_video;
+wire        game_macross2; // runtime game select, assigned from the .mra <switches> byte below
 wire  [1:0] buttons;
 wire [127:0] status;
 wire  [10:0] ps2_key;
@@ -103,10 +113,11 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.gamma_bus(),
 
 	.forced_scandoubler(forced_scandoubler),
+	.direct_video(direct_video),
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({1'b0}),
+	.status_menumask({game_macross2 | direct_video}),
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -258,7 +269,7 @@ wire [15:0] dsw2_i;
 // Runtime game select — see this file's own header. status[16] is a
 // HIDDEN bit (no <dip> entry declares it in either .mra), set purely by
 // each .mra's own <switches default="..."> third byte on load.
-wire game_macross2; // assigned below from dip_sw[2][0] (| status[16]) — see dsw1_i's comment
+// game_macross2 is declared above hps_io (it feeds status_menumask); assigned below from dip_sw[2][0] (| status[16]) — see dsw1_i's comment
 
 // ------------------------------------------------------------------
 // SDRAM — single physical rtl/sdram.sv instance, 4 ports, all running
@@ -697,6 +708,29 @@ wire [23:0] final_rgb    = rd_rgb;
 assign VGA_R  = final_rgb[23:16];
 assign VGA_G  = final_rgb[15:8];
 assign VGA_B  = final_rgb[7:0];
+
+// ------------------------------------------------------------------
+// Orientation (status[9], "Vert"): the framework's screen_rotate
+// (sys/arcade_video.v) copies the finished frame into a DDR3
+// framebuffer rotated a quarter turn and hands it to the scaler
+// (FB_EN). With the option off, no_rotate holds FB_EN low, nothing is
+// written to DDRAM and the scaler takes the direct VGA_* path exactly
+// as before — the core's own video pipeline above is untouched either
+// way. tdragon2 is ROT270 in MAME, i.e. the board's image has to be
+// turned counter-clockwise to stand upright.
+// ------------------------------------------------------------------
+wire video_rotated;
+wire no_rotate = ~status[9] | game_macross2 | direct_video;
+screen_rotate screen_rotate (
+	.CLK_VIDEO(CLK_VIDEO), .CE_PIXEL(CE_PIXEL),
+	.VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B), .VGA_HS(VGA_HS), .VGA_VS(VGA_VS), .VGA_DE(VGA_DE),
+	.rotate_ccw(1'b1), .no_rotate(no_rotate), .flip(1'b0), .video_rotated(video_rotated),
+	.FB_EN(FB_EN), .FB_FORMAT(FB_FORMAT), .FB_WIDTH(FB_WIDTH), .FB_HEIGHT(FB_HEIGHT),
+	.FB_BASE(FB_BASE), .FB_STRIDE(FB_STRIDE), .FB_VBL(FB_VBL), .FB_LL(FB_LL),
+	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
+	.DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD)
+);
+assign FB_FORCE_BLANK = 1'b0;
 
 reg  [26:0] act_cnt;
 always @(posedge clk_sys) act_cnt <= act_cnt + 1'd1;
