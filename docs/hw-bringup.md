@@ -100,12 +100,17 @@ port through a tiny round-robin arbiter:
   play, core held in reset) **and** 68000 program-ROM reads (mutually
   exclusive in time with download, so no arbiter needed, just a mux on
   `ioctl_download`).
-- **Port 1** — Z80 `audiocpu` program-ROM reads + OKI0 + OKI1 sample
-  reads, 3-way round-robin arbitrated (all low-bandwidth; the OKIs are
-  ~1MHz-ish access rate with ample slack).
+- **Port 1** — sprite tile reads, alone (`video_macross2.sv`'s port B
+  with `TX_EXTERNAL=1`; see "Slowdown" below for why the sprite fetch
+  needs a port to itself).
 - **Port 2** — BG tile reads, alone (`video_macross2.sv`'s port A).
-- **Port 3** — TX tile reads + sprite tile reads, fixed priority TX
-  first (`video_macross2.sv`'s port B).
+- **Port 3** — TX tile reads (the video module's `txc_*` channel, top
+  priority) + the sound consumers (Z80 or TLCS-90 program ROM, OKI0,
+  OKI1; NMK004 and protection MCU on gunnail), fixed-priority arbiter.
+
+This is the third layout. The second (2026-09-08) had port 1 = sound
+consumers and port 3 = TX + sprites; the sprite fetch then lost about a
+quarter of its frame budget waiting behind TX transactions.
 
 This is the second layout. The first put BG + TX + sprites on port 2
 behind one 3-way arbiter and the OKIs on port 3, and `rtl/sdram.sv`'s
@@ -1132,6 +1137,82 @@ after the next DMA trigger, so the harness pulses it twice). The HDMI
 recording of the board through the same explosion shows the same
 alternating-band shifts as MAME's frames, within what moving sprites
 allow the measurement to say.
+
+## Slowdown in play: 68000 wait states and the sprite pass (2026-09-09)
+
+Thunder Dragon 2 slowed down on the board in busy scenes — many sprites
+and explosions — where MAME does not. Two separate mechanisms, both
+hardware-path only (the zero-latency reference sims match MAME frame
+for frame and never see either):
+
+**1. The 68000 lost about an eighth of its time to ROM wait states.**
+MAME and the real board run the 68000 with zero wait states from EPROM.
+Through the 1-pair `rom_cache1` on SDRAM port 0, 56% of ROM bus cycles
+missed (the instruction stream and the game's ROM data-table reads
+thrash one pair), each miss a ~10 clk_sys round trip = 1-2 wait states,
+13% (median) to 20% (worst frame) of every frame stalled; instructions
+per frame ran 12% below the reference sim. In frames where MAME's CPU
+is already near the frame budget that is the difference between
+keeping up and dropping a frame. Measured with the CPU audit counters
+in `sim/rtl/tdragon2_hw/tdragon2_hw_top.sv` (`CPUFRAME` lines) and a
+replay of every ROM access (`TB_ROM_TRACE`) through candidate caches
+with `tools/rom_cache_eval.py`: 16 lines alone leave 4% misses
+(sequential streaming of code and tables), 16 lines + next-pair
+prefetch 0.35%. `rtl/rom_cache_n.sv` (16 aligned pairs, FIFO, next-pair
+prefetch, never replacing the pair being read) now serves the program
+ROM in all three hardware cores: rom_wait 0.03% of a frame (median),
+instructions per frame within 0.1% of the reference sim, and the
+gunnail/raphero/macross2 hardware sims run within 1-3 frames of their
+references instead of 30 behind.
+
+**2. The sprite compositing pass outlasted the frame.** The attract
+demos never showed it (the old build's attract cycle is 33.3 s on the
+board, exactly MAME's, with no repeated frames), but MAME autoplay
+(`scratchpad/autoplay.lua`: coin, start, fire taps, movement sweeps)
+shows the game keeps 800-1200 on-screen 16x16 sprite units per frame
+in play (median 835, p99 1130, max 1214 in 4 minutes). The pass costs
+one clk_sys per pixel plus its ROM fetch stalls, and with the 1-pair
+`rom_cache1_byte` every 4-byte group of a unit was a full arbiter
+round trip behind TX: 585 clk per unit, 358 of them stall, plus the
+86k-cycle plane clear — a 1070-unit frame no longer fits in the 711k
+cycles of a frame, the plane swap waits a frame, and the sprites
+update at half rate while the tilemaps keep scrolling. On the board a
+measurement build (`DBG_SWAP_MARK`: an 8x8 block at the screen origin
+alternating red/white on every plane swap, counted from a 60 fps HDMI
+capture with `scratchpad/markerstats.py`, scripted play via
+`mister_keys.py`) showed the old build swapping 44-50 times per second
+in busy play against 56.2 when light (25 of 45 five-second windows
+below 55/s, mean 53.2); the same script with the 8-pair prefetching
+sprite cache alone (TX still sharing the port) gave 56.0-56.4 in every
+window (mean 56.2 = every frame), as does the final layout (sprites
+on their own port): 56.0-56.4 in all 45 windows, mean 56.20. The
+release build plays normally on the board and its attract cycle is
+33.3 s with no repeated gameplay frames, as in MAME; Raphero and
+Gunnail were rebuilt with the same three changes, their hardware sims
+match their reference sims pixel for pixel (raphero now one frame
+behind its reference instead of thirty), and both boot and run their
+attract demos on the board.
+Fix, in two parts: `rtl/rom_cache_n_byte.sv` (8 pairs + next-pair
+prefetch) for the sprite fetch, and the sprite fetch alone on SDRAM
+port 1 with the TX prefetch moved to the sound port at top priority
+(`TX_EXTERNAL`, see the port table). Measured in the hardware sim
+playing the game (`TB_AUTOPLAY=1`, `SPRFRAME` lines):
+
+| sprite fetch path | clk per unit (stall) | pass at 852 units | pass at 1214 units |
+|---|---|---|---|
+| 1 pair, shared with TX | 585 (358) | 585k | 796k — late |
+| 8 pairs + prefetch, shared with TX | 467 (240) | 484k | 653k |
+| 8 pairs + prefetch, own port | 303 (76) | 344k | 459k |
+
+(frame = 711,744 clk_sys; the plane clear is 86k of each pass; the
+1214-unit column extrapolates from the measured per-unit cost, the
+852-unit column is the median gameplay frame of the scripted run.) The
+final layout's gameplay frames are pixel-identical to the baseline
+run's (57 of 57 sampled frames, same lag), i.e. the game itself plays
+the same — only the time the pass takes changed.
+The OKI cen-stall and unserved-sample audits are unchanged by the TX
+move (gunnail 24.755% before and after), and the reference sims are
+bit-identical (the change is inside the `HW_ROMS=1` branches).
 
 ## Status
 

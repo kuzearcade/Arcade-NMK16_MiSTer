@@ -89,3 +89,7 @@ sim/**/oracle_traces/
 sim/rtl/*/*.ppm
 __pycache__/
 sim/rtl/video_state/dump
+# measurement run directories and build variants of the hardware sims
+sim/rtl/*/obj_base/
+sim/rtl/*/spr_*/
+sim/rtl/*/rom_access.bin

@@ -71,6 +71,15 @@ int main(int argc, char **argv) {
 		}
 	};
 
+	setvbuf(stdout, nullptr, _IOLBF, 0);
+	// TB_AUTOPLAY=1: coin, start, then play (fire taps, movement sweeps) —
+	// the same schedule as the MAME Lua autoplay used to measure sprite
+	// load, so the sim reaches real gameplay sprite counts. Inputs are
+	// active low: IN0 bit0 coin1, bit3 start1; IN1 bit0 right, 1 left,
+	// 2 down, 3 up, 4 button1, 5 button2 (nmk16.cpp INPUT_PORTS tdragon2).
+	const bool autoplay = std::getenv("TB_AUTOPLAY") != nullptr;
+	const int ppm_step = std::getenv("TB_PPM_STEP") ? std::atoi(std::getenv("TB_PPM_STEP")) : 1;
+	top.in0_i = 0xFFFF; top.in1_i = 0xFFFF;
 	top.reset = 1;
 	top.ioctl_download = 0;
 	top.ioctl_wr = 0;
@@ -179,7 +188,7 @@ int main(int argc, char **argv) {
 		if (!prev_frame_done && frame_done_now) {
 			long nonzero_px = 0;
 			FILE *ppm = nullptr;
-			if (dump_ppm) {
+			if (dump_ppm && (frame_count % ppm_step) == 0) {
 				char fname[64];
 				std::snprintf(fname, sizeof(fname), "tdragon2_hw_frame_%02u.ppm", frame_count);
 				ppm = std::fopen(fname, "wb");
@@ -203,6 +212,32 @@ int main(int argc, char **argv) {
 			last_frame_nonzero_px = nonzero_px;
 			if (frame_count < 5 || frame_count % 50 == 0)
 				printf("tb_tdragon2_hw: frame %u: %ld/%d nonzero pixels\n", frame_count, nonzero_px, SCREEN_W * SCREEN_H);
+			if (autoplay) {
+				const unsigned f = frame_count + 1; // schedule keyed to the frame about to be played
+				uint16_t in0 = 0xFFFF, in1 = 0xFFFF;
+				if (f >= 120 && f < 130) in0 &= ~0x0001;
+				if (f >= 200 && f < 210) in0 &= ~0x0008;
+				if (f > 220) {
+					if ((f % 4) < 2) in1 &= ~0x0010;
+					const unsigned ph = (f / 60) % 8;
+					if (ph == 1 || ph == 2) in1 &= ~0x0002;
+					if (ph == 5 || ph == 6) in1 &= ~0x0001;
+					if (ph == 3) in1 &= ~0x0008;
+					if (ph == 7) in1 &= ~0x0004;
+				}
+				top.in0_i = in0; top.in1_i = in1;
+			}
+			{
+				static uint32_t p_bus=0,p_rom=0,p_miss=0,p_rw=0,p_ramw=0,p_dmaw=0; static long p_instr=0;
+				printf("CPUFRAME %u instr=%ld bus=%u rom=%u miss=%u romwait=%u ramwait=%u dmawait=%u\n", frame_count, m68k_instrs-p_instr,
+					top.dbg_bus_cycles-p_bus, top.dbg_rom_cycles-p_rom, top.dbg_rom_misses-p_miss,
+					top.dbg_rom_wait_clks-p_rw, top.dbg_ram_wait_clks-p_ramw, top.dbg_dma_wait_clks-p_dmaw);
+				p_instr=m68k_instrs; p_bus=top.dbg_bus_cycles; p_rom=top.dbg_rom_cycles; p_miss=top.dbg_rom_misses;
+				p_rw=top.dbg_rom_wait_clks; p_ramw=top.dbg_ram_wait_clks; p_dmaw=top.dbg_dma_wait_clks;
+				static uint32_t p_sp=0,p_ss=0,p_su=0,p_sl=0;
+				printf("SPRFRAME %u pass=%u stall=%u units=%u late=%u\n", frame_count, top.dbg_spr_pass_clks-p_sp, top.dbg_spr_stall_clks-p_ss, top.dbg_spr_units-p_su, top.dbg_spr_late_swaps-p_sl);
+				p_sp=top.dbg_spr_pass_clks; p_ss=top.dbg_spr_stall_clks; p_su=top.dbg_spr_units; p_sl=top.dbg_spr_late_swaps;
+			}
 			frame_count++;
 		}
 		prev_frame_done = frame_done_now;
@@ -215,6 +250,12 @@ int main(int argc, char **argv) {
 		prev_m1_n = m1_n_now;
 
 		bool as_n_now = top.dbg_as_n;
+		// TB_ROM_TRACE=<path>: every 68000 ROM bus cycle as {word addr, is_program_fetch} (uint32 LE, bit31 = program-space fetch)
+		static FILE *rom_trace = std::getenv("TB_ROM_TRACE") ? fopen(std::getenv("TB_ROM_TRACE"), "wb") : nullptr;
+		if (rom_trace && prev_as_n && !as_n_now && !top.dbg_write && (((uint32_t)top.dbg_eab << 1) < 0x80000)) {
+			uint32_t w = (uint32_t)top.dbg_eab | ((top.dbg_fc1 && !top.dbg_fc0) ? 0x80000000u : 0u);
+			fwrite(&w, 4, 1, rom_trace);
+		}
 		if (prev_as_n && !as_n_now && top.dbg_fc1 && !top.dbg_fc0) {
 			m68k_instrs++;
 			m68k_last_pc = (uint32_t)top.dbg_eab << 1;
@@ -237,6 +278,12 @@ int main(int argc, char **argv) {
 	}
 
 	printf("tb_tdragon2_hw: ran %llu clk_sys cycles\n", (unsigned long long)g_run_cycles);
+	printf("tb_tdragon2_hw: sprite audit: pass clks %u, stall clks %u, units %u, late swaps %u, longest pass %u clks\n",
+		(unsigned)top.dbg_spr_pass_clks, (unsigned)top.dbg_spr_stall_clks, (unsigned)top.dbg_spr_units, (unsigned)top.dbg_spr_late_swaps, (unsigned)top.dbg_spr_pass_max);
+	printf("tb_tdragon2_hw: CPU audit: bus cycles %u, ROM cycles %u, ROM misses %u, rom_wait clks %u, ram_wait clks %u, dma_wait clks %u, miss latency avg %.2f max %u clks\n",
+		(unsigned)top.dbg_bus_cycles, (unsigned)top.dbg_rom_cycles, (unsigned)top.dbg_rom_misses, (unsigned)top.dbg_rom_wait_clks,
+		(unsigned)top.dbg_ram_wait_clks, (unsigned)top.dbg_dma_wait_clks,
+		top.dbg_rom_misses ? (double)top.dbg_miss_lat_clks / top.dbg_rom_misses : 0.0, (unsigned)top.dbg_miss_lat_max);
 	printf("tb_tdragon2_hw: distinct 68000 fetch PCs in the final quarter of the run: %zu\n", recent_pcs.size());
 	{
 		int shown = 0;

@@ -404,7 +404,9 @@ module raphero_core #(
 		reg [18:1] rom_addr_held;
 		always @(posedge clk_sys) if (sel_rom) rom_addr_held <= byte_addr[18:1];
 		wire [18:1] rom_cache_addr = sel_rom ? byte_addr[18:1] : rom_addr_held;
-		rom_cache1 rom_cache_inst (
+		// 16 pairs + next-pair prefetch instead of rom_cache1's single
+		// pair: see rtl/rom_cache_n.sv (68000 slowdown vs MAME).
+		rom_cache_n #(.LINES(16), .PREFETCH(1), .LAST_PAIR(22'h01FFFF)) rom_cache_inst (
 			.clk(clk_sys), .reset(reset | ioctl_download),
 			.addr(rom_cache_addr), .data(rom_dout), .ready(rom_ready),
 			.sd_addr(cache_sd_addr), .sd_req(cache_sd_req),
@@ -771,32 +773,38 @@ module raphero_core #(
 	assign snd_stall = (sel_snd_rom | sel_snd_bank) & snd_mem_rd & ~audiocpu_ready & ~reset;
 
 	// SDRAM port 1, three channels: program ROM, OKI0, OKI1 samples.
-	wire        p1_busy [0:2];
-	wire        p1_valid[0:2];
-	wire [24:1] p1_addr [0:2];
-	wire        p1_req  [0:2];
-	wire [15:0] p1_dout [0:2];
-	wire [31:0] p1_dout_pair [0:2];
+	wire        p1_busy [0:3];
+	wire        p1_valid[0:3];
+	wire [24:1] p1_addr [0:3];
+	wire        p1_req  [0:3];
+	wire [15:0] p1_dout [0:3];
+	wire [31:0] p1_dout_pair [0:3];
 	generate
 	if (!HW_ROMS) begin : g_audiocpu_sim
 		reg [7:0] audiocpu_rom [0:131071];
 		initial if (AUDIOCPU_FILE != "") $readmemh(AUDIOCPU_FILE, audiocpu_rom);
 		assign audiocpu_dout  = audiocpu_rom[audiocpu_byte_addr[16:0]];
 		assign audiocpu_ready = 1'b1;
-		assign sd1_addr = 24'd0; assign sd1_req = 1'b0;
-		assign p1_busy  = '{1'b0, 1'b0, 1'b0};
-		assign p1_valid = '{1'b0, 1'b0, 1'b0};
-		assign p1_dout  = '{16'd0, 16'd0, 16'd0};
-		assign p1_dout_pair = '{32'd0, 32'd0, 32'd0};
-		assign p1_addr  = '{24'd0, 24'd0, 24'd0};
-		assign p1_req   = '{1'b0, 1'b0, 1'b0};
+		assign sd3_addr = 24'd0; assign sd3_req = 1'b0;
+		assign p1_busy  = '{1'b0, 1'b0, 1'b0, 1'b0};
+		assign p1_valid = '{1'b0, 1'b0, 1'b0, 1'b0};
+		assign p1_dout  = '{16'd0, 16'd0, 16'd0, 16'd0};
+		assign p1_dout_pair = '{32'd0, 32'd0, 32'd0, 32'd0};
+		// channel 0 (TX prefetch) is driven by the video module's txc_* outputs
+		assign p1_addr[1] = 24'd0; assign p1_addr[2] = 24'd0; assign p1_addr[3] = 24'd0;
+		// channel 0 (TX prefetch) is driven by the video module's txc_* outputs
+		assign p1_req[1] = 1'b0; assign p1_req[2] = 1'b0; assign p1_req[3] = 1'b0;
 	end else begin : g_audiocpu_hw
-		sdram_arb #(.N(3)) p1_arb_inst (
+		// Physical port 3: channel 0 is the video module's TX prefetch
+		// stream (top priority, it is real-time), the sound consumers
+		// follow. The sprite fetch has physical port 1 to itself (video
+		// sd_b_*) — see video_macross2.sv TX_EXTERNAL.
+		sdram_arb #(.N(4), .FIXED_PRIO(1)) p1_arb_inst (
 			.clk(clk_sys), .reset(por_rst),
-			.i_addr(p1_addr), .i_we('{1'b0, 1'b0, 1'b0}), .i_wrl('{1'b0, 1'b0, 1'b0}), .i_wrh('{1'b0, 1'b0, 1'b0}), .i_din('{16'd0, 16'd0, 16'd0}),
+			.i_addr(p1_addr), .i_we('{1'b0, 1'b0, 1'b0, 1'b0}), .i_wrl('{1'b0, 1'b0, 1'b0, 1'b0}), .i_wrh('{1'b0, 1'b0, 1'b0, 1'b0}), .i_din('{16'd0, 16'd0, 16'd0, 16'd0}),
 			.i_req(p1_req), .i_busy(p1_busy), .i_valid(p1_valid), .i_dout(p1_dout), .i_dout_pair(p1_dout_pair),
-			.sdram_addr(sd1_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
-			.sdram_dout(sd1_dout), .sdram_dout_pair(sd1_dout_pair), .sdram_req(sd1_req), .sdram_ack(sd1_ack)
+			.sdram_addr(sd3_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
+			.sdram_dout(sd3_dout), .sdram_dout_pair(sd3_dout_pair), .sdram_req(sd3_req), .sdram_ack(sd3_ack)
 		);
 		// oki_rom_cache (multi-line, next-line prefetch), not the 1-line
 		// rom_cache1_byte the Z80 boards use: the TLCS-90 fetches a byte
@@ -805,7 +813,7 @@ module raphero_core #(
 		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_AUDIOCPU)) audiocpu_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr(audiocpu_byte_addr), .data(audiocpu_dout), .ready(audiocpu_ready), .stall(),
-			.sd_addr(p1_addr[0]), .sd_req(p1_req[0]), .sd_busy(p1_busy[0]), .sd_valid(p1_valid[0]), .sd_dout(p1_dout[0]), .sd_dout_pair(p1_dout_pair[0])
+			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1]), .sd_dout_pair(p1_dout_pair[1])
 		);
 	end
 	endgenerate
@@ -934,12 +942,12 @@ module raphero_core #(
 		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI1)) oki0_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr(oki0_rom_addr), .data(oki0_rom_data), .ready(oki0_rom_ok), .stall(oki0_stall),
-			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1]), .sd_dout_pair(p1_dout_pair[1])
+			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2]), .sd_dout_pair(p1_dout_pair[2])
 		);
 		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI2)) oki1_cache_inst (
 			.clk(clk_sys), .reset(reset),
 			.byte_addr(oki1_rom_addr), .data(oki1_rom_data), .ready(oki1_rom_ok), .stall(oki1_stall),
-			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2]), .sd_dout_pair(p1_dout_pair[2])
+			.sd_addr(p1_addr[3]), .sd_req(p1_req[3]), .sd_busy(p1_busy[3]), .sd_valid(p1_valid[3]), .sd_dout(p1_dout[3]), .sd_dout_pair(p1_dout_pair[3])
 		);
 `ifdef VERILATOR
 		// Sample-fetch audit + golden-byte check against the plain ROM
@@ -1134,6 +1142,7 @@ module raphero_core #(
 	// scroll taps and the 6 MB sprite ROM.
 	// ------------------------------------------------------------------
 	video_macross2 #(
+		.TX_EXTERNAL(1),
 		.FGTILE_FILE(FGTILE_FILE),
 		.BGTILE_FILE(BGTILE_FILE),
 		.SPRITES_FILE(SPRITES_FILE),
@@ -1162,7 +1171,8 @@ module raphero_core #(
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),
 		.sd_dout(sd2_dout), .sd_dout_pair(sd2_dout_pair), .sd_req(sd2_req), .sd_ack(sd2_ack),
-		.sd_b_addr(sd3_addr), .sd_b_req(sd3_req), .sd_b_dout(sd3_dout), .sd_b_dout_pair(sd3_dout_pair), .sd_b_ack(sd3_ack)
+		.sd_b_addr(sd1_addr), .sd_b_req(sd1_req), .sd_b_dout(sd1_dout), .sd_b_dout_pair(sd1_dout_pair), .sd_b_ack(sd1_ack),
+		.txc_addr(p1_addr[0]), .txc_req(p1_req[0]), .txc_busy(p1_busy[0]), .txc_valid(p1_valid[0]), .txc_dout(p1_dout[0]), .txc_dout_pair(p1_dout_pair[0])
 	);
 
 	reg frame_done_r;
