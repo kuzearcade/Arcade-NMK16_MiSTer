@@ -696,6 +696,31 @@ Note on the MiSTer screenshot rows for the overlay: the native
 and repeat lines (the box now runs the 640x480 output mode), so decode
 overlay rows by their marker colour, never by absolute y.
 
+## Orientation option (tdragon2 upright over HDMI)
+
+tdragon2 is MAME ROT270: the board draws it on its side. `Macross2.sv`
+now offers `Orientation: Horz/Vert` in the OSD (`H0O[9]`, default
+Horz). "Vert" enables the framework's `screen_rotate` (the second
+module in `sys/arcade_video.v`): it copies each finished frame into a
+DDR3 framebuffer a quarter turn counter-clockwise (`rotate_ccw=1`) and
+raises FB_EN so the scaler shows that buffer; "Original" aspect
+follows it to 3:4. With the option off, `no_rotate` keeps FB_EN low,
+nothing touches DDRAM and the scaler takes the direct VGA path as
+before — the core's own video pipeline is not in the loop either way.
+The entry is hidden (status_menumask bit 0) for macross2, which is
+horizontal, and under direct_video, where the framebuffer path does
+not exist; `no_rotate` is forced in both cases too. The framebuffer
+ports need `MISTER_FB=1` in the .qsf, which is also what compiles
+ascal's DDR read path into the framework — that costs a little slack
+on the HDMI PLL domain (see the build notes in the commit).
+
+Persistence is the MiSTer's own: OSD > System > "Save settings" writes
+`config/tdragon2.CFG`, and the option comes back on the next load of
+that .mra. Verified on the box by driving the OSD with
+`tools/mister_keys.py` (F12, cursor keys, Enter; Right/Left switch
+between the Core and System pages) and capturing HDMI before/after and
+after a core reload.
+
 ## Keyboard input (MAME default keys)
 
 `Macross2.sv` decodes hps_io's `ps2_key` stream into held-key
