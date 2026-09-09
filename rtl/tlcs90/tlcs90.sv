@@ -137,6 +137,16 @@
 // combination, `ADC HL,gg` included, still recomputes S/Z/V fully.
 module tlcs90 (
 	input        clk,
+	// Clock enable: the core advances only on clk edges where cen is
+	// high. Tie to 1'b1 to run at clk's own rate (every NMK004/protection
+	// wrapper does — they feed a real divided clock). raphero_core.sv
+	// instead runs this on the 40MHz clk_sys with an 8MHz cen it can
+	// withhold while a program-ROM fetch from SDRAM is outstanding — the
+	// TLCS-90 has no WAIT pin, so a stretched clock is the only way to
+	// insert a wait state, and doing it as a cen keeps the whole core in
+	// one clock domain. Reset is sampled on cen edges too, so the wrapper
+	// must not withhold cen during reset.
+	input        cen,
 	input        reset,       // async, active high
 
 	input  [7:0] din,
@@ -1113,6 +1123,8 @@ module tlcs90 (
 	reg [7:0] byte_lo;      // scratch for assembling a 2-byte little-endian value
 	reg [15:0] wb_val;      // computed result awaiting writeback
 	reg [15:0] push_val;
+	wire [15:0] push_r16 = r16_read(r1[3:0]);
+	wire [7:0]  push_lo  = push_r16[7:0]; // low byte of the pushed register (see OP_PUSH)
 	reg [1:0]  pop_dest;    // 0=into r1 register (POP opcode), 1=into PC (RET), 2=into AF then chain to PC (RETI)
 	reg        irq_taking;  // this S_PUSH_HI visit is interrupt entry (push PC then AF), not a plain PUSH/CALL
 
@@ -1295,7 +1307,7 @@ module tlcs90 (
 	// NMI is the fixed INTNMI vector (0x10+1*8).
 	wire [15:0] irq_vector = nmi_pending ? 16'h0018 : (16'h0010 + (({12'h0,irq_idx} + 16'd3) << 3));
 
-	always @(posedge clk) begin
+	always @(posedge clk) if (cen) begin
 		mem_rd <= 1'b0;
 		mem_wr <= 1'b0;
 		addr_bank <= 4'h0;
@@ -1656,7 +1668,8 @@ module tlcs90 (
 						OP_PUSH: begin
 							push_val <= r16_read(r1[3:0]);
 							sp <= sp - 16'd2;
-							addr <= sp - 16'd2; dout <= r16_read(r1[3:0])[7:0]; mem_wr <= 1'b1;
+							// (no bit-select on a function call: Quartus 17 rejects it)
+							addr <= sp - 16'd2; dout <= push_lo; mem_wr <= 1'b1;
 							state <= S_PUSH_HI;
 						end
 						OP_POP: begin

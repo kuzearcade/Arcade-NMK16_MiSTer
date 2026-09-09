@@ -99,6 +99,7 @@
 //     read returns).
 module nmk004_periph (
 	input        clk,
+	input        cen,   // clock enable, same contract as tlcs90.sv's own (tie 1'b1 for a real divided clk)
 	input        reset,
 
 	input  [5:0] reg_addr, // addr - 0xffc0
@@ -162,7 +163,7 @@ module nmk004_periph (
 
 	reg [2:0] base_div;
 	wire base_tick = (base_div == 3'd7);
-	always @(posedge clk) base_div <= reset ? 3'd0 : (base_tick ? 3'd0 : base_div + 3'd1);
+	always @(posedge clk) if (cen) base_div <= reset ? 3'd0 : (base_tick ? 3'd0 : base_div + 3'd1);
 
 	// Pair-level match mode (see header derivation in docs/tier2-tlcs90.md:
 	// the reference's match-time mode lookup uses the *odd* member's own
@@ -232,7 +233,7 @@ module nmk004_periph (
 	wire pair23_16bit = (pair_mode_23 == 2'b01);
 	wire tick3 = tick3_self | (chained3 & fired2);
 
-	always @(posedge clk) begin
+	always @(posedge clk) if (cen) begin
 		fired0 <= 1'b0; fired1 <= 1'b0; fired2 <= 1'b0; fired3 <= 1'b0;
 
 		if (reset) begin
@@ -329,7 +330,7 @@ module nmk004_periph (
 	wire [15:0] t4_prescale = (t4clk == 2'b10) ? 16'd16 : 16'd1;
 	wire tick4 = en4 && t4_prescale_valid && base_tick && (presc4 == t4_prescale - 16'd1);
 
-	always @(posedge clk) begin
+	always @(posedge clk) if (cen) begin
 		fired4 <= 1'b0; fired5 <= 1'b0;
 		if (reset) begin
 			presc4 <= 16'd0; tval4 <= 16'd0;
@@ -407,7 +408,7 @@ module nmk004_periph (
 	// ------------------------------------------------------------------
 	// Register writes
 	// ------------------------------------------------------------------
-	always @(posedge clk) begin
+	always @(posedge clk) if (cen) begin
 		if (reset) begin
 			p01cr <= 8'h00; p2cr <= 8'h00; p4cr <= 8'h00; p67cr <= 8'h00; p8cr <= 8'h00;
 			smmod <= 8'h00; tmod <= 8'h00; tclk <= 8'h00; trun <= 8'h00; t4mod <= 8'h00;

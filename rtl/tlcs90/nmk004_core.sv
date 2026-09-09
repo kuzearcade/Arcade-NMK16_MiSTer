@@ -100,7 +100,7 @@ module nmk004_core #(
 	wire [10:0] irq_req_to_cpu = {irq_req_periph[10:1], irq_req_periph[0] | ~ym_irq_n};
 
 	tlcs90 cpu (
-		.clk(clk), .reset(reset),
+		.clk(clk), .cen(1'b1), .reset(reset),
 		.din(cpu_din), .dout(cpu_dout), .addr(cpu_addr), .addr_bank(cpu_addr_bank),
 		.mem_rd(cpu_mem_rd), .mem_wr(cpu_mem_wr),
 		.nmi(nmi), .irq_req(irq_req_to_cpu), .irq_mask(irq_mask),
@@ -179,7 +179,7 @@ module nmk004_core #(
 	wire [7:0] periph_rdata;
 
 	nmk004_periph periph (
-		.clk(clk), .reset(reset),
+		.clk(clk), .cen(1'b1), .reset(reset),
 		.reg_addr(cpu_addr[5:0]),
 		.wdata(cpu_dout),
 		.we(sel_periph & cpu_mem_wr),

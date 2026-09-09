@@ -24,6 +24,8 @@ NMK_IRQ_DIR := ../../../rtl/nmk_irq
 NMK112_DIR := ../../../rtl/nmk112
 BJTWIN_DIR := ../../../rtl/bjtwin
 CORE_DIR := ../../../rtl/raphero
+MACROSS2_DIR := ../../../rtl/macross2
+RTL_DIR := ../../../rtl
 ROMS_DIR := ../../../mame_roms
 TOOLS_DIR := ../../../tools
 OBJ_DIR := obj_dir
@@ -31,15 +33,17 @@ TOP := raphero_core
 Z1 := $(ROMS_DIR)/raphero.zip
 Z2 := $(ROMS_DIR)/arcadian.zip
 
-# video_raphero.sv is this port's own new file (see its own header for
-# the hybrid derivation). tlcs90.sv/nmk004_periph.sv reused UNMODIFIED
-# from the NMK004/protection-MCU roles (nmk004_core.sv itself, the
-# thin NMK004-specific wrapper, is NOT needed here — raphero_core.sv
-# instantiates tlcs90+nmk004_periph directly with its own new external
-# bus decode in place of NMK004's host-latch handshake).
-SOURCES := $(CORE_DIR)/$(TOP).sv $(CORE_DIR)/video_raphero.sv $(TLCS90_DIR)/tlcs90.sv $(TLCS90_DIR)/nmk004_periph.sv \
+# Video is rtl/macross2/video_macross2.sv with RASTER_SCROLL=1 (per-line
+# scroll taps) and SPRITES_BYTES=0x600000 — the hardware-ready module,
+# so the reference sim and Raphero.rbf share one video path. The SDRAM/
+# cache modules are listed so their (unelaborated at HW_ROMS=0) generate
+# branches resolve. tlcs90.sv/nmk004_periph.sv run on clk_sys with an
+# 8 MHz clock enable here (see raphero_core.sv's header).
+SOURCES := $(CORE_DIR)/$(TOP).sv $(MACROSS2_DIR)/video_macross2.sv $(TLCS90_DIR)/tlcs90.sv $(TLCS90_DIR)/nmk004_periph.sv \
            $(NMK112_DIR)/nmk112.sv $(BJTWIN_DIR)/video_timing.sv $(NMK_IRQ_DIR)/nmk_irq.sv \
-           $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v
+           $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
+           $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache1_byte.sv \
+           $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv
 
 .PHONY: all roms run clean
 
@@ -78,8 +82,7 @@ vtiming-rom:
 # (rhp94099.4, 0x200000 — parent zip only), plain concat, no
 # descrambling. sprites (rhp94099.8+9+10, nmk16.cpp:8595-8597) — THREE
 # ROM_LOAD16_WORD_SWAP files concatenated in region order (0x600000
-# total, bigger than any prior port's own sprite ROM — see
-# video_raphero.sv's own header).
+# total, bigger than any prior port's own sprite ROM).
 gfx-roms:
 	python3 $(TOOLS_DIR)/mkgfxrom.py --zip $(Z1) --zip $(Z2) --mode concat --files rhp94099.1 --out roms/raphero_fgtile.hex
 	python3 $(TOOLS_DIR)/mkgfxrom.py --zip $(Z1) --zip $(Z2) --mode concat --files rhp94099.4 --out roms/raphero_bgtile.hex
@@ -93,7 +96,7 @@ gfx-roms:
 $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_raphero.cpp $(FX68K_DIR)/fx68k.sv \
 	roms/raphero_maincpu.hex roms/raphero_audiocpu.hex roms/raphero_oki1.hex roms/raphero_oki2.hex \
 	roms/raphero_vtiming.hex roms/raphero_fgtile.hex roms/raphero_bgtile.hex roms/raphero_sprites.hex
-	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT --top-module $(TOP) \
+	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --top-module $(TOP) $(EXTRA_VFLAGS) \
 		-y $(FX68K_DIR) -y $(TLCS90_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl \
 		-GROM_FILE=\"roms/raphero_maincpu.hex\" \
 		-GAUDIOCPU_FILE=\"roms/raphero_audiocpu.hex\" \

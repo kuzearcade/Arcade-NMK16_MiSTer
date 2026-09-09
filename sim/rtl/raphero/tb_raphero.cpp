@@ -28,13 +28,14 @@
 #include "../common/nmktrace.h"
 
 static constexpr uint64_t RESET_CYCLES = 200;
-static constexpr uint64_t RUN_CYCLES   = 300000000; // clk_sys (40MHz) cycles = 7.5 real seconds
+static uint64_t RUN_CYCLES = 300000000; // clk_sys (40MHz) cycles = 7.5 real seconds; override via argv[1]
 static constexpr int SCREEN_W = 384;
 static constexpr int SCREEN_H = 224;
 
 int main(int argc, char **argv) {
 	VerilatedContext contextp;
 	contextp.commandArgs(argc, argv);
+	if (argc > 1) RUN_CYCLES = strtoull(argv[1], nullptr, 0);
 
 	Vraphero_core top{&contextp};
 
@@ -79,6 +80,10 @@ int main(int argc, char **argv) {
 	bool oki0_we_prev_dbg = false, oki1_we_prev_dbg = false;
 	uint32_t oki0_we_count = 0, oki1_we_count = 0;
 	bool log_snd = std::getenv("TB_LOG_SND") != nullptr;
+	// TB_DUMP_AUDIO=<path>: raw signed 16-bit mono at 48kHz (audio_l
+	// decimated from the 40MHz clk_sys), for comparison with MAME -wavwrite.
+	FILE *audio_f = std::getenv("TB_DUMP_AUDIO") ? std::fopen(std::getenv("TB_DUMP_AUDIO"), "wb") : nullptr;
+	uint64_t audio_phase = 0;
 
 	auto tick = [&]() {
 		top.clk_sys = 0;
@@ -155,6 +160,15 @@ int main(int argc, char **argv) {
 		}
 		prev_as_n = as_n_now;
 
+		if (audio_f) {
+			audio_phase += 48000;
+			if (audio_phase >= 40000000ULL) {
+				audio_phase -= 40000000ULL;
+				int16_t s = (int16_t)top.audio_l;
+				fwrite(&s, 2, 1, audio_f);
+			}
+		}
+
 		// Video frame checksum
 		bool frame_done_now = top.frame_done;
 		if (!prev_frame_done && frame_done_now) {
@@ -210,6 +224,7 @@ int main(int argc, char **argv) {
 	std::fclose(snd_cyc_trace);
 	std::fclose(m68k_trace);
 	std::fclose(m68k_cyc_trace);
+	if (audio_f) std::fclose(audio_f);
 
 	std::printf("tb_raphero: ran %llu clk_sys cycles (~%llu 68000 bus cycles)\n",
 	            (unsigned long long)RUN_CYCLES, (unsigned long long)(RUN_CYCLES / 4));

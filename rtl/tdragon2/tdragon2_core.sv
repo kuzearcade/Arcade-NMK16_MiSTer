@@ -2001,6 +2001,7 @@ module tdragon2_core #(
 		.spr_palette_addr(vid_spr_palette_addr), .spr_palette_data(vid_spr_palette_dout),
 		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout), .mainram_ready(vid_mainram_ready),
 		.bg_xscroll(bg_xscroll), .bg_yscroll(bg_yscroll),
+		.scrollram_0(16'd0), .scrollramy_0(16'd0), .scroll_row_addr(), .scrollram_row(16'd0), .scrollramy_row(16'd0),
 		.bg_bank(bgbank_reg),
 		.tilerambank(tilerambank_reg),
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb_video),

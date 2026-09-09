@@ -1,156 +1,50 @@
-// NMK16 MiSTerFPGA project — raphero (Tier 3, Family C) system-level
-// integration. Third Tier 3 port, after macross2/tdragon2 — read
-// rtl/macross2/macross2_core.sv's and rtl/tdragon2/tdragon2_core.sv's own
-// headers first for the shared architecture, not re-explained here.
-// `arcadian`/`raphero`/`rapheroa` all share the identical raphero()
-// machine config (nmk16.cpp:5554-5597) — this file targets `raphero`
-// itself as the representative romset.
+// NMK16 MiSTerFPGA project — Rapid Hero / Arcadia (raphero, arcadian,
+// rapheroa: one machine config, nmk16.cpp raphero()) system-level
+// integration, hardware-ready. Built on rtl/tdragon2/tdragon2_core.sv's
+// hardware path (HW_ROMS=1: every ROM through rom caches over the real
+// rtl/sdram.sv, loaded by ioctl_download; registered on-chip RAMs for
+// block-RAM inference; sprite-DMA CPU stall; audio mix; real inputs) and
+// rtl/macross2/video_macross2.sv with RASTER_SCROLL=1 and a 6 MB sprite
+// ROM. See docs/hw-bringup.md.
 //
-// TWO genuinely new things versus every prior Tier 3 port, both confirmed
-// directly against the reference:
+// What differs from tdragon2/macross2 (cross-checked against nmk16.cpp):
 //
-// 1. **Sound CPU is TLCS-90, not Z80.** raphero() uses
-//    `TMP90841(config,m_audiocpu,XTAL(16'000'000)/2)` (nmk16.cpp:5561) —
-//    the SAME TLCS-90 core family already built for NMK004/protection-MCU
-//    roles (rtl/tlcs90/tlcs90.sv), wired here as a bare sound CPU with its
-//    own direct memory-mapped bus to YM2203/dual-OKI/NMK112
-//    (raphero_sound_mem_map, nmk16.cpp:1134-1145), not through NMK004's
-//    host-latch handshake or the protection-MCU's shared-RAM scheme.
-//    Confirmed directly from mame/src/devices/cpu/tlcs90/tlcs90.cpp:
-//    `tmp90841_mem()` (line 80-84) is "rom-less" (no internal boot ROM,
-//    unlike TMP90840's own 8KB) but uses the IDENTICAL internal 256B RAM
-//    (0xFEC0-0xFFBF) and peripheral register block (`tmp90840_regs`,
-//    0xFFC0-0xFFEF) as TMP90840 — i.e. the SAME register map
-//    rtl/tlcs90/nmk004_periph.sv already implements. Reused here
-//    UNMODIFIED (p5/p6/p7_ext_en tied low for "plain" behavior, matching
-//    nmk004_core.sv's own instantiation pattern exactly — see that file
-//    for the template this follows). YM2203's own IRQ maps to MAME's
-//    "line 0" (ymsnd.irq_handler().set_inputline(m_audiocpu,0),
-//    nmk16.cpp:5580) = INT0 = irq_req bit0 (per nmk004_periph.sv's own
-//    documented bit ordering) — OR'd in exactly like nmk004_core.sv's own
-//    `irq_req_to_cpu` pattern, not exposed as a separate CPU input.
+//   - 68000 at 14 MHz (raphero(): XTAL(14'000'000)), not 10 MHz — a 7/20
+//     phase accumulator from the 40 MHz clk_sys drives enPhi1/enPhi2.
+//   - Sound CPU is a TMP90841 (TLCS-90, rtl/tlcs90/tlcs90.sv +
+//     nmk004_periph.sv) at 8 MHz, memory-mapped (raphero_sound_mem_map),
+//     not a Z80 with I/O ports. It has no WAIT pin: on the hardware path
+//     its 8 MHz clock enable is withheld while a program-ROM fetch is
+//     outstanding (oki_rom_cache: 16 four-byte lines + next-line
+//     prefetch, so sequential code mostly hits). 0x100016 is nopw() —
+//     the 68000 cannot reset the sound CPU (macross2's own
+//     sound_reset_w has no counterpart here).
+//   - Per-scanline X+Y background scroll: gunnail_scrollram/scrollramy
+//     at 0x130000/0x130200 (256 words each), raphero_scroll_w deriving
+//     tilerambank from bits [13:12] of scrollram[0] (nmk16_v.cpp:295-311),
+//     applied per bitmap line by bg_update() — served to
+//     video_macross2.sv's RASTER_SCROLL taps (see its header).
+//   - Sprite ROM is 0x600000 (3 files); both OKI ROMs are 0x400000
+//     (NMK112 masks 63). oki1 = rhp94099.6+7, oki2 = rhp94099.5+6 —
+//     rhp94099.6 is the same file in both, so the SDRAM image holds
+//     .5,.6,.7 once, contiguously, and the two 4 MB regions overlap
+//     (oki2 at BASE_BYTE_OKI2, oki1 2 MB above it). That keeps the
+//     whole image inside the 16 MB the 23-bit rom-cache word addresses
+//     reach (17.5 MB otherwise).
+//   - Main RAM has tdragon2's own address-line swap (mainram_swapped_r/w,
+//     word-address bits 7 and 10 exchanged); the sprite-DMA tap stays
+//     unswapped (sprite_dma() memcpys the raw array).
+//   - Same V-PROM as tdragon2/macross2 (prom2.u53, CRC e6ead349).
 //
-//    CRITICAL, easy-to-miss subtlety: raphero_sound_mem_map's own
-//    `map(0xe000,0xffff).ram()` declaration does NOT mean the full
-//    0x2000-byte range is external RAM — the real TLCS-90 chip's own
-//    fixed internal RAM (0xFEC0-0xFFBF) and peripheral SFRs
-//    (0xFFC0-0xFFEF) sit ABOVE MAME's own board-level address_map
-//    dispatch entirely (confirmed via tlcs90_device's own base-class
-//    tmp90841_mem(), which the CPU device installs on its OWN internal
-//    memory space, intercepting those addresses before nmk16.cpp's own
-//    driver-level map ever sees them — same reasoning nmk004_core.sv's
-//    own header already documents for NMK004's own case). So the REAL
-//    external RAM only backs 0xE000-0xFEBF (0x1EC0 = 7872 bytes); 0xFEC0+
-//    is routed to internal RAM/nmk004_periph.sv instead, regardless of
-//    the literal board-level ROM_START/memory-map text.
-//
-//    Also confirmed: raphero_map's own `map(0x100016,0x100017).nopw()`
-//    (nmk16.cpp:1122, "IRQ enable or z80 sound reset like in Macross 2?")
-//    is a genuine no-op here — UNLIKE macross2's/tdragon2's own
-//    macross2_sound_reset_w at the identical address, raphero's own
-//    TLCS-90 has NO software-triggered reset capability from the 68000 at
-//    all. It runs continuously off the shared global reset only.
-//
-// 2. **Video is a genuine hybrid** — see rtl/raphero/video_raphero.sv's
-//    own header for the full derivation (per-scanline raster scroll from
-//    video_gunnail.sv's own approach + tilerambank BG-VRAM banking from
-//    video_macross2.sv's own approach, re-sourced from a 16-bit word
-//    register instead of an 8-bit byte one).
-//
-// Memory map (raphero_map, nmk16.cpp:1113-1132):
-//   000000-07FFFF  ROM (maincpu, 0x80000, single ROM_LOAD16_WORD_SWAP file)
-//   100000-100001  IN0 (R)
-//   100002-100003  IN1 (R)
-//   100008-100009  DSW1 (R)
-//   10000A-10000B  DSW2 (R)
-//   10000F         soundlatch2 read (R, byte)
-//   100015         flipscreen_w (W, byte)
-//   100016-100017  nopw (genuinely unused here — see above)
-//   100019         tilebank_w (W, byte)
-//   10001F         soundlatch write (W, byte)
-//   120000-1207FF  palette RAM, 1024 x 16 (real — video_raphero)
-//   130000-1301FF  gunnail_scrollram, 256 x 16, raphero_scroll_w
-//                  (nmk16_v.cpp:295-311 — COMBINE_DATA + tilerambank
-//                  derivation on offset==0: newbank=(scrollram[0]>>12)&3)
-//   130200-1303FF  gunnail_scrollramy, 256 x 16, plain (no side effect)
-//   130400-1307FF  plain unnamed RAM, 0x400 bytes (nmk16.cpp:1128 — no
-//                  named purpose in the reference, implemented faithfully
-//                  as inert storage, not investigated further)
-//   140000-14FFFF  BG tilemap VRAM, 32768 x 16 (real — video_raphero)
-//   170000-170FFF  tx tilemap VRAM, mirrored +0x1000 (real — video_raphero)
-//   1F0000-1FFFFF  main work RAM, 32768 x 16 — address-line-swapped for
-//                  the CPU-facing path ONLY (mainram_swapped_r/w, same
-//                  bits-7/10 swap tdragon2_core.sv already implements;
-//                  same sprite-DMA-bypasses-the-swap subtlety applies
-//                  here too — the video module's own mainram tap stays
-//                  UNSWAPPED)
-//
-// TLCS-90 external bus decode (raphero_sound_mem_map, nmk16.cpp:1134-1145
-// — genuinely new, memory-mapped not I/O-port-mapped like macross2's own):
-//   0000-7FFF  ROM (fixed)
-//   8000-BFFF  banked ROM window, 8 x 0x4000-byte banks
-//              (init_banked_audiocpu() — same convention as every prior
-//              Tier 3 port)
-//   C000-C001  YM2203 (jt03) r/w
-//   C800       OKIM6295 chip 0 (oki1) r/w
-//   C808       OKIM6295 chip 1 (oki2) r/w
-//   C810-C817  NMK112 bank-select write (8 registers)
-//   D000       audiobank select write (macross2_audiobank_w — same
-//              function every Tier 3/gunnailb port reuses)
-//   D800       soundlatch read (from 68000) / soundlatch2 write (to 68000)
-//   E000-FEBF  RAM, 0x1EC0 bytes (external — see note above; NOT the full
-//              declared E000-FFFF, since FEC0+ is intercepted internally)
-//   FEC0-FFBF  TLCS-90 internal RAM, 256 bytes (nmk004_periph-adjacent —
-//              same fixed location as NMK004's own tmp90840_mem)
-//   FFC0-FFEF  TLCS-90 peripheral registers — rtl/tlcs90/nmk004_periph.sv,
-//              reused unmodified
-//
-// Clock: 68000 at XTAL(14'000'000)=14MHz (nmk16.cpp:5557) — a genuinely
-// NEW ratio, not the 10MHz every prior Tier 3 port used. Staying on the
-// established 40MHz clk_sys convention: GCD(14000000,40000000)=2000000 ->
-// increment=7,modulus=20 (verified: 40MHz*7/20=14MHz exact) — a small
-// phase accumulator drives enPhi1/enPhi2 (same "wrap fires enPhi1, defer
-// one enPhi2 to the very next non-wrap cycle" technique tdragon2_core.sv/
-// strahljbl_core.sv already use). Verified by directly simulating the
-// accumulator: minimum gap between consecutive enPhi1 pulses is 2 cycles
-// (never 1), so deferring enPhi2 exactly one cycle after each enPhi1
-// never collides with the next enPhi1 — strict alternation holds for
-// every step of the repeating 20-cycle pattern, zero violations.
-//
-// TLCS-90 (audiocpu) at XTAL(16'000'000)/2=8MHz (nmk16.cpp:5561). From
-// 40MHz: GCD(8000000,40000000)=8000000 -> increment=1,modulus=5, a CLEAN
-// divide (40MHz/5=8MHz exactly). UNLIKE T80s/jt03/jt6295 (clk=full-rate
-// clk_sys + separate cen input), tlcs90.sv/nmk004_periph.sv need a REAL
-// divided CLOCK EDGE on their own `clk` port (confirmed directly from
-// rtl/mustang/mustang_core.sv's own nmk004_core instantiation:
-// `.clk(nmk004_clk_r)`, a genuinely toggled signal, not clk_sys+cen) — so
-// `tlcs90_clk` below is a real 8MHz square-ish wave (one clean rising
-// edge every 5 clk_sys cycles, not necessarily 50% duty — duty cycle
-// doesn't matter for a purely-synchronous digital core, only rising-edge
-// timing does), not a clk_sys-rate enable pulse.
-//
-// YM2203 at XTAL(12'000'000)/8=1.5MHz (nmk16.cpp:5579) — the SAME
-// accumulator every 40MHz-based port already uses (increment=3,
-// modulus=80). OKIM6295 x2 at XTAL(16'000'000)/4=4MHz (nmk16.cpp:5590,
-// 5594) — the SAME cen every 40MHz-based port's own two-OKI setup
-// already uses (oki_cen_cnt==39, clk_sys/40 internal chip cen).
-//
-// NMK112: reused unmodified, instantiated with THIS game's own ROM byte
-// sizes — oki1/oki2 are each 0x400000 bytes (nmk16.cpp:8598-8604, double
-// tdragon2's own oki1, quadruple macross2's own oki2), giving
-// ROM0_BYTES=ROM1_BYTES=4194304, MASK0=MASK1=63 (6-bit). Verified this is
-// still safely within nmk112.sv's own 22-bit output-width headroom (page
-// 63 shifted left 16 = 0x3F0000, which fits in 22 bits; the module's own
-// worst-case-representable page before truncation is exactly 63 — this
-// game's own valid range sits RIGHT AT that boundary with zero slack, not
-// past it, confirmed by direct calculation, not assumed safe by
-// resemblance to a smaller prior case).
-//
-// Known simplifications: same general list as every prior port (no audio
-// DAC/mixer beyond bus/register-level integration, IN0/IN1/DSW1/DSW2 tied
-// to fixed idle values, DTACKn tied to ASn, TLCS-90's own NMI tied
-// inactive — no NMI source anywhere in raphero's own machine config).
-// HALTn tied high (no protection MCU on this board).
+// SDRAM layout (bytes; word offset = byte offset / 2), see BASE_BYTE_*:
+//   0x000000 maincpu  0x080000 (ROM_LOAD16_WORD_SWAP, rebuilt by byte parity)
+//   0x080000 audiocpu 0x020000
+//   0x0A0000 fgtile   0x020000
+//   0x0C0000 bgtile   0x200000
+//   0x2C0000 sprites  0x600000 (3 files, ROM_LOAD16_WORD_SWAP)
+//   0x8C0000 rhp94099.5 / oki2 base
+//   0xAC0000 rhp94099.6 / oki1 base (oki2's upper half)
+//   0xCC0000 rhp94099.7 (oki1's upper half), image ends 0xEC0000
 module raphero_core #(
 	parameter ROM_FILE       = "",
 	parameter AUDIOCPU_FILE  = "",
@@ -159,12 +53,64 @@ module raphero_core #(
 	parameter VTIMING_FILE   = "",
 	parameter FGTILE_FILE    = "",
 	parameter BGTILE_FILE    = "",
-	parameter SPRITES_FILE   = ""
+	parameter SPRITES_FILE   = "",
+	// See docs/hw-bringup.md. HW_ROMS=0 (default, the reference sim):
+	// $readmemh 0-latency arrays. HW_ROMS=1 (Raphero.sv and the
+	// raphero_hw sim): every ROM region reads through a cache over the
+	// real rtl/sdram.sv controller, loaded via ioctl_download.
+	parameter HW_ROMS        = 0,
+	// DIAGNOSTIC passthrough to video_macross2.sv — see its own comment.
+	parameter DBG_MISS_PAINT = 0,
+	// 68000 clock-enable ratio: clk_sys * INC / MOD (7/20 = 14 MHz).
+	parameter integer CPU_CEN_INC = 7,
+	parameter integer CPU_CEN_MOD = 20
 ) (
-	input clk_sys,        // 40 MHz (68000 bus clk_sys*7/20=14MHz; pixel/raster clk_sys/5=8MHz)
-	input reset,            // async, active high
+	input clk_sys,        // 40 MHz (68000 bus clk_sys*7/20 = 14 MHz; pixel clk_sys/5 = 8 MHz)
+	input reset,          // async, active high
 
-	// debug/trace outputs for the Verilator testbench
+	// Hardware-mode-only ports (HW_ROMS=1) — unused at HW_ROMS=0, see
+	// tdragon2_core.sv's own port comments for the ioctl_index gate and
+	// the ioctl_wait backpressure.
+	input             ioctl_download,
+	input             ioctl_wr,
+	input      [24:0] ioctl_addr,
+	input      [7:0]  ioctl_dout,
+	input     [15:0]  ioctl_index,
+	output            ioctl_wait,
+
+	// SDRAM port 0: ioctl_download writes muxed with maincpu ROM reads.
+	output     [24:1] sd0_addr,
+	output            sd0_wrl,
+	output            sd0_wrh,
+	output     [15:0] sd0_din,
+	input      [15:0] sd0_dout,
+	input      [31:0] sd0_dout_pair,
+	output            sd0_req,
+	input             sd0_ack,
+	// SDRAM port 1: sound-CPU program ROM + OKI0/OKI1 sample reads,
+	// 3-way arbitrated internally.
+	output     [24:1] sd1_addr,
+	output            sd1_req,
+	input      [15:0] sd1_dout,
+	input      [31:0] sd1_dout_pair,
+	input             sd1_ack,
+	// SDRAM port 2: video_macross2.sv's BG-tile prefetch stream.
+	output     [24:1] sd2_addr,
+	output            sd2_wrl,
+	output            sd2_wrh,
+	output     [15:0] sd2_din,
+	input      [15:0] sd2_dout,
+	input      [31:0] sd2_dout_pair,
+	output            sd2_req,
+	input             sd2_ack,
+	// SDRAM port 3: video_macross2.sv's TX-tile prefetch + sprite fetch.
+	output     [24:1] sd3_addr,
+	output            sd3_req,
+	input      [15:0] sd3_dout,
+	input      [31:0] sd3_dout_pair,
+	input             sd3_ack,
+
+	// debug/trace outputs for the Verilator testbenches
 	output [23:1] dbg_eab,
 	output [15:0] dbg_data,
 	output        dbg_write,
@@ -175,7 +121,8 @@ module raphero_core #(
 
 	output [15:0] dbg_snd_pc,
 	output        dbg_snd_valid,
-	output        dbg_snd_cen,
+	output        dbg_snd_cen,     // one pulse per sound-CPU clock actually delivered
+	output        dbg_snd_stall,   // HW path: sound CPU held for a ROM fetch
 
 	output        dbg_ym_we,
 	output        dbg_ym_cs,
@@ -186,8 +133,19 @@ module raphero_core #(
 	output        dbg_oki1_we,
 	output  [7:0] dbg_oki0_chip_dout,
 	output  [7:0] dbg_oki1_chip_dout,
+	// Simulation-only (Verilator) OKI sample-fetch audit — see g_oki_hw.
+	output [31:0] dbg_oki0_adpcm_total,
+	output [31:0] dbg_oki0_adpcm_unserved,
+	output [31:0] dbg_oki1_adpcm_total,
+	output [31:0] dbg_oki1_adpcm_unserved,
+	output [31:0] dbg_oki_cen_total,
+	output [31:0] dbg_oki0_stall_cen,
+	output [31:0] dbg_oki1_stall_cen,
+	// Simulation-only: sound-CPU clock pulses delivered / withheld.
+	output [31:0] dbg_snd_cen_total,
+	output [31:0] dbg_snd_stall_total,
 
-	// pixel readback for the testbench (mirrors MAME's screen:pixel(x,y))
+	// pixel readback (mirrors MAME's screen:pixel(x,y))
 	input  [8:0]  rd_x,
 	input  [7:0]  rd_y,
 	output [23:0] rd_rgb,
@@ -197,18 +155,55 @@ module raphero_core #(
 	output [15:0] dbg_bgvram_data,
 	input  [10:0] dbg_txvram_addr,
 	output [15:0] dbg_txvram_data,
-	output        frame_done
+	output        frame_done,
+
+	output signed [15:0] audio_l,
+	output signed [15:0] audio_r,
+
+	// Real raster timing for the hardware top's sync generation.
+	output        ce_pix_o,
+	output [9:0]  hcount_o,
+	output [9:0]  vcount_o,
+	output        hblank_o,
+	output        vblank_o,
+
+	// Real inputs (HW_ROMS=1 only; the sim path reads 0xFFFF = idle).
+	// Same IN0/IN1 layout as tdragon2 (INPUT_PORTS_START(raphero)).
+	input  [15:0] in0_i,
+	input  [15:0] in1_i,
+	input  [15:0] dsw1_i,
+	input  [15:0] dsw2_i,
+
+	// Hold por_rst's countdown while the PLL is not locked — see
+	// tdragon2_core.sv's own por_rst comment.
+	input extra_por_hold
 );
+
+	// ------------------------------------------------------------------
+	// Power-on-only reset for the SDRAM req/arb instances — see
+	// tdragon2_core.sv: the game `reset` is held for the whole download,
+	// during which the SDRAM path must keep working.
+	// ------------------------------------------------------------------
+	reg [3:0] por_cnt = 4'd0;
+	reg       por_rst = 1'b1;
+	always @(posedge clk_sys) begin
+		if (extra_por_hold) begin
+			por_cnt <= 4'd0;
+			por_rst <= 1'b1;
+		end else if (por_rst) begin
+			if (por_cnt == 4'd15) por_rst <= 1'b0;
+			else por_cnt <= por_cnt + 4'd1;
+		end
+	end
 
 	// ------------------------------------------------------------------
 	// Clock enables
 	// ------------------------------------------------------------------
-	// 68000: 14MHz via a phase accumulator (see header) — increment=7,
-	// modulus=20, "wrap fires enPhi1, defer one enPhi2 to the very next
-	// non-wrap cycle" (same technique tdragon2_core.sv/strahljbl_core.sv
-	// already use).
-	localparam integer CPU_CEN_INC = 7;
-	localparam integer CPU_CEN_MOD = 20;
+	// 68000: 14 MHz via a 7/20 phase accumulator (wrap fires enPhi1, the
+	// very next non-wrap cycle fires enPhi2; consecutive enPhi1 pulses
+	// are never closer than 2 cycles, so the alternation always holds).
+	// (parameters rather than localparams so a sim build can override the
+	// ratio, e.g. -GCPU_CEN_INC=1 -GCPU_CEN_MOD=4 for a 10 MHz experiment)
 	reg [4:0] cpu_cen_acc = 5'd0;
 	reg       enPhi1 = 1'b0;
 	reg       enPhi2 = 1'b0;
@@ -229,21 +224,22 @@ module raphero_core #(
 		end
 	end
 
-	// Pixel/raster: clk_sys/5=8MHz — same ratio/reset-gating convention
-	// as every other 40MHz-based port.
+	// Pixel: clk_sys/5 = 8 MHz.
 	reg [2:0] pix_div = 3'd0;
 	wire ce_pix = (pix_div == 3'd4);
 	always @(posedge clk_sys) pix_div <= reset ? 3'd0 : (ce_pix ? 3'd0 : pix_div + 3'd1);
 
-	// TLCS-90: a REAL divided clock edge, not a clk_sys-rate cen (see
-	// header) — clk_sys/5=8MHz, a clean divide. One rising edge every 5
-	// clk_sys cycles, regardless of exact duty split.
-	reg [2:0] tlcs90_clk_div = 3'd0;
-	always @(posedge clk_sys) tlcs90_clk_div <= (tlcs90_clk_div == 3'd4) ? 3'd0 : tlcs90_clk_div + 3'd1;
-	wire tlcs90_clk = (tlcs90_clk_div >= 3'd3);
+	// TLCS-90: 8 MHz = clk_sys/5, as a clock ENABLE on clk_sys. On the
+	// hardware path a pulse is withheld while the program-ROM cache does
+	// not yet hold the byte the CPU is reading (snd_stall, below) — the
+	// CPU then simply sees a longer cycle. Never withheld during reset:
+	// the core samples reset on cen edges.
+	reg [2:0] snd_div = 3'd0;
+	always @(posedge clk_sys) snd_div <= (snd_div == 3'd4) ? 3'd0 : snd_div + 3'd1;
+	wire snd_stall;
+	wire snd_cen = (snd_div == 3'd4) & ~snd_stall;
 
-	// YM2203: identical accumulator to every other 40MHz-based port's own
-	// ym_cen (increment=3, modulus=80 -> 1.5MHz).
+	// YM2203 at 1.5 MHz: 3/80 accumulator.
 	reg [6:0] ym_cen_cnt = 7'd0;
 	reg       ym_cen = 1'b0;
 	always @(posedge clk_sys) begin
@@ -256,11 +252,12 @@ module raphero_core #(
 		end
 	end
 
-	// OKIM6295 x2: identical cen to every other 40MHz-based port's own
-	// (clk_sys/40 -> 1MHz internal chip cen).
-	reg [5:0] oki_cen_cnt = 6'd0;
-	wire      oki_cen = (oki_cen_cnt == 6'd39);
-	always @(posedge clk_sys) oki_cen_cnt <= oki_cen ? 6'd0 : oki_cen_cnt + 6'd1;
+	// OKIM6295 x2 at XTAL(16 MHz)/4 = 4 MHz, pin 7 low: clk_sys/10.
+	// jt6295's cen IS the chip clock (see tdragon2_core.sv: the earlier
+	// 1 MHz cen played every sample 4x too slow).
+	reg [3:0] oki_cen_cnt = 4'd0;
+	wire      oki_cen = (oki_cen_cnt == 4'd9);
+	always @(posedge clk_sys) oki_cen_cnt <= oki_cen ? 4'd0 : oki_cen_cnt + 4'd1;
 
 	// ------------------------------------------------------------------
 	// fx68k
@@ -277,7 +274,16 @@ module raphero_core #(
 
 	wire iack_cycle = FC0 & FC1 & FC2 & ~ASn;
 	wire VPAn = ~iack_cycle;
-	wire DTACKn = ASn | iack_cycle;
+	// Wait states (HW_ROMS=1 only — every *_ready is 1'b1 in the sim
+	// path): maincpu ROM cache, registered RAM reads, sprite DMA.
+	wire rom_wait     = sel_rom     & cpu_read & ~rom_ready;
+	wire mainram_wait = sel_mainram & cpu_read & ~mainram_ready;
+	wire sprite_dma_busy;
+	wire mainram_dma_wait = sel_mainram & ~ASn & sprite_dma_busy;
+	wire bgvram_wait  = sel_bgvram  & cpu_read & ~bgvram_ready;
+	wire txvram_wait  = sel_txvram  & cpu_read & ~txvram_ready;
+	wire scroll_wait  = (sel_scrollram | sel_scrollramy | sel_pad0400) & cpu_read & ~scroll_ready;
+	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | mainram_dma_wait | bgvram_wait | txvram_wait | scroll_wait;
 
 	fx68k fx68k_inst (
 		.clk(clk_sys),
@@ -306,52 +312,171 @@ module raphero_core #(
 	wire        cpu_read  = eRWn & ~ASn;
 
 	// ------------------------------------------------------------------
-	// Address decode (68000 side) — see header for the exact addresses.
+	// Address decode (raphero_map, nmk16.cpp)
 	// ------------------------------------------------------------------
 	wire sel_rom       = (byte_addr <= 24'h07FFFF);
 	wire sel_in0       = (byte_addr[23:1] == 23'h080000); // 100000/100001
 	wire sel_in1       = (byte_addr[23:1] == 23'h080001); // 100002/100003
 	wire sel_dsw1      = (byte_addr[23:1] == 23'h080004); // 100008/100009
 	wire sel_dsw2      = (byte_addr[23:1] == 23'h080005); // 10000A/10000B
-	wire sel_soundlatch2_r = (byte_addr[23:1] == 23'h080007); // 10000E/10000F word, byte reg at odd
-	wire sel_flip      = (byte_addr[23:1] == 23'h08000A); // 100014/100015, LDS=low byte
-	// 100016/100017 is nopw() here — genuinely unused, no register at all
-	// (see header — unlike macross2's/tdragon2's own sound-reset here).
-	wire sel_tilebank  = (byte_addr[23:1] == 23'h08000C); // 100018/100019, LDS=low byte
-	wire sel_soundlatch_w = (byte_addr[23:1] == 23'h08000F); // 10001E/10001F word, byte reg at odd
+	wire sel_soundlatch2_r = (byte_addr[23:1] == 23'h080007); // 10000E/10000F, byte reg at odd
+	wire sel_flip      = (byte_addr[23:1] == 23'h08000A); // 100014/100015, LDS = low byte
+	// 100016/100017 is nopw() — no sound-CPU reset here.
+	wire sel_tilebank  = (byte_addr[23:1] == 23'h08000C); // 100018/100019, LDS = low byte
+	wire sel_soundlatch_w = (byte_addr[23:1] == 23'h08000F); // 10001E/10001F, byte reg at odd
 	wire sel_palette   = (byte_addr >= 24'h120000) && (byte_addr <= 24'h1207FF);
 	wire sel_scrollram  = (byte_addr >= 24'h130000) && (byte_addr <= 24'h1301FF);
 	wire sel_scrollramy = (byte_addr >= 24'h130200) && (byte_addr <= 24'h1303FF);
-	wire sel_pad0400    = (byte_addr >= 24'h130400) && (byte_addr <= 24'h1307FF); // plain unnamed RAM, see header
+	wire sel_pad0400    = (byte_addr >= 24'h130400) && (byte_addr <= 24'h1307FF); // plain RAM
 	wire sel_bgvram    = (byte_addr >= 24'h140000) && (byte_addr <= 24'h14FFFF);
-	// TX VRAM: 0x170000-0x170fff (2048 words), mirrored at +0x1000 — both
-	// ranges alias the same array (ignore the mirror bit, byte_addr[12]).
+	// TX VRAM 0x170000-0x170FFF mirrored at +0x1000 (byte_addr[12] ignored).
 	wire sel_txvram    = (byte_addr >= 24'h170000) && (byte_addr <= 24'h171FFF);
 	wire sel_mainram   = (byte_addr >= 24'h1F0000) && (byte_addr <= 24'h1FFFFF);
 
 	// ------------------------------------------------------------------
-	// ROM (maincpu) — 0x80000 bytes = 262144 words.
+	// Absolute byte offsets in the shared SDRAM image — see header.
+	// 24-bit values (a 23-bit literal silently drops bit 23, see
+	// tdragon2_core.sv's own note).
 	// ------------------------------------------------------------------
-	reg [15:0] rom [0:262143];
-	initial if (ROM_FILE != "") $readmemh(ROM_FILE, rom);
-	wire [15:0] rom_dout = rom[byte_addr[18:1]];
+	localparam [23:0] BASE_BYTE_AUDIOCPU = 24'h080000;
+	localparam [23:0] BASE_BYTE_FGTILE   = 24'h0A0000;
+	localparam [23:0] BASE_BYTE_BGTILE   = 24'h0C0000;
+	localparam [23:0] BASE_BYTE_SPRITES  = 24'h2C0000;
+	localparam [23:0] BASE_BYTE_OKI2     = 24'h8C0000;  // rhp94099.5, then .6
+	localparam [23:0] BASE_BYTE_OKI1     = 24'hAC0000;  // rhp94099.6, then .7
+	localparam [22:0] BASE_WORD_AUDIOCPU = BASE_BYTE_AUDIOCPU[23:1];
+	localparam [22:0] BASE_WORD_FGTILE   = BASE_BYTE_FGTILE[23:1];
+	localparam [22:0] BASE_WORD_BGTILE   = BASE_BYTE_BGTILE[23:1];
+	localparam [22:0] BASE_WORD_SPRITES  = BASE_BYTE_SPRITES[23:1];
+	localparam [22:0] BASE_WORD_OKI1     = BASE_BYTE_OKI1[23:1];
+	localparam [22:0] BASE_WORD_OKI2     = BASE_BYTE_OKI2[23:1];
 
 	// ------------------------------------------------------------------
-	// Main work RAM (32768 x 16) — address-line-swapped for the CPU-facing
-	// path ONLY (same bits-7/10 swap tdragon2_core.sv already implements
-	// — see this file's own header).
+	// ROM (maincpu) — 0x80000 bytes. HW_ROMS=1: rom_cache1 over SDRAM
+	// port 0, shared with the ioctl_download writes (mutually exclusive
+	// in time: the core is in reset for the whole download).
+	// ------------------------------------------------------------------
+	wire [15:0] rom_dout;
+	wire        rom_ready;
+	generate
+	if (!HW_ROMS) begin : g_rom_sim
+		reg [15:0] rom [0:262143];
+		initial if (ROM_FILE != "") $readmemh(ROM_FILE, rom);
+		assign rom_dout  = rom[byte_addr[18:1]];
+		assign rom_ready = 1'b1;
+		assign sd0_addr = 24'd0; assign sd0_wrl = 1'b0; assign sd0_wrh = 1'b0;
+		assign sd0_din  = 16'd0; assign sd0_req = 1'b0;
+		assign ioctl_wait = 1'b0;
+	end else begin : g_rom_hw
+		wire        cache_busy, cache_valid;
+		wire [15:0] cache_dout;
+		wire [31:0] cache_dout_pair;
+		wire [24:1] cache_sd_addr;
+		wire        cache_sd_req;
+		// Only the <rom index="0"> session writes SDRAM; the .mra
+		// <switches> block (index 254) restarts at address 0 and would
+		// otherwise land on the reset vector — see tdragon2_core.sv.
+		wire ioctl_rom_wr = ioctl_download && (ioctl_index == 16'd0);
+
+		sdram_req sd0_inst (
+			.clk(clk_sys), .reset(por_rst),
+			.addr(ioctl_download ? ioctl_addr[24:1] : cache_sd_addr),
+			.we(ioctl_rom_wr), .wrl(ioctl_rom_wr & ~ioctl_addr[0]), .wrh(ioctl_rom_wr & ioctl_addr[0]),
+			.din({ioctl_dout, ioctl_dout}),
+			.req(ioctl_download ? (ioctl_rom_wr & ioctl_wr) : cache_sd_req),
+			.busy(cache_busy), .valid(cache_valid), .dout(cache_dout), .dout_pair(cache_dout_pair),
+			.sdram_addr(sd0_addr), .sdram_wrl(sd0_wrl), .sdram_wrh(sd0_wrh), .sdram_din(sd0_din),
+			.sdram_dout(sd0_dout), .sdram_dout_pair(sd0_dout_pair), .sdram_req(sd0_req), .sdram_ack(sd0_ack),
+			.dbg_we_r_o(), .dbg_addr_r_o()
+		);
+		assign ioctl_wait = ioctl_download & cache_busy;
+
+		// The cache only ever sees ROM addresses. rom_cache1 refetches
+		// whenever its address input changes, so feeding it the raw bus
+		// address made every main-RAM/VRAM access start a speculative
+		// SDRAM read of an unrelated word; when that fill landed during
+		// the NEXT program fetch — after the 68000 had sampled DTACK on a
+		// cache hit but before it latched the data (enPhi2 to enPhi2) —
+		// the line was overwritten under it and the CPU took an F-line
+		// exception on the garbage opcode (hardware sim: boot RAM test,
+		// fetch of $0025DA reading $FFFF). At 10 MHz the fill always
+		// landed before the next fetch's DTACK; at 14 MHz it did not.
+		reg [18:1] rom_addr_held;
+		always @(posedge clk_sys) if (sel_rom) rom_addr_held <= byte_addr[18:1];
+		wire [18:1] rom_cache_addr = sel_rom ? byte_addr[18:1] : rom_addr_held;
+		rom_cache1 rom_cache_inst (
+			.clk(clk_sys), .reset(reset | ioctl_download),
+			.addr(rom_cache_addr), .data(rom_dout), .ready(rom_ready),
+			.sd_addr(cache_sd_addr), .sd_req(cache_sd_req),
+			.sd_busy(cache_busy), .sd_valid(cache_valid), .sd_dout(cache_dout), .sd_dout_pair(cache_dout_pair)
+		);
+`ifdef VERILATOR
+		// Golden-word audit (sim only, when ROM_FILE is given to an
+		// HW_ROMS=1 build): every word the CPU actually takes from the
+		// cache is compared with the plain ROM image.
+		reg [15:0] golden_rom [0:262143];
+		initial if (ROM_FILE != "") $readmemh(ROM_FILE, golden_rom);
+		reg [31:0] rom_words_checked = 32'd0, rom_words_wrong = 32'd0;
+		reg        dtackn_d = 1'b1;
+		always @(posedge clk_sys) begin
+			dtackn_d <= DTACKn;
+			if (ROM_FILE != "" && dtackn_d && !DTACKn && sel_rom && cpu_read) begin
+				rom_words_checked <= rom_words_checked + 32'd1;
+				if (rom_dout != golden_rom[byte_addr[18:1]]) begin
+					rom_words_wrong <= rom_words_wrong + 32'd1;
+					if (rom_words_wrong < 32'd10)
+						$display("[%0t] ROM wrong word: addr=%06x got=%04x golden=%04x pair=%08x sd_addr=%06x", $time,
+							byte_addr, rom_dout, golden_rom[byte_addr[18:1]], cache_dout_pair, cache_sd_addr);
+				end
+			end
+		end
+		final $display("ROM golden-word audit: %0d words checked, %0d wrong", rom_words_checked, rom_words_wrong);
+`endif
+	end
+	endgenerate
+
+	// ------------------------------------------------------------------
+	// Main work RAM (32768 x 16), CPU path address-line-swapped
+	// (mainram_swapped_r/w: word-address bits 7 and 10 exchanged, i.e.
+	// byte_addr bits 8 and 11). HW_ROMS=1: registered read + flattened
+	// byte-enable writes for block-RAM inference (tdragon2_core.sv has
+	// the full story), one extra DTACK wait via mainram_ready.
 	// ------------------------------------------------------------------
 	reg [15:0] mainram [0:32767];
 	wire [14:0] mainram_addr_cpu =
 		{byte_addr[15:12], byte_addr[8], byte_addr[10:9], byte_addr[11], byte_addr[7:1]};
 	reg [15:0] mainram_dout;
-	always @(posedge clk_sys) begin
-		if (sel_mainram & cpu_write) begin
-			if (~UDSn) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
-			if (~LDSn) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
+	wire       mainram_ready;
+	generate
+	if (!HW_ROMS) begin : g_mainram_cpu_sim
+		always @(posedge clk_sys) begin
+			if (sel_mainram & cpu_write & ~sprite_dma_busy) begin
+				if (~UDSn) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
+				if (~LDSn) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
+			end
 		end
+		always @(*) mainram_dout  = mainram[mainram_addr_cpu];
+		assign mainram_ready = 1'b1;
+	end else begin : g_mainram_cpu_hw
+		// ready is COMBINATIONAL on the registered address: 1 exactly when
+		// mainram_dout (read at the same edge that captured the address)
+		// belongs to the address on the bus now. A registered ready flag
+		// (tdragon2_core.sv's form) is stale-high for the first clk_sys
+		// after the address changes; at 10 MHz the 68000 never samples
+		// DTACK in that window, but at 14 MHz (enPhi2 one clk_sys after
+		// enPhi1) it can, and then ends the bus cycle with the previous
+		// address's data — seen in the hardware sim as the boot RAM test
+		// faulting with an illegal-opcode exception.
+		reg [14:0] mainram_addr_cpu_r;
+		always @(posedge clk_sys) begin
+			if (sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
+			if (sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
+			mainram_dout       <= mainram[mainram_addr_cpu];
+			mainram_addr_cpu_r <= mainram_addr_cpu;
+		end
+		assign mainram_ready = (mainram_addr_cpu_r == mainram_addr_cpu);
 	end
-	always @(*) mainram_dout = mainram[mainram_addr_cpu];
+	endgenerate
 
 	// ------------------------------------------------------------------
 	// Palette RAM (1024 x 16)
@@ -372,112 +497,203 @@ module raphero_core #(
 	// ------------------------------------------------------------------
 	reg [15:0] bgvram [0:32767];
 	wire [14:0] bgvram_addr = byte_addr[15:1];
-	always @(posedge clk_sys) begin
-		if (sel_bgvram & cpu_write) begin
-			if (~UDSn) bgvram[bgvram_addr][15:8] <= oEdb[15:8];
-			if (~LDSn) bgvram[bgvram_addr][7:0]  <= oEdb[7:0];
+	wire [15:0] bgvram_dout;
+	reg  [15:0] bgvram_dout_r;
+	wire        bgvram_ready;
+	generate
+	if (!HW_ROMS) begin : g_bgvram_cpu_sim
+		always @(posedge clk_sys) begin
+			if (sel_bgvram & cpu_write) begin
+				if (~UDSn) bgvram[bgvram_addr][15:8] <= oEdb[15:8];
+				if (~LDSn) bgvram[bgvram_addr][7:0]  <= oEdb[7:0];
+			end
 		end
+		assign bgvram_dout = bgvram[bgvram_addr];
+		assign bgvram_ready = 1'b1;
+	end else begin : g_bgvram_cpu_hw
+		reg [14:0] bgvram_addr_r;
+		always @(posedge clk_sys) begin
+			if (sel_bgvram & cpu_write & ~UDSn) bgvram[bgvram_addr][15:8] <= oEdb[15:8];
+			if (sel_bgvram & cpu_write & ~LDSn) bgvram[bgvram_addr][7:0]  <= oEdb[7:0];
+			bgvram_dout_r <= bgvram[bgvram_addr];
+			bgvram_addr_r <= bgvram_addr;
+		end
+		assign bgvram_ready = (bgvram_addr_r == bgvram_addr); // see mainram_ready
+		assign bgvram_dout = bgvram_dout_r;
 	end
-	wire [15:0] bgvram_dout = bgvram[bgvram_addr];
+	endgenerate
 
 	// ------------------------------------------------------------------
 	// TX tilemap VRAM (2048 x 16)
 	// ------------------------------------------------------------------
 	reg [15:0] txvram [0:2047];
 	wire [10:0] txvram_addr = byte_addr[11:1];
-	always @(posedge clk_sys) begin
-		if (sel_txvram & cpu_write) begin
-			if (~UDSn) txvram[txvram_addr][15:8] <= oEdb[15:8];
-			if (~LDSn) txvram[txvram_addr][7:0]  <= oEdb[7:0];
+	wire [15:0] txvram_dout;
+	reg  [15:0] txvram_dout_r;
+	wire        txvram_ready;
+	generate
+	if (!HW_ROMS) begin : g_txvram_cpu_sim
+		always @(posedge clk_sys) begin
+			if (sel_txvram & cpu_write) begin
+				if (~UDSn) txvram[txvram_addr][15:8] <= oEdb[15:8];
+				if (~LDSn) txvram[txvram_addr][7:0]  <= oEdb[7:0];
+			end
 		end
+		assign txvram_dout = txvram[txvram_addr];
+		assign txvram_ready = 1'b1;
+	end else begin : g_txvram_cpu_hw
+		reg [10:0] txvram_addr_r;
+		always @(posedge clk_sys) begin
+			if (sel_txvram & cpu_write & ~UDSn) txvram[txvram_addr][15:8] <= oEdb[15:8];
+			if (sel_txvram & cpu_write & ~LDSn) txvram[txvram_addr][7:0]  <= oEdb[7:0];
+			txvram_dout_r <= txvram[txvram_addr];
+			txvram_addr_r <= txvram_addr;
+		end
+		assign txvram_ready = (txvram_addr_r == txvram_addr); // see mainram_ready
+		assign txvram_dout = txvram_dout_r;
 	end
-	wire [15:0] txvram_dout = txvram[txvram_addr];
+	endgenerate
 
 	// ------------------------------------------------------------------
-	// gunnail_scrollram / gunnail_scrollramy (256 x 16 each) +
-	// raphero_scroll_w's own tilerambank derivation (nmk16_v.cpp:295-311)
-	// — see header. Only scrollram (not scrollramy) has the tilerambank
-	// side effect, and only on an offset-0 write.
+	// gunnail_scrollram / gunnail_scrollramy (256 x 16 each) + the plain
+	// 0x130400-0x1307FF RAM (512 x 16). raphero_scroll_w's tilerambank
+	// side effect on a write to scrollram word 0 uses bits [13:12] of the
+	// word AFTER COMBINE_DATA — kept in scrollram0_reg (a register copy
+	// of word 0, also the video's scrollram_0 tap) so a single-byte write
+	// can merge with the other half without a RAM read. scrollramy word 0
+	// likewise mirrored in scrollramy0_reg for the video tap.
+	//
+	// HW_ROMS=1: the three arrays are one 1024 x 16 block RAM (CPU port
+	// r/w + video port read), registered reads with scroll_ready holding
+	// DTACKn one cycle as for bgvram. Video-side row reads (one address
+	// for both tables, video_macross2.sv's scroll_row_addr) go through a
+	// second registered port; the one-cycle lag only matters inside the
+	// horizontal blank where rd_y changes.
 	// ------------------------------------------------------------------
-	reg [15:0] scrollram  [0:255];
-	reg [15:0] scrollramy [0:255];
-	wire [7:0] scrollram_waddr  = byte_addr[8:1];
-	wire [7:0] scrollramy_waddr = byte_addr[8:1];
-	wire       sel_scrollram_off0 = sel_scrollram & (scrollram_waddr == 8'd0);
-
-	reg [1:0] tilerambank_reg;
-
-	// Plain unnamed 0x400-byte RAM block (0x130400-0x1307FF) — no named
-	// purpose in the reference, implemented as inert storage.
-	reg [7:0] pad0400 [0:1023];
-	wire [9:0] pad0400_addr = byte_addr[10:1];
-
-	integer si2;
+	reg [15:0] scrollmem [0:1023];   // [0:255] scrollram, [256:511] scrollramy, [512:1023] pad0400
+	wire [9:0] scroll_addr_cpu = sel_scrollram  ? {2'd0, byte_addr[8:1]} :
+	                             sel_scrollramy ? {2'd1, byte_addr[8:1]} :
+	                                              {1'b1, byte_addr[9:1]};
+	wire       sel_scrollmem = sel_scrollram | sel_scrollramy | sel_pad0400;
+	wire       sel_scrollram_off0 = sel_scrollram & (byte_addr[8:1] == 8'd0);
+	wire       sel_scrollramy_off0 = sel_scrollramy & (byte_addr[8:1] == 8'd0);
+	reg [15:0] scrollram0_reg, scrollramy0_reg;
+	reg [1:0]  tilerambank_reg;
+	wire [15:0] scrollram0_new  = {~UDSn ? oEdb[15:8] : scrollram0_reg[15:8],  ~LDSn ? oEdb[7:0] : scrollram0_reg[7:0]};
+	wire [15:0] scrollramy0_new = {~UDSn ? oEdb[15:8] : scrollramy0_reg[15:8], ~LDSn ? oEdb[7:0] : scrollramy0_reg[7:0]};
 	always @(posedge clk_sys) begin
 		if (reset) begin
+			scrollram0_reg  <= 16'h0000;
+			scrollramy0_reg <= 16'h0000;
 			tilerambank_reg <= 2'd0;
-			for (si2 = 0; si2 < 256; si2 = si2 + 1) begin
-				scrollram[si2]  <= 16'h0000;
-				scrollramy[si2] <= 16'h0000;
-			end
 		end else if (cpu_write) begin
-			if (sel_scrollram) begin
-				if (~UDSn) scrollram[scrollram_waddr][15:8] <= oEdb[15:8];
-				if (~LDSn) scrollram[scrollram_waddr][7:0]  <= oEdb[7:0];
-				// newbank = (scrollram[0]>>12) & 3 — bits[13:12] of the WORD
-				// (verified independently against the reference, NOT
-				// pattern-matched from macross2's own byte-register bit
-				// positions). Uses the JUST-WRITTEN byte(s) combined with
-				// whichever half wasn't written this cycle (matching the
-				// reference's own read-modify-write via COMBINE_DATA before
-				// re-reading scrollram[0]).
-				if (sel_scrollram_off0)
-					tilerambank_reg <= (~UDSn ? oEdb[13:12] : scrollram[0][13:12]);
+			if (sel_scrollram_off0) begin
+				scrollram0_reg  <= scrollram0_new;
+				tilerambank_reg <= scrollram0_new[13:12]; // newbank = (scrollram[0] >> 12) & 3
 			end
-			if (sel_scrollramy) begin
-				if (~UDSn) scrollramy[scrollramy_waddr][15:8] <= oEdb[15:8];
-				if (~LDSn) scrollramy[scrollramy_waddr][7:0]  <= oEdb[7:0];
-			end
-			if (sel_pad0400 & ~LDSn) pad0400[pad0400_addr] <= oEdb[7:0];
+			if (sel_scrollramy_off0) scrollramy0_reg <= scrollramy0_new;
 		end
 	end
-	wire [15:0] scrollram_dout  = scrollram[scrollram_waddr];
-	wire [15:0] scrollramy_dout = scrollramy[scrollramy_waddr];
-	wire [15:0] pad0400_dout    = {8'h00, pad0400[pad0400_addr]};
+
+	wire [15:0] scroll_dout;
+	wire        scroll_ready;
+	wire [7:0]  vid_scroll_row_addr;
+	wire [15:0] vid_scrollram_row, vid_scrollramy_row;
+	generate
+	if (!HW_ROMS) begin : g_scrollmem_sim
+		always @(posedge clk_sys) begin
+			if (sel_scrollmem & cpu_write) begin
+				if (~UDSn) scrollmem[scroll_addr_cpu][15:8] <= oEdb[15:8];
+				if (~LDSn) scrollmem[scroll_addr_cpu][7:0]  <= oEdb[7:0];
+			end
+		end
+		assign scroll_dout  = scrollmem[scroll_addr_cpu];
+		assign scroll_ready = 1'b1;
+		assign vid_scrollram_row  = scrollmem[{2'd0, vid_scroll_row_addr}];
+		assign vid_scrollramy_row = scrollmem[{2'd1, vid_scroll_row_addr}];
+	end else begin : g_scrollmem_hw
+		reg [9:0]  scroll_addr_cpu_r;
+		reg [15:0] scroll_dout_r;
+		// Video port: the two rows are read on alternate cycles through
+		// one port and held in registers, so the RAM stays 2-port.
+		reg        vid_scroll_phase = 1'b0;
+		reg [15:0] vid_scroll_q, vid_scrollram_row_r, vid_scrollramy_row_r;
+		reg        vid_scroll_phase_d;
+		always @(posedge clk_sys) begin
+			if (sel_scrollmem & cpu_write & ~UDSn) scrollmem[scroll_addr_cpu][15:8] <= oEdb[15:8];
+			if (sel_scrollmem & cpu_write & ~LDSn) scrollmem[scroll_addr_cpu][7:0]  <= oEdb[7:0];
+			scroll_dout_r     <= scrollmem[scroll_addr_cpu];
+			scroll_addr_cpu_r <= scroll_addr_cpu;
+
+			vid_scroll_phase   <= ~vid_scroll_phase;
+			vid_scroll_phase_d <= vid_scroll_phase;
+			vid_scroll_q       <= scrollmem[{1'b0, vid_scroll_phase, vid_scroll_row_addr}];
+			if (vid_scroll_phase_d) vid_scrollramy_row_r <= vid_scroll_q;
+			else                    vid_scrollram_row_r  <= vid_scroll_q;
+		end
+		assign scroll_dout  = scroll_dout_r;
+		assign scroll_ready = (scroll_addr_cpu_r == scroll_addr_cpu); // see mainram_ready
+		assign vid_scrollram_row  = vid_scrollram_row_r;
+		assign vid_scrollramy_row = vid_scrollramy_row_r;
+	end
+	endgenerate
 
 	// ------------------------------------------------------------------
-	// Dual-port video read taps (video_raphero.sv's own live reads).
-	// vid_mainram_addr/dout is DELIBERATELY UNSWAPPED (sprite-DMA snapshot
-	// mechanism — see header).
+	// Dual-port video read taps. vid_mainram_addr/dout is UNSWAPPED
+	// (sprite_dma() reads the raw array). HW_ROMS=1: registered reads,
+	// vid_mainram_ready for the byte-exact snapshot FSM.
 	// ------------------------------------------------------------------
 	wire [14:0] vid_bgvram_addr;
-	wire [15:0] vid_bgvram_dout = bgvram[vid_bgvram_addr];
+	wire [15:0] vid_bgvram_dout;
 	wire [10:0] vid_txvram_addr;
-	wire [15:0] vid_txvram_dout = txvram[vid_txvram_addr];
+	wire [15:0] vid_txvram_dout;
 	wire [9:0]  vid_palette_addr;
 	wire [15:0] vid_palette_dout = palette[vid_palette_addr];
 	wire [9:0]  vid_spr_palette_addr;
 	wire [15:0] vid_spr_palette_dout = palette[vid_spr_palette_addr];
 	wire [14:0] vid_mainram_addr;
-	wire [15:0] vid_mainram_dout = mainram[vid_mainram_addr];
+	wire [15:0] vid_mainram_dout;
+	wire        vid_mainram_ready;
+	generate
+	if (!HW_ROMS) begin : g_vidram_read_sim
+		assign vid_bgvram_dout  = bgvram[vid_bgvram_addr];
+		assign vid_txvram_dout  = txvram[vid_txvram_addr];
+		assign vid_mainram_dout = mainram[vid_mainram_addr];
+		assign vid_mainram_ready = 1'b1;
+	end else begin : g_vidram_read_hw
+		reg [15:0] vid_bgvram_dout_r, vid_txvram_dout_r, vid_mainram_dout_r;
+		reg [14:0] vid_mainram_addr_r;
+		always @(posedge clk_sys) begin
+			vid_bgvram_dout_r   <= bgvram[vid_bgvram_addr];
+			vid_txvram_dout_r   <= txvram[vid_txvram_addr];
+			vid_mainram_dout_r  <= mainram[vid_mainram_addr];
+			vid_mainram_addr_r  <= vid_mainram_addr;
+		end
+		assign vid_bgvram_dout   = vid_bgvram_dout_r;
+		assign vid_txvram_dout   = vid_txvram_dout_r;
+		assign vid_mainram_dout  = vid_mainram_dout_r;
+		assign vid_mainram_ready = (vid_mainram_addr_r == vid_mainram_addr); // see mainram_ready
+	end
+	endgenerate
 
-	wire [7:0] vid_scrollram_row_addr;
-	wire [7:0] vid_scrollramy_row_addr;
-	wire [15:0] vid_scrollram_0    = scrollram[0];
-	wire [15:0] vid_scrollramy_0   = scrollramy[0];
-	wire [15:0] vid_scrollram_row  = scrollram[vid_scrollram_row_addr];
-	wire [15:0] vid_scrollramy_row = scrollramy[vid_scrollramy_row_addr];
-
-	assign dbg_pal_data = palette[dbg_pal_addr];
-	assign dbg_bgvram_data = bgvram[dbg_bgvram_addr[14:0]];
-	assign dbg_txvram_data = txvram[dbg_txvram_addr];
+	// Testbench-only third read port (TB_DUMP_VRAM); tied off in hardware.
+	generate
+	if (!HW_ROMS) begin : g_dbgram_sim
+		assign dbg_pal_data = palette[dbg_pal_addr];
+		assign dbg_bgvram_data = bgvram[dbg_bgvram_addr[14:0]];
+		assign dbg_txvram_data = txvram[dbg_txvram_addr];
+	end else begin : g_dbgram_hw
+		assign dbg_pal_data = 16'd0;
+		assign dbg_bgvram_data = 16'd0;
+		assign dbg_txvram_data = 16'd0;
+	end
+	endgenerate
 
 	// ------------------------------------------------------------------
 	// I/O registers
 	// ------------------------------------------------------------------
 	reg [7:0]  flip_screen_reg;
 	reg [7:0]  bgbank_reg;
-
 	always @(posedge clk_sys) begin
 		if (reset) begin
 			flip_screen_reg <= 8'h00;
@@ -488,29 +704,19 @@ module raphero_core #(
 		end
 	end
 
-	localparam [15:0] IN0_IDLE  = 16'hFFFF;
-	localparam [15:0] IN1_IDLE  = 16'hFFFF;
-	localparam [15:0] DSW1_IDLE = 16'hFFFF;
-	localparam [15:0] DSW2_IDLE = 16'hFFFF;
-
-	// ------------------------------------------------------------------
-	// soundlatch (68000->TLCS-90, main2sub) / soundlatch2 (TLCS-90->68000,
-	// sub2main) — plain polling registers, no interrupt side effect on
-	// either direction (raphero's own machine config wires no
-	// data_pending_callback anywhere, same as macross2's/tdragon2's own).
-	// ------------------------------------------------------------------
+	// soundlatch (68000 -> TLCS-90) / soundlatch2 (TLCS-90 -> 68000):
+	// plain polling registers, no interrupt side effect.
 	reg [7:0] soundlatch_data;
 	reg [7:0] soundlatch2_data;
-
 	always @(posedge clk_sys) begin
 		if (reset) soundlatch_data <= 8'h00;
 		else if (sel_soundlatch_w & cpu_write & ~LDSn) soundlatch_data <= oEdb[7:0];
 	end
 
 	// ------------------------------------------------------------------
-	// TLCS-90 sound board: tlcs90.sv + nmk004_periph.sv (reused unmodified,
-	// see header) + a NEW external bus decode matching
-	// raphero_sound_mem_map + NMK112 + jt03 (YM2203) + jt6295 x2 (OKI).
+	// TLCS-90 sound board: tlcs90.sv + nmk004_periph.sv on clk_sys with
+	// the 8 MHz snd_cen, raphero_sound_mem_map decode, NMK112, jt03
+	// (YM2203), jt6295 x2.
 	// ------------------------------------------------------------------
 	wire [7:0]  snd_din, snd_dout;
 	wire [15:0] snd_addr;
@@ -519,12 +725,11 @@ module raphero_core #(
 	wire [10:0] irq_mask, irq_req_periph;
 	wire [3:0]  snd_bx, snd_by;
 
-	// YM2203's own IRQ (active-low) OR'd into irq_req bit0 (INT0) — same
-	// pattern nmk004_core.sv's own irq_req_to_cpu uses (see header).
+	// YM2203 IRQ (active low) into INT0 — same wiring as nmk004_core.sv.
 	wire [10:0] irq_req_to_cpu = {irq_req_periph[10:1], irq_req_periph[0] | ~ym_chip_irq_n};
 
 	tlcs90 snd_cpu (
-		.clk(tlcs90_clk), .reset(reset),
+		.clk(clk_sys), .cen(snd_cen), .reset(reset),
 		.din(snd_din), .dout(snd_dout), .addr(snd_addr), .addr_bank(snd_addr_bank),
 		.mem_rd(snd_mem_rd), .mem_wr(snd_mem_wr),
 		.nmi(1'b0), .irq_req(irq_req_to_cpu), .irq_mask(irq_mask),
@@ -533,11 +738,7 @@ module raphero_core #(
 		.dbg_a(), .dbg_f(), .dbg_hl(), .dbg_de(), .dbg_iy()
 	);
 
-	// Every region below is bank 0 (see nmk004_core.sv's own "Address
-	// decode" comment for why — no known raphero program legitimately
-	// banks beyond 64KB).
 	wire snd_bank0 = (snd_addr_bank == 4'h0);
-
 	wire sel_snd_rom    = snd_bank0 && (snd_addr < 16'h8000);
 	wire sel_snd_bank   = snd_bank0 && (snd_addr >= 16'h8000) && (snd_addr < 16'hC000);
 	wire sel_snd_ym     = snd_bank0 && (snd_addr == 16'hC000 || snd_addr == 16'hC001);
@@ -547,72 +748,112 @@ module raphero_core #(
 	wire sel_snd_audiobank = snd_bank0 && (snd_addr == 16'hD000);
 	wire sel_snd_soundlatch_r  = snd_bank0 && (snd_addr == 16'hD800);
 	wire sel_snd_soundlatch2_w = snd_bank0 && (snd_addr == 16'hD800);
-	// External RAM only backs E000-FEBF — FEC0+ is intercepted by the
-	// TLCS-90's own internal RAM/peripheral SFRs (see header).
+	// External RAM backs E000-FEBF; FEC0-FFBF is the TLCS-90's internal
+	// RAM and FFC0-FFEF its peripheral registers.
 	wire sel_snd_ext_ram = snd_bank0 && (snd_addr >= 16'hE000) && (snd_addr <= 16'hFEBF);
 	wire sel_snd_int_ram = snd_bank0 && (snd_addr >= 16'hFEC0) && (snd_addr <= 16'hFFBF);
 	wire sel_snd_periph  = snd_bank0 && (snd_addr >= 16'hFFC0) && (snd_addr <= 16'hFFEF);
 
-	// Audiocpu ROM: full 0x20000-byte flat image, fixed-mapped at
-	// 0-0x7FFF, ALSO the source for the 8-entry x 0x4000-byte bank window
-	// at 0x8000-0xBFFF — same flat-overlay banking scheme every prior
-	// Tier 3 port's own audiocpu uses.
-	reg [7:0] audiocpu_rom [0:131071];
-	initial if (AUDIOCPU_FILE != "") $readmemh(AUDIOCPU_FILE, audiocpu_rom);
-
 	reg [2:0] audiobank_reg;
 	always @(posedge clk_sys) begin
 		if (reset) audiobank_reg <= 3'd0;
-		else if (sel_snd_audiobank & snd_mem_wr) audiobank_reg <= snd_dout[2:0]; // macross2_audiobank_w
+		else if (sel_snd_audiobank & snd_mem_wr & snd_cen) audiobank_reg <= snd_dout[2:0]; // macross2_audiobank_w
 	end
-
 	wire [16:0] snd_bank_phys = {audiobank_reg, 14'd0} + {3'd0, snd_addr[13:0]};
 
-	// External RAM (E000-FEBF, 0x1EC0 bytes) + TLCS-90 internal RAM
-	// (FEC0-FFBF, 256 bytes) — kept as separate arrays matching the real
-	// hardware's own separate external-bus-vs-internal-RAM distinction
-	// (see header), though nothing in this simulation actually depends on
-	// them being physically separate.
-	reg [7:0] snd_ext_ram [0:7871]; // 0x1EC0 bytes
+	// Program ROM: 0x20000 flat image, fixed at 0-7FFF, 8 x 0x4000 bank
+	// window at 8000-BFFF.
+	wire [7:0] audiocpu_dout;
+	wire       audiocpu_ready;
+	wire [21:0] audiocpu_byte_addr = sel_snd_bank ? {5'd0, snd_bank_phys} : {7'd0, snd_addr[14:0]};
+	// Withhold the CPU clock while the byte being read is not resident
+	// (never in reset — the CPU samples reset on cen edges).
+	assign snd_stall = (sel_snd_rom | sel_snd_bank) & snd_mem_rd & ~audiocpu_ready & ~reset;
+
+	// SDRAM port 1, three channels: program ROM, OKI0, OKI1 samples.
+	wire        p1_busy [0:2];
+	wire        p1_valid[0:2];
+	wire [24:1] p1_addr [0:2];
+	wire        p1_req  [0:2];
+	wire [15:0] p1_dout [0:2];
+	wire [31:0] p1_dout_pair [0:2];
+	generate
+	if (!HW_ROMS) begin : g_audiocpu_sim
+		reg [7:0] audiocpu_rom [0:131071];
+		initial if (AUDIOCPU_FILE != "") $readmemh(AUDIOCPU_FILE, audiocpu_rom);
+		assign audiocpu_dout  = audiocpu_rom[audiocpu_byte_addr[16:0]];
+		assign audiocpu_ready = 1'b1;
+		assign sd1_addr = 24'd0; assign sd1_req = 1'b0;
+		assign p1_busy  = '{1'b0, 1'b0, 1'b0};
+		assign p1_valid = '{1'b0, 1'b0, 1'b0};
+		assign p1_dout  = '{16'd0, 16'd0, 16'd0};
+		assign p1_dout_pair = '{32'd0, 32'd0, 32'd0};
+		assign p1_addr  = '{24'd0, 24'd0, 24'd0};
+		assign p1_req   = '{1'b0, 1'b0, 1'b0};
+	end else begin : g_audiocpu_hw
+		sdram_arb #(.N(3)) p1_arb_inst (
+			.clk(clk_sys), .reset(por_rst),
+			.i_addr(p1_addr), .i_we('{1'b0, 1'b0, 1'b0}), .i_wrl('{1'b0, 1'b0, 1'b0}), .i_wrh('{1'b0, 1'b0, 1'b0}), .i_din('{16'd0, 16'd0, 16'd0}),
+			.i_req(p1_req), .i_busy(p1_busy), .i_valid(p1_valid), .i_dout(p1_dout), .i_dout_pair(p1_dout_pair),
+			.sdram_addr(sd1_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
+			.sdram_dout(sd1_dout), .sdram_dout_pair(sd1_dout_pair), .sdram_req(sd1_req), .sdram_ack(sd1_ack)
+		);
+		// oki_rom_cache (multi-line, next-line prefetch), not the 1-line
+		// rom_cache1_byte the Z80 boards use: the TLCS-90 fetches a byte
+		// every few 8 MHz cycles and has no WAIT pin, so every miss is a
+		// full clock stall — the prefetch hides most of them.
+		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_AUDIOCPU)) audiocpu_cache_inst (
+			.clk(clk_sys), .reset(reset),
+			.byte_addr(audiocpu_byte_addr), .data(audiocpu_dout), .ready(audiocpu_ready), .stall(),
+			.sd_addr(p1_addr[0]), .sd_req(p1_req[0]), .sd_busy(p1_busy[0]), .sd_valid(p1_valid[0]), .sd_dout(p1_dout[0]), .sd_dout_pair(p1_dout_pair[0])
+		);
+	end
+	endgenerate
+
+	// External RAM (E000-FEBF) + internal RAM (FEC0-FFBF). Writes are
+	// taken on the cen edge that ends the CPU's write cycle (mem_wr is
+	// held for the whole cycle). Reads are registered (block-RAM
+	// inference): the CPU captures din on a cen edge, at least 5 clk_sys
+	// after it presented the address.
+	reg [7:0] snd_ext_ram [0:7871];
 	reg [7:0] snd_int_ram [0:255];
-	always @(posedge clk_sys) if (sel_snd_ext_ram & snd_mem_wr) snd_ext_ram[snd_addr - 16'hE000] <= snd_dout;
-	always @(posedge clk_sys) if (sel_snd_int_ram & snd_mem_wr) snd_int_ram[snd_addr[7:0]] <= snd_dout;
+	reg [7:0] snd_ext_q, snd_int_q;
+	wire [12:0] snd_ext_addr = snd_addr[12:0]; // E000-FEBF -> 0-1EBF
+	always @(posedge clk_sys) begin
+		if (sel_snd_ext_ram & snd_mem_wr & snd_cen) snd_ext_ram[snd_ext_addr] <= snd_dout;
+		snd_ext_q <= snd_ext_ram[snd_ext_addr];
+	end
+	always @(posedge clk_sys) begin
+		if (sel_snd_int_ram & snd_mem_wr & snd_cen) snd_int_ram[snd_addr[7:0]] <= snd_dout;
+		snd_int_q <= snd_int_ram[snd_addr[7:0]];
+	end
 
 	always @(posedge clk_sys) begin
 		if (reset) soundlatch2_data <= 8'h00;
-		else if (sel_snd_soundlatch2_w & snd_mem_wr) soundlatch2_data <= snd_dout;
+		else if (sel_snd_soundlatch2_w & snd_mem_wr & snd_cen) soundlatch2_data <= snd_dout;
 	end
 
-	// ------------------------------------------------------------------
-	// TLCS-90 on-chip peripherals — rtl/tlcs90/nmk004_periph.sv, reused
-	// UNMODIFIED (see header; every override-enable tied inert).
-	// ------------------------------------------------------------------
 	wire [7:0] periph_rdata;
-	wire       periph_p6_we, periph_p3_we, periph_p7_we;
-	wire [7:0] periph_p6_wdata, periph_p3_wdata, periph_p7_wdata;
-	wire [7:0] periph_p4;
-
 	nmk004_periph periph (
-		.clk(tlcs90_clk), .reset(reset),
+		.clk(clk_sys), .cen(snd_cen), .reset(reset),
 		.reg_addr(snd_addr[5:0]),
 		.wdata(snd_dout),
 		.we(sel_snd_periph & snd_mem_wr),
 		.re(sel_snd_periph & snd_mem_rd),
 		.rdata(periph_rdata),
 		.irq_mask(irq_mask), .irq_req(irq_req_periph),
-		.p4_latch(periph_p4), .bx(snd_bx), .by(snd_by),
+		.p4_latch(), .bx(snd_bx), .by(snd_by),
 		.p5_ext_en(1'b0), .p5_ext_val(8'h00),
 		.p6_ext_en(1'b0), .p6_ext_val(8'h00),
-		.p6_we(periph_p6_we), .p6_wdata(periph_p6_wdata),
+		.p6_we(), .p6_wdata(),
 		.p7_ext_en(1'b0), .p7_ext_val(8'h00),
-		.p3_we(periph_p3_we), .p3_wdata(periph_p3_wdata),
-		.p7_we(periph_p7_we), .p7_wdata(periph_p7_wdata)
+		.p3_we(), .p3_wdata(),
+		.p7_we(), .p7_wdata()
 	);
 
 	// ------------------------------------------------------------------
-	// YM2203 — real jt03. Same write-stretch pattern as every other
-	// 40MHz-based port's own (40-cycle hold, safely exceeding ym_cen's
-	// own 27-cycle worst-case gap).
+	// YM2203 — jt03, 40-cycle write stretch (exceeds ym_cen's 27-cycle
+	// worst-case gap). C000 = address/status, C001 = data.
 	// ------------------------------------------------------------------
 	reg [7:0] ym_din_latch;
 	reg       ym_addr_latch;
@@ -623,43 +864,39 @@ module raphero_core #(
 		ym_we_prev <= ym_we_raw;
 		if (ym_we_raw && !ym_we_prev) begin
 			ym_din_latch  <= snd_dout;
-			ym_addr_latch <= snd_addr[0]; // C000=addr/status (offset0), C001=data (offset1)
+			ym_addr_latch <= snd_addr[0];
 			ym_wr_hold    <= 6'd40;
 		end else if (ym_wr_hold != 6'd0) begin
 			ym_wr_hold <= ym_wr_hold - 6'd1;
 		end
 	end
 	wire ym_wr_n = ~(ym_wr_hold != 6'd0);
-	// jt03 has no separate read-strobe input — dout always reflects whatever
-	// addr currently holds, so a status/busy read must see the live port
-	// decode, not the write-only latch (which would still show the previous
-	// write's offset, e.g. after a data-port write, breaking busy-flag polls).
-	// Fall back to the latched value only while a write-stretch is in flight,
-	// since ym_din_latch itself is only valid for that same window.
+	// jt03's dout follows addr live — a status read must see the live
+	// decode, not the write latch (tdragon2_core.sv has the story).
 	wire ym_addr_sel = (ym_wr_hold != 6'd0) ? ym_addr_latch : snd_addr[0];
 
 	wire [7:0] ym_chip_dout;
 	wire       ym_chip_irq_n;
+	wire signed [15:0] ym_snd;
 	jt03 ym_chip (
 		.rst(reset), .clk(clk_sys), .cen(ym_cen),
 		.din(ym_din_latch), .addr(ym_addr_sel), .cs_n(1'b0), .wr_n(ym_wr_n),
 		.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),
 		.IOA_in(8'hFF), .IOB_in(8'hFF), .IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
-		.psg_A(), .psg_B(), .psg_C(), .fm_snd(), .psg_snd(), .snd(), .snd_sample(),
+		.psg_A(), .psg_B(), .psg_C(), .fm_snd(), .psg_snd(), .snd(ym_snd), .snd_sample(),
 		.debug_view()
 	);
 
 	// ------------------------------------------------------------------
-	// NMK112 — see rtl/nmk112/nmk112.sv's own header. reg_sel matches
-	// okibank_w's own offset decode: C810-C817's own low 3 bits.
+	// NMK112 — both OKI ROMs 0x400000 (masks 63). reg_sel = C810-C817's
+	// low 3 bits (okibank_w offset).
 	// ------------------------------------------------------------------
-	wire nmk112_we = sel_snd_nmk112 & snd_mem_wr;
+	wire nmk112_we = sel_snd_nmk112 & snd_mem_wr & snd_cen;
 	wire [17:0] oki0_rom_addr_raw, oki1_rom_addr_raw;
 	wire [21:0] oki0_rom_addr, oki1_rom_addr;
-
 	nmk112 #(
-		.ROM0_BYTES(4194304), // rhp94099.6+7, 0x400000 (oki1)
-		.ROM1_BYTES(4194304)  // rhp94099.5+6, 0x400000 (oki2)
+		.ROM0_BYTES(4194304), // rhp94099.6+7 (oki1)
+		.ROM1_BYTES(4194304)  // rhp94099.5+6 (oki2)
 	) nmk112_inst (
 		.clk_sys(clk_sys), .reset(reset),
 		.reg_sel(snd_addr[2:0]), .reg_data(snd_dout), .reg_we(nmk112_we),
@@ -668,18 +905,103 @@ module raphero_core #(
 	);
 
 	// ------------------------------------------------------------------
-	// OKIM6295 x2 — jt6295, driven by the TLCS-90's own bus through
-	// NMK112. Same latch-and-hold write-stretch pattern as every other
-	// port's own OKI integration.
+	// OKIM6295 x2 — jt6295. HW_ROMS=1: oki_rom_cache per chip on SDRAM
+	// port 1 channels 1/2, `stall` gating the chip's cen (jt6295's ADPCM
+	// fetch ignores rom_ok — see rtl/oki_rom_cache.sv).
 	// ------------------------------------------------------------------
-	reg [7:0] oki0_rom [0:4194303]; // rhp94099.6+7, 0x400000
-	reg [7:0] oki1_rom [0:4194303]; // rhp94099.5+6, 0x400000
-	initial if (OKI1_ROM_FILE != "") $readmemh(OKI1_ROM_FILE, oki0_rom);
-	initial if (OKI2_ROM_FILE != "") $readmemh(OKI2_ROM_FILE, oki1_rom);
+	wire [7:0] oki0_rom_data, oki1_rom_data;
+	wire       oki0_rom_ok, oki1_rom_ok;
+	wire       oki0_stall, oki1_stall;
+	generate
+	if (!HW_ROMS) begin : g_oki_sim
+		reg [7:0] oki0_rom [0:4194303]; // rhp94099.6+7
+		reg [7:0] oki1_rom [0:4194303]; // rhp94099.5+6
+		initial if (OKI1_ROM_FILE != "") $readmemh(OKI1_ROM_FILE, oki0_rom);
+		initial if (OKI2_ROM_FILE != "") $readmemh(OKI2_ROM_FILE, oki1_rom);
+		reg [7:0] oki0_rom_data_r, oki1_rom_data_r;
+		always @(posedge clk_sys) oki0_rom_data_r <= oki0_rom[oki0_rom_addr];
+		always @(posedge clk_sys) oki1_rom_data_r <= oki1_rom[oki1_rom_addr];
+		assign oki0_rom_data = oki0_rom_data_r;
+		assign oki1_rom_data = oki1_rom_data_r;
+		assign oki0_rom_ok = 1'b1;
+		assign oki1_rom_ok = 1'b1;
+		assign oki0_stall = 1'b0;
+		assign oki1_stall = 1'b0;
+		assign dbg_oki0_adpcm_total = 32'd0; assign dbg_oki0_adpcm_unserved = 32'd0;
+		assign dbg_oki1_adpcm_total = 32'd0; assign dbg_oki1_adpcm_unserved = 32'd0;
+		assign dbg_oki_cen_total = 32'd0; assign dbg_oki0_stall_cen = 32'd0; assign dbg_oki1_stall_cen = 32'd0;
+	end else begin : g_oki_hw
+		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI1)) oki0_cache_inst (
+			.clk(clk_sys), .reset(reset),
+			.byte_addr(oki0_rom_addr), .data(oki0_rom_data), .ready(oki0_rom_ok), .stall(oki0_stall),
+			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1]), .sd_dout_pair(p1_dout_pair[1])
+		);
+		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI2)) oki1_cache_inst (
+			.clk(clk_sys), .reset(reset),
+			.byte_addr(oki1_rom_addr), .data(oki1_rom_data), .ready(oki1_rom_ok), .stall(oki1_stall),
+			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2]), .sd_dout_pair(p1_dout_pair[2])
+		);
+`ifdef VERILATOR
+		// Sample-fetch audit + golden-byte check against the plain ROM
+		// images (given as OKI*_ROM_FILE to an HW_ROMS=1 sim build) —
+		// see tdragon2_core.sv's g_oki_hw for the derivation.
+		reg [31:0] oki0_adpcm_total_r = 32'd0, oki0_adpcm_unserved_r = 32'd0;
+		reg [31:0] oki1_adpcm_total_r = 32'd0, oki1_adpcm_unserved_r = 32'd0;
+		reg [31:0] oki_cen_total_r = 32'd0, oki0_stall_cen_r = 32'd0, oki1_stall_cen_r = 32'd0;
+		reg [7:0] golden0 [0:4194303];
+		reg [7:0] golden1 [0:4194303];
+		initial if (OKI1_ROM_FILE != "") $readmemh(OKI1_ROM_FILE, golden0);
+		initial if (OKI2_ROM_FILE != "") $readmemh(OKI2_ROM_FILE, golden1);
+		reg [31:0] oki0_bytes_wrong = 32'd0, oki1_bytes_wrong = 32'd0, oki0_bytes_checked = 32'd0, oki1_bytes_checked = 32'd0;
+		always @(posedge clk_sys) begin
+			if (oki_cen) begin
+				oki_cen_total_r <= oki_cen_total_r + 32'd1;
+				if (oki0_stall) oki0_stall_cen_r <= oki0_stall_cen_r + 32'd1;
+				if (oki1_stall) oki1_stall_cen_r <= oki1_stall_cen_r + 32'd1;
+			end
+			if (oki0_chip.u_rom.st == 8'h02 && oki0_chip.u_rom.cen32) begin
+				oki0_adpcm_total_r <= oki0_adpcm_total_r + 32'd1;
+				if (!oki0_rom_ok) oki0_adpcm_unserved_r <= oki0_adpcm_unserved_r + 32'd1;
+				if (OKI1_ROM_FILE != "") begin
+					oki0_bytes_checked <= oki0_bytes_checked + 32'd1;
+					if (oki0_rom_data != golden0[oki0_rom_addr]) oki0_bytes_wrong <= oki0_bytes_wrong + 32'd1;
+				end
+			end
+			if (oki1_chip.u_rom.st == 8'h02 && oki1_chip.u_rom.cen32) begin
+				oki1_adpcm_total_r <= oki1_adpcm_total_r + 32'd1;
+				if (!oki1_rom_ok) oki1_adpcm_unserved_r <= oki1_adpcm_unserved_r + 32'd1;
+				if (OKI2_ROM_FILE != "") begin
+					oki1_bytes_checked <= oki1_bytes_checked + 32'd1;
+					if (oki1_rom_data != golden1[oki1_rom_addr]) oki1_bytes_wrong <= oki1_bytes_wrong + 32'd1;
+				end
+			end
+		end
+		final $display("OKI golden-byte audit: oki0 %0d latches / %0d wrong, oki1 %0d latches / %0d wrong",
+			oki0_bytes_checked, oki0_bytes_wrong, oki1_bytes_checked, oki1_bytes_wrong);
+		assign dbg_oki0_adpcm_total = oki0_adpcm_total_r; assign dbg_oki0_adpcm_unserved = oki0_adpcm_unserved_r;
+		assign dbg_oki1_adpcm_total = oki1_adpcm_total_r; assign dbg_oki1_adpcm_unserved = oki1_adpcm_unserved_r;
+		assign dbg_oki_cen_total = oki_cen_total_r; assign dbg_oki0_stall_cen = oki0_stall_cen_r; assign dbg_oki1_stall_cen = oki1_stall_cen_r;
+`else
+		assign dbg_oki0_adpcm_total = 32'd0; assign dbg_oki0_adpcm_unserved = 32'd0;
+		assign dbg_oki1_adpcm_total = 32'd0; assign dbg_oki1_adpcm_unserved = 32'd0;
+		assign dbg_oki_cen_total = 32'd0; assign dbg_oki0_stall_cen = 32'd0; assign dbg_oki1_stall_cen = 32'd0;
+`endif
+	end
+	endgenerate
 
-	reg [7:0] oki0_rom_data, oki1_rom_data;
-	always @(posedge clk_sys) oki0_rom_data <= oki0_rom[oki0_rom_addr[21:0]];
-	always @(posedge clk_sys) oki1_rom_data <= oki1_rom[oki1_rom_addr[21:0]];
+	// Sound-CPU clock audit (sim only): delivered vs withheld pulses.
+`ifdef VERILATOR
+	reg [31:0] snd_cen_total_r = 32'd0, snd_stall_total_r = 32'd0;
+	always @(posedge clk_sys) if (snd_div == 3'd4) begin
+		if (snd_stall) snd_stall_total_r <= snd_stall_total_r + 32'd1;
+		else           snd_cen_total_r   <= snd_cen_total_r + 32'd1;
+	end
+	assign dbg_snd_cen_total   = snd_cen_total_r;
+	assign dbg_snd_stall_total = snd_stall_total_r;
+`else
+	assign dbg_snd_cen_total   = 32'd0;
+	assign dbg_snd_stall_total = 32'd0;
+`endif
 
 	wire sel_oki0_we = sel_snd_oki0 & snd_mem_wr;
 	wire sel_oki1_we = sel_snd_oki1 & snd_mem_wr;
@@ -708,34 +1030,52 @@ module raphero_core #(
 	wire oki1_wr_n = ~(oki1_wr_hold != 6'd0);
 
 	wire [7:0] oki0_chip_dout, oki1_chip_dout;
+	wire signed [13:0] oki0_snd, oki1_snd;
 	jt6295 oki0_chip (
-		.rst(reset), .clk(clk_sys), .cen(oki_cen), .ss(1'b0),
+		.rst(reset), .clk(clk_sys), .cen(oki_cen & ~oki0_stall), .ss(1'b0),
 		.wrn(oki0_wr_n), .din(oki0_din_latch), .dout(oki0_chip_dout),
-		.rom_addr(oki0_rom_addr_raw), .rom_data(oki0_rom_data), .rom_ok(1'b1),
-		.sound(), .sample()
+		.rom_addr(oki0_rom_addr_raw), .rom_data(oki0_rom_data), .rom_ok(oki0_rom_ok),
+		.sound(oki0_snd), .sample()
 	);
 	jt6295 oki1_chip (
-		.rst(reset), .clk(clk_sys), .cen(oki_cen), .ss(1'b0),
+		.rst(reset), .clk(clk_sys), .cen(oki_cen & ~oki1_stall), .ss(1'b0),
 		.wrn(oki1_wr_n), .din(oki1_din_latch), .dout(oki1_chip_dout),
-		.rom_addr(oki1_rom_addr_raw), .rom_data(oki1_rom_data), .rom_ok(1'b1),
-		.sound(), .sample()
+		.rom_addr(oki1_rom_addr_raw), .rom_data(oki1_rom_data), .rom_ok(oki1_rom_ok),
+		.sound(oki1_snd), .sample()
 	);
 
 	// ------------------------------------------------------------------
-	// TLCS-90 read-data mux
+	// Audio mix — mono, same balance as tdragon2_core.sv (raphero()'s
+	// routes are identical: FM 1.20, PSG 0.50 x3, each OKI 0.10): jt03's
+	// mixed snd + each OKI x 3/8, saturated.
+	// ------------------------------------------------------------------
+	wire signed [17:0] oki0_ext = {{4{oki0_snd[13]}}, oki0_snd};
+	wire signed [17:0] oki1_ext = {{4{oki1_snd[13]}}, oki1_snd};
+	wire signed [17:0] oki0_g   = ((oki0_ext <<< 1) + oki0_ext) >>> 3;
+	wire signed [17:0] oki1_g   = ((oki1_ext <<< 1) + oki1_ext) >>> 3;
+	wire signed [17:0] audio_sum = {{2{ym_snd[15]}}, ym_snd} + oki0_g + oki1_g;
+	wire signed [15:0] audio_mix =
+		(audio_sum > 18'sd32767)  ? 16'sd32767  :
+		(audio_sum < -18'sd32768) ? -16'sd32768 :
+		audio_sum[15:0];
+	assign audio_l = audio_mix;
+	assign audio_r = audio_mix;
+
+	// ------------------------------------------------------------------
+	// TLCS-90 read-data mux (memory-mapped: no I/O-space hazard here)
 	// ------------------------------------------------------------------
 	reg [7:0] snd_rdata;
 	always @(*) begin
-		if (sel_snd_rom)        snd_rdata = audiocpu_rom[snd_addr[14:0]];
-		else if (sel_snd_bank)  snd_rdata = audiocpu_rom[snd_bank_phys[16:0]];
-		else if (sel_snd_ext_ram) snd_rdata = snd_ext_ram[snd_addr - 16'hE000];
-		else if (sel_snd_int_ram) snd_rdata = snd_int_ram[snd_addr[7:0]];
+		if (sel_snd_rom)          snd_rdata = audiocpu_dout;
+		else if (sel_snd_bank)    snd_rdata = audiocpu_dout;
+		else if (sel_snd_ext_ram) snd_rdata = snd_ext_q;
+		else if (sel_snd_int_ram) snd_rdata = snd_int_q;
 		else if (sel_snd_periph)  snd_rdata = periph_rdata;
 		else if (sel_snd_soundlatch_r) snd_rdata = soundlatch_data;
-		else if (sel_snd_ym)    snd_rdata = ym_chip_dout;
-		else if (sel_snd_oki0)  snd_rdata = oki0_chip_dout;
-		else if (sel_snd_oki1)  snd_rdata = oki1_chip_dout;
-		else                     snd_rdata = 8'h00;
+		else if (sel_snd_ym)      snd_rdata = ym_chip_dout;
+		else if (sel_snd_oki0)    snd_rdata = oki0_chip_dout;
+		else if (sel_snd_oki1)    snd_rdata = oki1_chip_dout;
+		else                      snd_rdata = 8'h00;
 	end
 	assign snd_din = snd_rdata;
 
@@ -749,21 +1089,18 @@ module raphero_core #(
 		else if (sel_palette) rdata = palette_dout;
 		else if (sel_bgvram)  rdata = bgvram_dout;
 		else if (sel_txvram)  rdata = txvram_dout;
-		else if (sel_scrollram)  rdata = scrollram_dout;
-		else if (sel_scrollramy) rdata = scrollramy_dout;
-		else if (sel_pad0400)    rdata = pad0400_dout;
+		else if (sel_scrollmem) rdata = scroll_dout;
 		else if (sel_soundlatch2_r) rdata = {8'h00, soundlatch2_data};
-		else if (sel_in0)     rdata = IN0_IDLE;
-		else if (sel_in1)     rdata = IN1_IDLE;
-		else if (sel_dsw1)    rdata = DSW1_IDLE;
-		else if (sel_dsw2)    rdata = DSW2_IDLE;
+		else if (sel_in0)     rdata = HW_ROMS ? in0_i  : 16'hFFFF;
+		else if (sel_in1)     rdata = HW_ROMS ? in1_i  : 16'hFFFF;
+		else if (sel_dsw1)    rdata = HW_ROMS ? dsw1_i : 16'hFFFF;
+		else if (sel_dsw2)    rdata = HW_ROMS ? dsw2_i : 16'hFFFF;
 		else                  rdata = 16'hFFFF; // unmapped
 	end
 	assign iEdb = rdata;
 
 	// ------------------------------------------------------------------
-	// Raster timing + REAL V-PROM interrupt generation (rtl/nmk_irq/
-	// nmk_irq.sv).
+	// Raster timing + V-PROM interrupt generation
 	// ------------------------------------------------------------------
 	wire [9:0] vt_hcount, vt_vcount;
 	wire vt_line_start, vt_hblank, vt_vblank;
@@ -772,6 +1109,11 @@ module raphero_core #(
 		.hcount(vt_hcount), .vcount(vt_vcount),
 		.line_start(vt_line_start), .hblank(vt_hblank), .vblank(vt_vblank)
 	);
+	assign ce_pix_o = ce_pix;
+	assign hcount_o = vt_hcount;
+	assign vcount_o = vt_vcount;
+	assign hblank_o = vt_hblank;
+	assign vblank_o = vt_vblank;
 
 	wire sprite_dma_trigger;
 	nmk_irq #(
@@ -788,33 +1130,42 @@ module raphero_core #(
 	);
 
 	// ------------------------------------------------------------------
-	// Video pipeline — rtl/raphero/video_raphero.sv (see that file's own
-	// header for the full hybrid derivation).
+	// Video pipeline — rtl/macross2/video_macross2.sv with per-line
+	// scroll taps and the 6 MB sprite ROM.
 	// ------------------------------------------------------------------
-	video_raphero #(
+	video_macross2 #(
 		.FGTILE_FILE(FGTILE_FILE),
 		.BGTILE_FILE(BGTILE_FILE),
-		.SPRITES_FILE(SPRITES_FILE)
+		.SPRITES_FILE(SPRITES_FILE),
+		.HW_ROMS(HW_ROMS),
+		.DBG_MISS_PAINT(DBG_MISS_PAINT),
+		.BASE_WORD_FGTILE(BASE_WORD_FGTILE),
+		.BASE_WORD_BGTILE(BASE_WORD_BGTILE),
+		.BASE_WORD_SPRITES(BASE_WORD_SPRITES),
+		.RASTER_SCROLL(1),
+		.SPRITES_BYTES(6291456)
 	) video (
 		.clk_sys(clk_sys), .reset(reset),
-		.sprite_dma_trigger(sprite_dma_trigger),
+		.sprite_dma_trigger(sprite_dma_trigger), .sprite_dma_busy(sprite_dma_busy),
 		.bgvram_addr(vid_bgvram_addr), .bgvram_data(vid_bgvram_dout),
 		.txvram_addr(vid_txvram_addr), .txvram_data(vid_txvram_dout),
 		.palette_addr(vid_palette_addr), .palette_data(vid_palette_dout),
 		.spr_palette_addr(vid_spr_palette_addr), .spr_palette_data(vid_spr_palette_dout),
-		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout),
-		.scrollram_0(vid_scrollram_0), .scrollramy_0(vid_scrollramy_0),
-		.scrollram_row_addr(vid_scrollram_row_addr), .scrollram_row(vid_scrollram_row),
-		.scrollramy_row_addr(vid_scrollramy_row_addr), .scrollramy_row(vid_scrollramy_row),
-		.tilerambank(tilerambank_reg),
+		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout), .mainram_ready(vid_mainram_ready),
+		.bg_xscroll(16'd0), .bg_yscroll(16'd0),
+		.scrollram_0(scrollram0_reg), .scrollramy_0(scrollramy0_reg),
+		.scroll_row_addr(vid_scroll_row_addr),
+		.scrollram_row(vid_scrollram_row), .scrollramy_row(vid_scrollramy_row),
 		.bg_bank(bgbank_reg),
-		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb)
+		.tilerambank(tilerambank_reg),
+		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
+		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),
+		.sd_dout(sd2_dout), .sd_dout_pair(sd2_dout_pair), .sd_req(sd2_req), .sd_ack(sd2_ack),
+		.sd_b_addr(sd3_addr), .sd_b_req(sd3_req), .sd_b_dout(sd3_dout), .sd_b_dout_pair(sd3_dout_pair), .sd_b_ack(sd3_ack)
 	);
 
 	reg frame_done_r;
-	always @(posedge clk_sys) begin
-		frame_done_r <= vt_line_start && (vt_vcount == 10'd0);
-	end
+	always @(posedge clk_sys) frame_done_r <= vt_line_start && (vt_vcount == 10'd0);
 	assign frame_done = frame_done_r;
 
 	// ------------------------------------------------------------------
@@ -828,7 +1179,8 @@ module raphero_core #(
 	assign dbg_fc1   = FC1;
 	assign dbg_fc2   = FC2;
 
-	assign dbg_snd_cen = tlcs90_clk;
+	assign dbg_snd_cen   = snd_cen;
+	assign dbg_snd_stall = snd_stall;
 
 	assign dbg_ym_we = ym_we_raw;
 	assign dbg_ym_cs = sel_snd_ym;

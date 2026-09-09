@@ -903,6 +903,104 @@ the frame of latency would need a scanline (line-buffer) sprite
 renderer. Hardware: the same demo instant that showed the cut through a
 large explosion before renders it continuous now.
 
+## Rapid Hero / Arcadia (the "Raphero" rbf)
+
+`rtl/raphero/raphero_core.sv` is the second hardware core, built on
+`tdragon2_core.sv`'s `HW_ROMS=1` machinery with `video_macross2.sv` (now
+parameterised: `RASTER_SCROLL=1` for the per-scanline X+Y scroll tables,
+`SPRITES_BYTES` for the 6 MB sprite ROM) — `Raphero.sv`/`.qsf`/`.sdc`/
+`files_raphero.qip`, `sim/rtl/raphero_hw/`, three `.mra` files
+(`tools/gen_raphero_mra.py`). What is different from the Family C core,
+checked against `nmk16.cpp`'s `raphero()`:
+
+- **68000 at 14 MHz** (7/20 clock-enable accumulator), **TMP90841 sound
+  CPU** (`rtl/tlcs90/tlcs90.sv` + `nmk004_periph.sv`) at 8 MHz, memory-
+  mapped (`raphero_sound_mem_map`), no sound-CPU reset from the 68000
+  (`0x100016` is `nopw()`), OKIs at 4 MHz pin 7 low, NMK112 with two 4 MB
+  sample ROMs, `VIDEO_START(gunnail)` per-line scroll, tdragon2's main-RAM
+  address swap, same V-PROM as tdragon2/macross2.
+- **SDRAM image** (bytes): maincpu 0, audiocpu 0x080000, fgtile 0x0A0000,
+  bgtile 0x0C0000, sprites 0x2C0000 (6 MB), then `rhp94099.5`, `.6`, `.7`
+  once at 0x8C0000 — MAME loads `.6` into both OKI regions (oki1 = .6+.7,
+  oki2 = .5+.6), so oki2 reads from 0x8C0000 and oki1 from 0xAC0000 out of
+  one 6 MB copy, keeping the whole image (14.75 MB) inside the 16 MB the
+  23-bit cache word addresses reach. The `.mra` part order is exactly that.
+- **Sound CPU ROM fetch without a WAIT pin.** `tlcs90.sv` and
+  `nmk004_periph.sv` gained a `cen` input (the NMK004/protection wrappers
+  tie it high); raphero runs them on `clk_sys` with an 8 MHz enable that is
+  withheld while the program-ROM cache (`oki_rom_cache`, 16 lines + next-
+  line prefetch, not the 1-line `rom_cache1_byte`) does not hold the byte
+  being fetched. In the hardware sim 0.1% of clock pulses are withheld.
+  `Raphero.sdc` declares the CPU/peripheral register-to-register paths as
+  5-cycle multicycle paths (they only ever update on the enable) — without
+  that the execute logic fails timing by ~10 ns at 40 MHz.
+- **Per-scanline scroll.** `bg_update()` in `nmk16_v.cpp` draws bitmap line
+  y (16..239) with `yscroll = scrollramy[0] + scrollramy[y]`, tilemap row
+  `(y + yscroll) & 0x1ff`, and `xscroll = scrollram[0] + scrollram[y]` — both
+  tables indexed by the *bitmap* y (screen y + 16). `video_macross2.sv`
+  outputs that row address (`scroll_row_addr`) and adds the taps into the
+  BG line calculation for both the use and lookahead pixels; the prefetch
+  tags are tile positions, so per-line changes cost nothing. The core keeps
+  the tables (plus the plain 0x130400 RAM) in one 1024x16 block RAM with a
+  registered CPU port and a registered video port that reads the two rows
+  on alternate cycles; word 0 of each table is mirrored in a register for
+  the `tilerambank` derivation (`(scrollram[0] >> 12) & 3`) and the video
+  taps. Result in the reference sim: pixel-identical to MAME on every frame
+  compared (title, starfield, ship intro at frames 450-560).
+
+Two hardware-path bugs the 14 MHz bus exposed that the 10 MHz Family C core
+never showed (both found with `sim/rtl/raphero_hw`, whose testbench now has
+a `TB_TRAP_PC` ring buffer of the last 64 bus cycles and a golden-word audit
+of every ROM read):
+
+1. **Speculative ROM-cache fetches clobbering a hit.** `rom_cache1` refetches
+   whenever its address input changes, and the core fed it the raw 68000 bus
+   address — every main-RAM/VRAM access started an SDRAM read of an
+   unrelated word. When that fill landed during the *next* program fetch,
+   after the CPU had sampled DTACK on a cache hit but before it latched the
+   data (fx68k samples both on `enPhi2`, one 68000 clock apart), the line
+   was overwritten under it: the boot RAM test read `$FFFF` for the opcode
+   at `$0025DA` and took an F-line exception into the game's error handler
+   (a `clr.b $3.w; bra` watchdog loop, black screen). At 10 MHz the fill
+   always landed before the next fetch's DTACK sample. Fix: the cache only
+   sees ROM addresses (`rom_cache_addr = sel_rom ? bus : held`). The
+   tdragon2 core has the same structure and has not shown the symptom;
+   it is worth applying the same guard there.
+2. **Registered `ready` flags stale for one clock.** `mainram_ready <=
+   (addr_r == addr)` is high for the first `clk_sys` after the address
+   changes (it still reflects the previous address); at 14 MHz `enPhi2`
+   can fall in that window. The flags are now combinational on the
+   registered address (`ready = (addr_r == addr)`), which is also one clock
+   earlier for the sprite-snapshot FSM.
+
+Hardware sim after the fixes: 68000 and TLCS-90 both run the attract
+sequence, every ROM word and OKI sample byte matches the images, and the
+frames are pixel-identical to the reference sim 14 frames later (the boot
+ROM check runs slower through real wait states); the reference sim is
+pixel-identical to MAME on every frame compared. Audio from both sims
+scores 0.96 band correlation against MAME's `-wavwrite` output
+(`tools/audio_compare.py`, whose level column shows the same ~9 dB
+MAME-louder offset the Family C hardware captures have).
+
+Real hardware (DE10-Nano, `Raphero.rbf`, `Rapid Hero (NMK).mra`): boots
+and plays the attract loop; native screenshots of the title screen are
+pixel-identical to MAME's snapshots of the same scene, scrolling scenes
+match to within the capture-time offset; a 40 s audio capture scores
+0.96 band correlation against MAME with the usual level offset. The
+15 MB ROM upload takes about 18 s. Quartus: 81% ALMs, 94% of the M10K
+blocks, worst setup slack +0.37 ns with the multicycle constraints.
+
+Per-line scroll in the game: a Lua probe of `scrollram`/`scrollramy`
+over 150 s of MAME's attract mode (title, demo play on two stages, high
+score table) never found a row entry differing from the others — the
+game drives the background through entry 0 of each table (X and Y both
+change; `tilerambank` comes from entry 0's bits [13:12]), and the
+row-table path is exercised with zero rows. So the "dual" X+Y scroll is
+verified on hardware against MAME through those scenes; the genuinely
+per-line raster case is verified only structurally (same expressions
+as `bg_update()`, both taps indexed by bitmap y) until a stage that
+uses it is reached.
+
 ## Status
 
 `HW_ROMS=1` implemented for both games (`rtl/tdragon2/tdragon2_core.sv`

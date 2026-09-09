@@ -31,12 +31,18 @@
 //      these three bases exactly tile the full 1024-entry palette
 //      (0x000-0x0FF BG, 0x100-0x2FF sprites, 0x300-0x3FF TX).
 //
-// Per-scanline raster scroll (video_gunnail.sv's own "hardest video item")
-// does NOT apply here — macross2_map's own `130000-130007` is a single
-// `scroll_w<0>` register (nmk16.cpp:1094), the same plain X/Y scroll shape
-// every Tier 5 port's own video already used, not gunnail's own per-row
-// scrollram tables. `bg_xscroll`/`bg_yscroll` below are frame-constant
-// register inputs, not the row-indexed taps video_gunnail.sv needs.
+// Per-scanline raster scroll: macross2/tdragon2 (RASTER_SCROLL=0) have a
+// single `scroll_w<0>` register (nmk16.cpp:1094) — `bg_xscroll`/
+// `bg_yscroll` below are frame-constant register inputs. raphero
+// (RASTER_SCROLL=1, VIDEO_START gunnail) instead has the two 256-word
+// tables gunnail_scrollram/scrollramy, applied per bitmap line by
+// nmk16_v.cpp bg_update(): for bitmap line y (16..239, i == y1 there),
+// yscroll = scrollramy[0] + scrollramy[y], the tilemap row shown is
+// (y + yscroll) & 0x1ff, and that row's xscroll = scrollram[0] +
+// scrollram[y]. BOTH tables are indexed by the BITMAP y (screen y + 16),
+// so scroll_row_addr below is bm_y. The core owns the tables and serves
+// the taps; the prefetch tags are tile positions, so per-line changes
+// need nothing else here.
 //
 // Everything else (palette decode, sprite double-buffer/draw FSM,
 // composite order) is video_macross.sv's own, unchanged.
@@ -58,7 +64,14 @@ module video_macross2 #(
 	parameter DBG_MISS_PAINT = 0,
 	parameter [22:0] BASE_WORD_FGTILE  = 23'd0,
 	parameter [22:0] BASE_WORD_BGTILE  = 23'd0,
-	parameter [22:0] BASE_WORD_SPRITES = 23'd0
+	parameter [22:0] BASE_WORD_SPRITES = 23'd0,
+	// Per-scanline X+Y scroll from the scrollram/scrollramy taps (raphero)
+	// instead of the frame-constant bg_xscroll/bg_yscroll — see header.
+	parameter RASTER_SCROLL = 0,
+	// Sprite ROM size in bytes: 0x400000 (macross2/tdragon2, 2 files) or
+	// 0x600000 (raphero, 3 files). Sizes the sim array and the tile-code
+	// wrap (MAME draws code % elements, elements = bytes/128).
+	parameter integer SPRITES_BYTES = 4194304
 ) (
 	input clk_sys,
 	input reset,
@@ -128,6 +141,14 @@ module video_macross2 #(
 
 	input [15:0] bg_xscroll, bg_yscroll,
 	input [7:0]  bg_bank,
+	// RASTER_SCROLL=1 only (tie the inputs to 0 otherwise): entry 0 of
+	// each table plus the entry at scroll_row_addr (the bitmap y of the
+	// line being drawn, 16..239 — see header). The core may serve
+	// scrollram_row/scrollramy_row one clk_sys late (registered RAM read):
+	// rd_y only changes at the hcount wrap, inside the horizontal blank.
+	input  [15:0] scrollram_0, scrollramy_0,
+	output [7:0]  scroll_row_addr,
+	input  [15:0] scrollram_row, scrollramy_row,
 
 	// pixel readback for the testbench (mirrors MAME's screen:pixel(x,y))
 	input  [8:0] rd_x,
@@ -195,13 +216,13 @@ module video_macross2 #(
 	if (!HW_ROMS) begin : g_video_rom_sim
 		reg [7:0] fgtile_rom  [0:131071];  // mcrs2j.1, 8x8x4bpp packed_msb, 32B/tile
 		reg [7:0] bgtile_rom  [0:2097151]; // bp932an.a04, 16x16 col_2x2_group, 128B/tile — 16384 tiles (14-bit code, see header)
-		reg [7:0] sprites_rom [0:4194303]; // bp932an.a07+a08, word_swap-extracted, 128B/16x16-unit
+		reg [7:0] sprites_rom [0:SPRITES_BYTES-1]; // word_swap-extracted, 128B/16x16-unit (see SPRITES_BYTES)
 		initial if (FGTILE_FILE  != "") $readmemh(FGTILE_FILE,  fgtile_rom);
 		initial if (BGTILE_FILE  != "") $readmemh(BGTILE_FILE,  bgtile_rom);
 		initial if (SPRITES_FILE != "") $readmemh(SPRITES_FILE, sprites_rom);
 		assign fgtile_rom_byte  = fgtile_rom[fg_byte_addr_sim[16:0]];
 		assign bgtile_rom_byte  = bgtile_rom[bg_byte_addr];
-		assign sprites_rom_byte = sprites_rom[spr_byte_addr[21:0]];
+		assign sprites_rom_byte = sprites_rom[spr_byte_addr];
 		assign sprites_ready = 1'b1;
 		assign bgvram_addr = bg_vram_addr_use;
 		assign txvram_addr = tx_vram_addr_use;
@@ -274,7 +295,7 @@ module video_macross2 #(
 		// BG/TX/OKI/Z80 regions are plain ROM_LOADs and stay as they are.
 		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_SPRITES)) sprites_cache_inst (
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({2'd0, spr_byte_addr ^ 22'd1}), .data(sprites_rom_byte), .ready(sprites_ready),
+			.byte_addr({1'd0, spr_byte_addr ^ 23'd1}), .data(sprites_rom_byte), .ready(sprites_ready),
 			.sd_addr(arb_addr[1]), .sd_req(arb_req[1]), .sd_busy(arb_busy[1]), .sd_valid(arb_valid[1]), .sd_dout(arb_dout[1]), .sd_dout_pair(arb_dout_pair[1])
 		);
 	end
@@ -305,7 +326,7 @@ module video_macross2 #(
 	// ------------------------------------------------------------------
 	// Sprite tile-fetch address — plain byte read, no descrambling.
 	// ------------------------------------------------------------------
-	wire [21:0] spr_byte_addr;
+	wire [22:0] spr_byte_addr;
 	wire [7:0] sprites_byte = sprites_rom_byte;
 
 	// ------------------------------------------------------------------
@@ -346,8 +367,12 @@ module video_macross2 #(
 	wire [9:0]  bm_x      = rd_x + BITMAP_X0[9:0];   // bitmap x of the pixel being drawn
 	wire [9:0]  bm_x_look = x_look + BITMAP_X0[9:0]; // ... and of the lookahead pixel
 	wire [8:0]  bm_y      = rd_y + BITMAP_Y0[8:0];
-	wire [12:0] bg_line_x = (bm_x + 13'd4096 - VIDEOSHIFT[12:0] + bg_xscroll[12:0]) % 13'd4096;
-	wire [12:0] bg_line_y = (bm_y + 13'd512 + bg_yscroll[12:0]) % 13'd512;
+	// Effective scroll for this line — see header (RASTER_SCROLL).
+	assign scroll_row_addr = bm_y[7:0];
+	wire [15:0] bg_xscroll_eff = RASTER_SCROLL ? (scrollram_0 + scrollram_row)   : bg_xscroll;
+	wire [15:0] bg_yscroll_eff = RASTER_SCROLL ? (scrollramy_0 + scrollramy_row) : bg_yscroll;
+	wire [12:0] bg_line_x = (bm_x + 13'd4096 - VIDEOSHIFT[12:0] + bg_xscroll_eff[12:0]) % 13'd4096;
+	wire [12:0] bg_line_y = (bm_y + 13'd512 + bg_yscroll_eff[12:0]) % 13'd512;
 	wire [7:0]  bg_col = bg_line_x[11:4];
 	wire [3:0]  bg_px  = bg_line_x[3:0];
 	wire [4:0]  bg_row = bg_line_y[8:4];
@@ -358,7 +383,7 @@ module video_macross2 #(
 
 	// Same derivation for the lookahead pixel (same line, so the same
 	// row/py). HW_ROMS=1 drives bgvram_addr from this one.
-	wire [12:0] bgl_line_x = (bm_x_look + 13'd4096 - VIDEOSHIFT[12:0] + bg_xscroll[12:0]) % 13'd4096;
+	wire [12:0] bgl_line_x = (bm_x_look + 13'd4096 - VIDEOSHIFT[12:0] + bg_xscroll_eff[12:0]) % 13'd4096;
 	wire [7:0]  bgl_col      = bgl_line_x[11:4];
 	wire [3:0]  bgl_half_col = bgl_line_x[3:0];
 	wire [14:0] bg_vram_addr_look = {tilerambank, bg_row[4], bgl_col, bg_row[3:0]};
@@ -621,8 +646,16 @@ module video_macross2 #(
 	// S_SPR_CHECK below, instead of a register-then-wait-then-plot
 	// sequence of three. Layout: 128 bytes per 16x16 unit, left half
 	// (cols 0-7) at +0, right half at +64, 4 bytes per row.
-	wire [31:0] spr_byte_addr_full = s_unit_code * 128 + ((s_px >= 8) ? 64 : 0) + s_py * 4 + ((s_px & 7) >> 1);
-	assign spr_byte_addr = spr_byte_addr_full[21:0];
+	// Tile code wraps modulo the ROM's element count (MAME: code %
+	// elements). Two conditional subtractions cover every reachable unit
+	// code (16-bit sprite code + at most 255 more per multi-tile sprite)
+	// for both ROM sizes without a divider; a power-of-two size wraps the
+	// same way plain truncation did.
+	localparam integer SPR_UNITS = SPRITES_BYTES / 128;
+	wire [31:0] s_unit_wrapped = (s_unit_code >= 2*SPR_UNITS) ? s_unit_code - 2*SPR_UNITS :
+	                             (s_unit_code >= SPR_UNITS)   ? s_unit_code - SPR_UNITS : s_unit_code;
+	wire [31:0] spr_byte_addr_full = s_unit_wrapped * 128 + ((s_px >= 8) ? 64 : 0) + s_py * 4 + ((s_px & 7) >> 1);
+	assign spr_byte_addr = spr_byte_addr_full[22:0];
 
 	// S_SPR_HEAD_RD: read snap_buf's 6 needed words (offsets 0,1,3,4,6,7
 	// within the current slot's 8-word record) for one sprite slot,
