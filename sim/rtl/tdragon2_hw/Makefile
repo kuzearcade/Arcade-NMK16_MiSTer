@@ -50,7 +50,7 @@ vtiming-rom:
 
 $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_tdragon2_hw.cpp $(FX68K_DIR)/fx68k.sv roms/tdragon2_ioctl.bin roms/tdragon2_vtiming.hex
 	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --top-module $(TOP) $(EXTRA_VFLAGS) \
-		+define+SIMULATION \
+		+define+SIMULATION +define+OKI_CACHE_DIAG \
 		-y $(FX68K_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl \
 		$(SOURCES) $(FX68K_DIR)/fx68k.sv $(FX68K_DIR)/fx68kAlu.sv $(FX68K_DIR)/uaddrPla.sv \
 		tb_tdragon2_hw.cpp \

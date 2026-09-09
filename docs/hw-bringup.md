@@ -696,6 +696,44 @@ Note on the MiSTer screenshot rows for the overlay: the native
 and repeat lines (the box now runs the 640x480 output mode), so decode
 overlay rows by their marker colour, never by absolute y.
 
+## Sprites stacked in the wrong order ("transparency" on trees, whale)
+
+Reported as a transparency problem on tdragon2's desert-stage palm
+trees and the ocean-stage whale, compared with a MAME snapshot. Native
+MiSTer screenshots of the desert stage showed the trees themselves
+rendered exactly like MAME's (stipple shadows and all), but the
+player's plane and its explosion drawn BEHIND the tree leaves where
+MAME has the plane on top — the plane looked as if it were showing
+through the tree.
+
+Cause: sprite-on-sprite stacking order. `nmk16spr.cpp` walks the
+table front to back under the sprite clock budget, collecting tiles,
+then draws the collected list back to front, so table entry 0 lands
+on top of everything. `video_macross2.sv` plotted slots 0..255 in one
+forward walk, so the highest enabled slot won every overlap — the
+trees (slots 16-28 in the dumped table, code $33C9, 2x2, colour $0B)
+over the plane (slots 0-8). The table was dumped from MAME at desert
+frames with a Lua `-autoboot_script` reading main RAM + $8000 (the
+sprite DMA source) — a cheap way to see what a scene really consists
+of.
+
+Fix: each pass now walks the headers forward once only to find the
+last slot inside the budget (`scan_mode`, same accounting as before),
+then draws from that slot down to 0. The scan costs ~12 cycles per
+slot, nothing next to the plotting.
+
+Verification trap: whole-frame or same-index diffs against MAME do not
+show this. Explosion animations change code every frame and the sim's
+sprite plane is a frame late, so at any frame index the two show
+different explosion phases and the "wrong" stacking can look better.
+`+define+SPR_ORDER_DEBUG` (reference sim: `make EXTRA_VFLAGS=...`)
+prints the slot order each pass draws and every write to one chosen
+pixel; that showed the new order writing smoke (slot 139) over a
+higher-slot explosion (143) exactly as MAME's rule requires, and the
+fireball MAME shows on top there being a lower slot in a later phase
+the sim had not reached yet. On hardware the check is direct: shots
+and the player's plane now pass in front of the palm trees.
+
 ## Lines through moving sprites, and flicker
 
 The draw FSM swapped the displayed sprite plane (`disp_buf`) the moment

@@ -611,6 +611,20 @@ module video_macross2 #(
 
 	integer s_slot;
 	integer clk_budget;
+	// MAME (nmk16spr.cpp) collects the table front to back under the
+	// sprite clock budget, then draws the collected list BACK to front,
+	// so table entry 0 ends up on top of everything. A single forward
+	// plotting walk gives the opposite stacking (the last entry wins
+	// every overlap) — seen on hardware as the trees of tdragon2's
+	// desert stage and the whale of its ocean stage showing through
+	// what should cover them, and vice versa. So each pass now walks
+	// the headers forward once only to find the last slot inside the
+	// budget (scan_mode), then draws from that slot down to 0.
+	reg     scan_mode;
+	integer last_slot;
+`ifdef SPR_ORDER_DEBUG
+	integer dbg_pass = 0;   // counts draw passes (S_CLEAR completions)
+`endif
 	integer s_w, s_h, s_code, s_colour, s_sx, s_sy;
 	integer s_tx, s_ty, s_px, s_py;
 	integer s_unit_code, s_pixel_x_base, s_pixel_y_base;
@@ -744,6 +758,11 @@ module video_macross2 #(
 					if (clr_idx == SCREEN_W*SCREEN_H-1) begin
 						s_slot <= 0;
 						clk_budget <= 0;
+						scan_mode <= 1'b1;
+						last_slot <= -1;
+`ifdef SPR_ORDER_DEBUG
+						dbg_pass <= dbg_pass + 1;
+`endif
 						state <= S_SPR_HEAD;
 					end else clr_idx <= clr_idx + 17'd1;
 				end
@@ -802,16 +821,32 @@ module video_macross2 #(
 						budget_after_scan = clk_budget + 16;
 						budget_after_draw = budget_after_scan + 128 * w * h;
 
-						if (budget_after_scan >= MAX_SPRITE_CLOCK) begin
-							state <= S_DONE;
+						if (scan_mode) begin
+							// Forward budget scan (MAME's collection loop): find
+							// the last slot that fits, then start the reverse draw.
+							if (budget_after_scan >= MAX_SPRITE_CLOCK ||
+							    (head_w0[0] && budget_after_draw >= MAX_SPRITE_CLOCK)) begin
+								// this slot does not fit: draw last_slot..0
+								scan_mode <= 1'b0;
+								if (last_slot < 0) state <= S_DONE;
+								else begin s_slot <= last_slot; state <= S_SPR_HEAD; end
+							end else begin
+								clk_budget <= head_w0[0] ? budget_after_draw : budget_after_scan;
+								if (head_w0[0]) last_slot <= s_slot;
+								if (s_slot == 255) begin
+									scan_mode <= 1'b0;
+									if (!(head_w0[0] || last_slot >= 0)) state <= S_DONE;
+									else begin s_slot <= head_w0[0] ? 255 : last_slot; state <= S_SPR_HEAD; end
+								end else begin s_slot <= s_slot + 1; state <= S_SPR_HEAD; end
+							end
 						end else if (!head_w0[0]) begin
-							clk_budget <= budget_after_scan;
-							if (s_slot == 255) state <= S_DONE;
-							else begin s_slot <= s_slot + 1; state <= S_SPR_HEAD; end
-						end else if (budget_after_draw >= MAX_SPRITE_CLOCK) begin
-							state <= S_DONE;
+							if (s_slot == 0) state <= S_DONE;
+							else begin s_slot <= s_slot - 1; state <= S_SPR_HEAD; end
 						end else begin
-							clk_budget <= budget_after_draw;
+`ifdef SPR_ORDER_DEBUG
+							if (dbg_pass >= 1393 && dbg_pass <= 1399)
+								$display("SPRORDER pass %0d draw slot %0d w%0d h%0d code %04x x %0d y %0d col %02x", dbg_pass, s_slot, w, h, head_w3, (int'(head_w4) & 9'h1ff), (int'(head_w6) & 9'h1ff), head_w7[4:0]);
+`endif
 							s_w <= w;
 							s_h <= h;
 							s_code <= head_w3;
@@ -863,6 +898,10 @@ module video_macross2 #(
 							plot_addr = sy * SCREEN_W + sx;
 							if (s_pix_nib != 15 && sx < SCREEN_W && sy < SCREEN_H) begin
 								sprite_plane[plot_addr + (draw_buf ? PLANE_PX : 0)] <= {1'b1, s_colour[4:0], s_pix_nib[3:0]};
+`ifdef SPR_ORDER_DEBUG
+								if (dbg_pass >= 1396 && dbg_pass <= 1398 && sx == 50 && sy == 190)
+									$display("SPRPLOT pass %0d slot %0d unit %0d tx %0d ty %0d px %0d py %0d nib %0d col %0d buf %0d", dbg_pass, s_slot, s_unit_code, s_tx, s_ty, s_px, s_py, s_pix_nib, s_colour, draw_buf);
+`endif
 							end
 							advance = 1'b1;
 						end
@@ -874,8 +913,9 @@ module video_macross2 #(
 									if (s_tx == s_w) begin
 										s_tx <= 0;
 										if (s_ty == s_h) begin
-											if (s_slot == 255) state <= S_DONE;
-											else begin s_slot <= s_slot + 1; state <= S_SPR_HEAD; end
+											// reverse draw walk: next lower slot, entry 0 last (on top)
+											if (s_slot == 0) state <= S_DONE;
+											else begin s_slot <= s_slot - 1; state <= S_SPR_HEAD; end
 										end else begin
 											s_ty <= s_ty + 1;
 											state <= S_SPR_UNIT;

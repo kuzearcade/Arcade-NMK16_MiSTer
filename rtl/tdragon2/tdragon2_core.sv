@@ -1758,6 +1758,10 @@ module tdragon2_core #(
 		reg [31:0] oki_cen_total_r = 32'd0, oki0_stall_cen_r = 32'd0, oki1_stall_cen_r = 32'd0;
 		// Extra diagnostics printed via $display at the end of the run
 		// (see tb): fetch/prefetch/miss-event counts and longest stall.
+		// OKI_CACHE_DIAG is defined only by the HW-path sim Makefiles: the
+		// hierarchical references into oki0_cache_inst below do not
+		// elaborate in an HW_ROMS=0 build, where g_oki_hw does not exist.
+`ifdef OKI_CACHE_DIAG
 		reg [31:0] oki0_fetches = 32'd0, oki0_prefetches = 32'd0, oki0_miss_events = 32'd0, oki0_stall_len = 32'd0, oki0_stall_max = 32'd0;
 		reg        oki0_pending_d = 1'b0, oki0_stall_d = 1'b0;
 		reg [31:0] oki0_addr_changes = 32'd0;
@@ -1779,6 +1783,7 @@ module tdragon2_core #(
 		end
 		final $display("OKI0 cache diag: addr changes %0d, fetches %0d (prefetch %0d), miss events %0d, longest stall %0d clk",
 			oki0_addr_changes, oki0_fetches, oki0_prefetches, oki0_miss_events, oki0_stall_max);
+`endif
 		// Golden-byte audit: when OKI1_ROM_FILE/OKI2_ROM_FILE are given to
 		// an HW_ROMS=1 build (the tdragon2_hw top does), every sample byte
 		// the chip latches is compared with the plain ROM image.
