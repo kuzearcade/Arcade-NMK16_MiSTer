@@ -2,7 +2,7 @@
   Not a game — loader for SdramTest.rbf, a minimal standalone
   real-hardware diagnostic core (see SdramTest.sv's own header). Loads
   a single already-verified ROM part (tdragon2.zip's own 1.bin, 128KB,
-  CRC d488aafa — same file this project's own releases/tdragon2.mra
+  CRC d488aafa — same file this project's own the Thunder Dragon 2 .mra in releases/
   already uses and cross-checked against mame_roms/tdragon2.zip)
   purely to exercise a REAL ioctl_download event, so this core can test
   rtl/rom_cache1.sv's own real-time read-back path (not just the raw
