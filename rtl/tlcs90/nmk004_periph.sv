@@ -405,6 +405,26 @@ module nmk004_periph (
 		endcase
 	end
 
+`ifdef VERILATOR
+	// Timer-programming trace (docs/known-issues.md NMK-17): every write
+	// to TREG0-3 / TCLK / TMOD / TRUN with a cen-cycle stamp, so the
+	// firmware's timer setup in each phase can be read off and compared
+	// with the reference's start/restart semantics. Enable with
+	// +define+TIMER_TRACE (set by the sim Makefile when wanted).
+	integer trace_cyc = 0;
+	always @(posedge clk) if (cen) begin
+		trace_cyc = trace_cyc + 1;
+`ifdef TIMER_TRACE
+		if (we && !reset && (reg_addr == 6'h14 || reg_addr == 6'h15 || reg_addr == 6'h16 || reg_addr == 6'h17 ||
+		                     reg_addr == 6'h18 || reg_addr == 6'h1a || reg_addr == 6'h1b))
+			$display("TIMERW cyc=%0d %s=%02x  [trun=%02x tmod=%02x tclk=%02x treg=%02x,%02x,%02x,%02x]", trace_cyc,
+				reg_addr == 6'h14 ? "TREG0" : reg_addr == 6'h15 ? "TREG1" : reg_addr == 6'h16 ? "TREG2" : reg_addr == 6'h17 ? "TREG3" :
+				reg_addr == 6'h18 ? "TCLK" : reg_addr == 6'h1a ? "TMOD" : "TRUN",
+				wdata, trun, tmod, tclk, treg[0], treg[1], treg[2], treg[3]);
+`endif
+	end
+`endif
+
 	// ------------------------------------------------------------------
 	// Register writes
 	// ------------------------------------------------------------------

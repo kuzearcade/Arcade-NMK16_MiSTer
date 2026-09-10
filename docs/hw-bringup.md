@@ -1086,10 +1086,22 @@ The right yardsticks are semantic: the track-start routine `$0A63`
 runs 36 times on both sides; YM instrument writes match to 0.1% over
 90 s; band correlation 0.968. Closed as benign, with numbers.
 
-One real discrepancy fell out (NMK-17): in the long timer mode the
-RTL's period alternates 113,248/113,372 cycles against MAME's
-113,320–113,496 — about 0.1% short, inaudible, and it is not known
-which side the silicon agrees with.
+One apparent discrepancy fell out (NMK-17) and was run down the same
+day: in the boot phase the Timer-1 intervals are ~113k cycles and the
+RTL's are 81 cycles (0.07%) shorter than MAME's, while the
+free-running mode agrees to 0.01 cycles (40,319.99 vs 40,320.01 =
+8 × 16 × 315). A `+define+TIMER_TRACE` in `nmk004_periph.sv` logs every
+TREG/TCLK/TMOD/TRUN write, and it shows the boot phase is not a timer
+mode: from 0.57 s the sound program stops the timers, rewrites
+TMOD=04 / TCLK=aa / TREG0..3 and restarts with TRUN=23 every ~14.1 ms
+— each "interval" is one 40,320-cycle hardware period plus ~73k
+cycles of software between restarts (its first 0.05 s also use
+T0/T1/T2 as one-shot delays, TRUN 27→25→21→20→27, whose start→stop
+spans match 8 × prescale × TREG on the RTL exactly). The hardware part
+is identical by the free-running measurement, so the 81 cycles are in
+the software part: 0.11%, the CPU core's known per-instruction
+cycle-cost residual against MAME's cycle table. Not a timer bug; the
+free-running mode was always exact. Closed.
 
 ## Sound effects corrupted on hardware: the OKI sample fetch
 
