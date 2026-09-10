@@ -5,6 +5,7 @@
 // (40MHz, /4=10MHz 68000, /5=8MHz NMK004/pixel, /10=4MHz protcpu).
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <cstdlib>
 
 #include "Vgunnail_core.h"
@@ -73,6 +74,13 @@ int main(int argc, char **argv) {
 	// handshake), with the frame number, for comparison with a MAME Lua tap.
 	FILE *audio_f = std::getenv("TB_DUMP_AUDIO") ? std::fopen(std::getenv("TB_DUMP_AUDIO"), "wb") : nullptr;
 	uint64_t audio_phase = 0;
+	// TB_DUMP_SRC=<prefix>: the four sources before the mix, same rate/format
+	// (<prefix>_fm.raw s16, _psg.raw s16 (0..765<<5), _oki0.raw/_oki1.raw s16 = 14-bit x4)
+	FILE *src_f[4] = {nullptr, nullptr, nullptr, nullptr};
+	if (std::getenv("TB_DUMP_SRC")) {
+		const char *names[4] = {"_fm.raw", "_psg.raw", "_oki0.raw", "_oki1.raw"};
+		for (int i = 0; i < 4; i++) { std::string n = std::string(std::getenv("TB_DUMP_SRC")) + names[i]; src_f[i] = std::fopen(n.c_str(), "wb"); }
+	}
 	bool log_host = std::getenv("TB_LOG_HOST") != nullptr;
 	bool prev_cmd_we = false, prev_reply_we = false;
 	int  last_reply = -1;
@@ -91,6 +99,11 @@ int main(int argc, char **argv) {
 				audio_phase -= 40000000ULL;
 				int16_t s = (int16_t)top.audio_l;
 				fwrite(&s, 2, 1, audio_f);
+				if (src_f[0]) {
+					int16_t v[4] = { (int16_t)top.dbg_fm_snd, (int16_t)(top.dbg_psg_snd << 5),
+					                 (int16_t)((int16_t)(top.dbg_oki0_snd << 2)), (int16_t)((int16_t)(top.dbg_oki1_snd << 2)) };
+					for (int i = 0; i < 4; i++) fwrite(&v[i], 2, 1, src_f[i]);
+				}
 			}
 		}
 		{
@@ -138,12 +151,23 @@ int main(int argc, char **argv) {
 		bool ym_we_now = top.dbg_ym_we;
 		if (ym_we_now && !ym_we_prev_dbg) {
 			ym_we_count++;
+			// TB_YM_TRACE=<path>: every YM2203 write as "<clk_sys cycle> <a0> <data>"
+			static FILE *ym_trace = std::getenv("TB_YM_TRACE") ? std::fopen(std::getenv("TB_YM_TRACE"), "w") : nullptr;
+			if (ym_trace) std::fprintf(ym_trace, "%llu %d %02X\n", (unsigned long long)clk_sys_ticks, (int)top.dbg_ym_waddr, (unsigned)top.dbg_ym_wdata);
 			if (log_ym)
 				std::fprintf(stderr, "cycle=%llu ym_we cs=%d dout=%02X irq_n=%d\n",
 				             (unsigned long long)clk_sys_ticks, top.dbg_ym_cs,
 				             top.dbg_ym_chip_dout, top.dbg_ym_chip_irq_n);
 		}
 		ym_we_prev_dbg = ym_we_now;
+		{	// YM2203 status/data reads by the NMK004: "R <cycle> <a0> <value>" in the same trace
+			static bool rd_prev = false;
+			bool rd_now = top.dbg_ym_cs && !ym_we_now;
+			static FILE *ym_trace_r = std::getenv("TB_YM_TRACE") ? std::fopen((std::string(std::getenv("TB_YM_TRACE")) + ".reads").c_str(), "w") : nullptr;
+			if (rd_now && !rd_prev && ym_trace_r)
+				std::fprintf(ym_trace_r, "%llu %d %02X\n", (unsigned long long)clk_sys_ticks, (int)top.dbg_ym_waddr, (unsigned)top.dbg_ym_chip_dout);
+			rd_prev = rd_now;
+		}
 
 		bool oki0_we_now = top.dbg_oki0_we;
 		if (oki0_we_now && !oki0_we_prev_dbg) {
