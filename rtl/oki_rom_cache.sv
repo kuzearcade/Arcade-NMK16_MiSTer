@@ -131,6 +131,18 @@ module oki_rom_cache #(
 	end
 `endif
 
+`ifdef VERILATOR
+	// Evidence counter for the fill-vs-in-use-line hazard above: every
+	// prefetch fill dropped because its victim became the line being read.
+	// Before the guard, each of these was a clobbered byte the chip could
+	// latch in the one-clock cen_sr32 window.
+	integer dropped_prefetch_fills = 0;
+	always @(posedge clk)
+		if (!reset && pending && sd_valid && req_is_prefetch && hit_cur && victim == idx_cur)
+			dropped_prefetch_fills = dropped_prefetch_fills + 1;
+	final $display("%m: prefetch fills dropped because the victim became the in-use line: %0d", dropped_prefetch_fills);
+`endif
+
 	integer j;
 	always @(posedge clk) begin
 		if (reset) begin
@@ -159,10 +171,26 @@ module oki_rom_cache #(
 					end
 				end
 			end else if (sd_valid) begin
-				tag[victim]   <= req_line;
-				pair[victim]  <= sd_dout_pair;
-				valid[victim] <= 1'b1;
-				used[victim]  <= 1'b1;
+				// A prefetch's victim was chosen at issue time as a line the
+				// chip was NOT reading; the fill lands many clocks later, and
+				// by then the chip may have moved onto that very line. Writing
+				// it then would corrupt the byte being read — and jt6295's
+				// latch pulse (cen_sr32, jt6295_timing.v) is registered one
+				// clock after the gated cen, so if the overwrite lands on the
+				// clock right after a cen that passed with stall=0, the chip
+				// latches the clobbered byte before stall can freeze it. A
+				// 1-in-727k event in the raphero_hw audit (docs/known-issues.md
+				// NMK-15). Drop such a fill instead; want_prefetch stays high,
+				// so the line is simply re-requested with a fresh victim (the
+				// in-use line is now excluded by the scan). Demand misses can't
+				// hit this: the chip's address is frozen by stall while they
+				// are pending, so their victim can never become the in-use line.
+				if (!(req_is_prefetch && hit_cur && victim == idx_cur)) begin
+					tag[victim]   <= req_line;
+					pair[victim]  <= sd_dout_pair;
+					valid[victim] <= 1'b1;
+					used[victim]  <= 1'b1;
+				end
 				pending       <= 1'b0;
 			end
 		end

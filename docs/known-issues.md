@@ -169,20 +169,40 @@ but not proven), `infra` (build/test/doc health).
   section.
 
 ### NMK-15 · raphero_hw sim: one OKI0 sample byte unserved at latch
-- **Cores:** Raphero · **Severity:** gap (sim-observed residual) · **Status:** open
-- **Ref:** "Sound effects corrupted on hardware: the OKI sample fetch"; `sim/rtl/raphero_hw` `make run`
-- The `raphero_hw` golden-byte audit reports `oki0 727249 latches / 1
-  wrong` (`1 of 727249 sample bytes unserved at latch`); oki1 and the
-  ROM golden-word audit are clean, and `gunnail_hw` is 0/0. Found
-  2026-09-10 while re-running the sim after the SET/RES `b,g` fix;
-  re-running the identical sim against the previous `tlcs90.sv` gives
-  the exact same counts and the same single byte, so it predates that
-  change — a 1-in-727k residual of the OKI fetch-hazard fix (which
-  took stale bytes from 37.6% to this), not a CPU-core regression.
-  Raphero's OKI `cen` is withheld 26.5% of the time by cache stalls
-  (vs 10.3% on gunnail), so it is the core most exposed to any
-  remaining fetch race. Inaudible in practice (one ADPCM nibble pair
-  in ~15 s); worth finding because the audit is otherwise exact.
+- **Cores:** Raphero, Macross2 (both have NMK112) · **Severity:** gap (sim-observed residual) · **Status:** fixed (2026-09-10; all three RBFs rebuilt, deployed and board-checked)
+- **Ref:** "NMK-15: the one OKI byte the fetch-hazard fix left" in hw-bringup; `rtl/nmk112/nmk112.sv` `hold`
+- Symptom: `raphero_hw`'s golden-byte audit reported `oki0 727249
+  latches / 1 wrong`, also "unserved at latch" — i.e. the chip latched
+  a byte while `rom_ok=0`, which the `cen` stall gating is supposed to
+  make impossible. Pre-existing (identical against the previous
+  `tlcs90.sv`).
+- Root cause (from a per-mismatch diagnostic that prints the previous
+  two clocks): one clock before the latch the address was `0x1D0000`,
+  resident, and the gated `cen` passed; at the latch it was
+  `0x170000`, not resident — same 64 KB-page offset, different bank,
+  **no cache fill on either clock**. jt6295 registers its internal
+  pulses (`cen_sr32`) one clock after the gated `cen`, so the ADPCM
+  latch lands one clock *after* the stall check; an NMK112 bank-register
+  write from the sound CPU (sampled on `clk`, not `cen`) landing on the
+  edge that sampled the passing `cen` changes the remapped address
+  combinationally inside that window. The chip's own address pipeline
+  can't do this (its updates are cen-aligned, ten clocks apart); only
+  clk-asynchronous CPU writes can, and only NMK112 bank writes are
+  (jt6295's phrase-start address load is cen4-aligned). Gunnail has no
+  NMK112 — hence its permanent 0/0.
+- Fix: `nmk112.sv` gains a `hold` input; each core drives it with "a
+  gated OKI cen is passing this clock" and a write arriving then is
+  captured and applied one clock later, after the latch (a 25 ns shift,
+  far inside MAME's own sub-sample write/fetch ordering). Decisive
+  check: the pre-fix cache with the hold alone, on the *original*
+  timeline (same 727,249 latches, same stall count), gives 0 wrong / 0
+  unserved with 40 writes deferred and 0 lost. A first hypothesis — a
+  prefetch fill overwriting the line being read in the same window —
+  was refuted by the diagnostic (no fill occurred); the guard written
+  for it is kept in `oki_rom_cache.sv` since it closes a real sibling
+  hazard, but it fired 0 times on every OKI cache in every run and was
+  not the fix (its 0-wrong result came from perturbing the audio-CPU
+  cache's timing, which is why the diagnostic was needed).
 
 ## Not shipped (for completeness)
 
