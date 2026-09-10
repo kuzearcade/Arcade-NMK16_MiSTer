@@ -1230,6 +1230,64 @@ and /dev/uinput are present) and presses keys from the command line —
 `5 5` gave CREDITS 2, `1` started player 1, `9 9 9` gave CREDITS 3,
 `2` started player 2, arrows/R and LCtrl/A moved and fired.
 
+## Gamepad Coin broken on macross2 only (not tdragon2/gunnail/raphero)
+
+Reported: macross2's Coin button did nothing on a gamepad, but worked
+fine from a keyboard, and the other three games (sharing this same
+`Macross2.rbf`/`Gunnail.rbf`/`Raphero.rbf` codebase) were unaffected.
+The keyboard-vs-gamepad split was the key clue: `Macross2.sv`'s
+keyboard path (`kb_coin1`/etc., see above) decodes PS/2 scancodes
+directly in the RTL, entirely independent of any `.mra` metadata — so
+a bug specific to gamepads but not keyboards has to live outside the
+RTL, in the `.mra`.
+
+Root cause: `Macross2.sv`'s CONF_STR declares a single, fixed 5-entry
+button list shared by both games it serves — `"J1,Button 1,Button 2,
+Button 3,Start,Coin;"` — since the core is a runtime-selected merge of
+tdragon2 (3 buttons) and macross2 (2 buttons; see `in0_i`'s own
+comment on why the extra bit is harmless to the *core*). `tdragon2.mra`
+correctly declares all 5 names in its own `<buttons>` tag,
+matching the CONF_STR 1:1. `macross2.mra` (and its two clones,
+`macross2g`/`macross2k`, both generated from `tools/gen_family_c_mra.py`)
+declared only 4 — `"Button 1,Button 2,Start,Coin"` — since macross2's
+own game logic only reads 2 buttons. But MiSTer's default gamepad
+button-to-joystick-bit assignment is positional against the `.mra`'s
+own `<buttons>` list, not against the core's CONF_STR — so with only 4
+entries, the default mapping put "Start" at ordinal position 2 and
+"Coin" at position 3, landing them on the bit positions the CORE
+actually decodes as Button 3 and Start respectively (not Start and
+Coin) — nothing at all reached the bit the core reads as real Coin.
+This is the same class of positional-count mismatch the project's own
+`docs/mra-workflow.md` warns to keep aligned, just not one this
+project had hit yet in the other direction (a shared core across two
+games with a different real button count).
+
+Fix (2026-09-10): all three macross2-family `.mra` files now declare
+the full 5-name list, adding a placeholder `"Button 3"` (unused by
+macross2's own game logic, same as the existing in0_i/in1_i comment
+already documents) with default `"A"` — matching tdragon2.mra's own
+`"Y,B,A,Start,R"` convention exactly, so both games get the same
+default gamepad face-button layout. `tools/gen_family_c_mra.py`'s
+`MACROSS2` dict updated to match and re-run to regenerate
+`macross2g`/`macross2k`'s `.mra` files (tdragon2's own clones
+unaffected — their table entry didn't change).
+
+**Not independently verified with a physical gamepad** — this
+environment has no gamepad hardware to attach to the MiSTer, only the
+`tools/mister_keys.py` virtual *keyboard*, which doesn't exercise
+HPS's own joystick-default-mapping path at all. The diagnosis (button
+count/order must match the CONF_STR the shared core declares) is
+inferred from the code-level asymmetry between macross2.mra and
+tdragon2.mra being the only meaningful input-related difference
+between two games whose CORE-side coin/start decode
+(`in0_i`/`kb_coin1`/etc.) is otherwise identical, and matches the
+reported symptom exactly (broken only on gamepad, only on macross2).
+Confirmed on the box only that the `.mra` files themselves are well-formed
+and load correctly (native screenshots, "Define macross2 buttons" OSD
+wizard opens and steps through prompts normally) — a user with a
+physical gamepad should re-test Coin specifically before considering
+this fully closed.
+
 ## Sprite-on-sprite stacking: what MAME really does (a reverted "fix")
 
 Reported as a transparency problem on tdragon2's desert-stage palm
