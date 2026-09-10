@@ -62,6 +62,7 @@ int main(int argc, char **argv) {
 	mem[0][0x1010] = 0xBB; mem[TEST_BANK][0x1010] = 0x66; // IXD read/write sentinels
 
 	Vtlcs90 top{&contextp};
+	top.cen = 1;   // tlcs90.sv gained a clock-enable input (raphero's 14 MHz path); the raw-module testbenches must tie it high or the core never steps
 	top.reset = 1;
 	top.nmi = 0;
 	top.irq_req = 0;

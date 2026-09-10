@@ -65,7 +65,9 @@ bringing the remaining games to hardware is mostly wiring and
 verification rather than new design. The Afega derivatives (Family H)
 and the early boards (Family G) are not started.
 
-`docs/hw-bringup.md` records every hardware problem found and how it
+`docs/known-issues.md` is the tracked list of open bugs, limitations
+and verification gaps in the released cores (stable IDs, status per
+item). `docs/hw-bringup.md` records every hardware problem found and how it
 was resolved, and `docs/tier2-system.md` holds the per-game simulation
 verification results.
 
