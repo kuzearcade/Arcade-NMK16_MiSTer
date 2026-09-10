@@ -12,6 +12,7 @@
 // direct PC pin.
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <cstdlib>
 
 #include "Vtdragon2_core.h"
@@ -77,6 +78,13 @@ int main(int argc, char **argv) {
 	// decimated from the 40MHz clk_sys), for comparison with MAME -wavwrite.
 	FILE *audio_f = std::getenv("TB_DUMP_AUDIO") ? std::fopen(std::getenv("TB_DUMP_AUDIO"), "wb") : nullptr;
 	uint64_t audio_phase = 0;
+	// TB_DUMP_SRC=<prefix>: the four sources before the mix, same rate/format
+	// (<prefix>_fm.raw s16, _psg.raw s16 (0..765<<5), _oki0.raw/_oki1.raw s16 = 14-bit x4)
+	FILE *src_f[4] = {nullptr, nullptr, nullptr, nullptr};
+	if (std::getenv("TB_DUMP_SRC")) {
+		const char *names[4] = {"_fm.raw", "_psg.raw", "_oki0.raw", "_oki1.raw"};
+		for (int i = 0; i < 4; i++) { std::string n = std::string(std::getenv("TB_DUMP_SRC")) + names[i]; src_f[i] = std::fopen(n.c_str(), "wb"); }
+	}
 
 	auto tick = [&]() {
 		top.clk_sys = 0;
@@ -171,6 +179,11 @@ int main(int argc, char **argv) {
 				audio_phase -= 40000000ULL;
 				int16_t s = (int16_t)top.audio_l;
 				fwrite(&s, 2, 1, audio_f);
+				if (src_f[0]) {
+					int16_t v[4] = { (int16_t)top.dbg_fm_snd, (int16_t)(top.dbg_psg_snd << 5),
+					                 (int16_t)((int16_t)(top.dbg_oki0_snd << 2)), (int16_t)((int16_t)(top.dbg_oki1_snd << 2)) };
+					for (int i = 0; i < 4; i++) fwrite(&v[i], 2, 1, src_f[i]);
+				}
 			}
 		}
 

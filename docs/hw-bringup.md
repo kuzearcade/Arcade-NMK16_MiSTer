@@ -592,6 +592,104 @@ The YM2203 (12MHz/8 = 1.5MHz) and Z80 (4MHz) enables were already right.
 `rtl/macross/macross_core.sv` (sim-only) clocks its OKI at 1MHz the same
 way and has not been checked against its own MAME config.
 
+## OKI still ~8-13 dB too quiet in the mix (2026-09-09)
+
+The "3/8" mix balance above (item 2 in the previous section) was itself
+wrong, by a wide margin — reported as "all released games sound vastly
+different from MAME, Rapid Hero worst." The earlier fix used a
+bit-width argument (MAME's OKI:FM route ratio 0.10:1.20, scaled for a
+16-bit-vs-14-bit representation) rather than a direct measurement, and
+the argument had a scale error.
+
+**How it was actually measured this time**: per-source audio taps
+(`dbg_fm_snd`, `dbg_psg_snd`, `dbg_oki0_snd`, `dbg_oki1_snd`, all
+tapped pre-mix) added to the `tdragon2`/`raphero`/`gunnail` reference
+testbenches (`TB_DUMP_SRC=<prefix>`), and MAME rendered with each
+source isolated by zeroing the others' gain in a `<mixer>` config file
+(`device_volume`/`device_channel_volume` in `<mameconfig>`, `ymsnd`
+channels 0-2 = SSG, 3 = FM). Comparing isolated FM against isolated FM,
+and the actual combined mix during OKI-only passages (silent FM/SSG)
+against MAME's own combined mix for the same passages, avoids the
+raw/scaled-tap confusion that produced the original wrong ratio:
+
+| Game | FM alone vs MAME | OKI's contribution to the real mix vs MAME |
+|---|---|---|
+| Rapid Hero | within 1.7 dB | 12.5 dB too quiet |
+| Thunder Dragon 2 | within 1.7 dB | 11.6 dB too quiet |
+| GunNail | close | 7.6 dB too quiet |
+
+FM was always correct; only OKI was wrong, badly enough that with FM
+silent (the common case at Rapid Hero's boot, since it has no music cue
+yet) the whole mix was 12.5 dB down — that game had nothing else to
+mask the gap, which is why it showed the problem most.
+
+**Fix**: `oki0_g = oki0_ext + (oki0_ext >>> 1)` (x 3/2), replacing
+`((oki0_ext <<< 1) + oki0_ext) >>> 3` (x 3/8) in `tdragon2_core.sv`,
+`raphero_core.sv` and `gunnail_core.sv` — same single 18-bit adder, no
+extra resource cost. Re-verified against MAME's real (non-isolated)
+mix, full-length renders:
+
+| Game | mean level diff (MAME-core) | mean band corr | where |
+|---|---|---|---|
+| Thunder Dragon 2 | -1.4 dB | 0.974 | sim, 10 s |
+| Thunder Dragon 2 | -0.6 dB | 0.987 | real hardware, 90 s |
+| Rapid Hero | -1.3 dB | 0.988 | sim, 100 s |
+| GunNail | +1.4 dB | 0.864 | sim, 90 s |
+| GunNail | +2.4 dB | 0.849 | real hardware, 90 s |
+
+GunNail's lower correlation is the sequencer divergence below, not a
+level problem — its level is corrected exactly as well as the other
+two. `releases/Macross2.rbf`, `Raphero.rbf` and `Gunnail.rbf` rebuilt.
+Raphero needed two Quartus seed retries (`SEED 7` succeeded) after the
+first attempt failed to route — a pre-existing near-100%-utilization
+congestion issue (Raphero was already at 82% ALM / 94% M10K with 0.27 ns
+of setup slack before this change), not caused by the new expression,
+which costs the same one adder as the old one.
+
+## GunNail: the NMK004 sound sequencer stops loading new FM
+instruments a few seconds into a track (open, not yet root-caused)
+
+Found while investigating the mix-balance issue above: GunNail's music
+sounds static/looped fairly early into a track on both the RTL sim and
+hardware, distinct from the level bug. Traced with two Lua taps
+(`:nmk004:mcu`'s program-space write tap on `0xf800-0xf801`, the
+YM2203 register/data ports) and the RTL's own equivalent debug ports
+(`dbg_ym_we`, already wired to `dbg_ym_wdata`/`dbg_ym_waddr` added this
+session) plus the existing `dbg_host_cmd_we`/`dbg_mcu_reply_we` 68000-
+to-sound-CPU latch taps:
+
+- The 68000-to-NMK004 command handshake (`0x08001E` write / `0x08000E`
+  read, a periodic `CC`/`F7` ping plus the occasional real command)
+  matches MAME's **exactly**, frame for frame, including the point
+  where it goes quiet (frame ~819-822 in the first 25 s of the attract
+  demo) — this is not a divergence, it's normal: the 68000 sends a
+  command once (`10`, "play track") and the sound CPU's own firmware
+  plays the whole track without further host pokes, in both MAME and
+  the RTL.
+- The RTL's NMK004 (TLCS-90) is not stalled: a PC-cycle trace
+  (`nmk004_cyc.trace`, cycle = `clk_sys_ticks/5`) shows 500-800
+  *distinct* program addresses executed per second, steadily, both
+  before and after the point where new YM2203 instrument-register
+  writes (`0x30-0x8F`) stop — the CPU keeps running comparable code,
+  it just stops calling whatever routine loads a new instrument.
+  Roughly 40% of every second's instructions bounce between two
+  adjacent addresses (`$01DA`/`$01DB`), unchanged before and after —
+  looks like an idle/poll pair, not the hang site.
+- MAME's own NMK004, given the identical `10` command, keeps emitting
+  fresh instrument writes for many more seconds (432 register
+  writes/s from ~16 s onward in a 25 s capture) — a real, ongoing
+  melody — while the RTL's only repeats key-on retriggers of the
+  instrument it already loaded.
+
+Net: this is a firmware-logic or data divergence inside the sound
+CPU's own track-playing routine (most likely something that should
+advance a note/step index but doesn't), not a CPU hang and not the
+host-command path. Pinning it down needs a PC-level instruction trace
+of MAME's `nmk004:mcu` compared cycle-for-cycle against the RTL's
+existing `nmk004_cyc.trace`, in the style of the earlier
+"cycle-timestamped NMK004 trace tooling" work for the protection MCU —
+not yet done.
+
 ## Sound effects corrupted on hardware: the OKI sample fetch
 
 Reported after the fixes above: music fine, sound effects noisy/garbled

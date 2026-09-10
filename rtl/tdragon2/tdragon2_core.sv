@@ -238,6 +238,11 @@ module tdragon2_core #(
 	output        dbg_z80_cen,
 
 	output        dbg_ym_we,
+	// per-source audio taps (sim level checks against MAME's routes)
+	output signed [15:0] dbg_fm_snd,
+	output        [9:0]  dbg_psg_snd,
+	output signed [13:0] dbg_oki0_snd,
+	output signed [13:0] dbg_oki1_snd,
 	output        dbg_ym_cs,
 	output  [7:0] dbg_ym_chip_dout,
 	output        dbg_ym_irq_n,
@@ -1689,7 +1694,7 @@ module tdragon2_core #(
 		.din(ym_din_latch), .addr(ym_addr_sel), .cs_n(1'b0), .wr_n(ym_wr_n),
 		.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),
 		.IOA_in(8'hFF), .IOB_in(8'hFF), .IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
-		.psg_A(), .psg_B(), .psg_C(), .fm_snd(), .psg_snd(), .snd(ym_snd), .snd_sample(),
+		.psg_A(), .psg_B(), .psg_C(), .fm_snd(dbg_fm_snd), .psg_snd(dbg_psg_snd), .snd(ym_snd), .snd_sample(),
 		.debug_view()
 	);
 
@@ -1918,8 +1923,8 @@ module tdragon2_core #(
 	// ------------------------------------------------------------------
 	wire signed [17:0] oki0_ext = {{4{oki0_snd[13]}}, oki0_snd};
 	wire signed [17:0] oki1_ext = {{4{oki1_snd[13]}}, oki1_snd};
-	wire signed [17:0] oki0_g   = ((oki0_ext <<< 1) + oki0_ext) >>> 3; // x 3/8
-	wire signed [17:0] oki1_g   = ((oki1_ext <<< 1) + oki1_ext) >>> 3;
+	wire signed [17:0] oki0_g   = oki0_ext + (oki0_ext >>> 1); // x 3/2 (was 3/8 -- measured 8-13dB quiet vs MAME's real OKI:FM balance)
+	wire signed [17:0] oki1_g   = oki1_ext + (oki1_ext >>> 1);
 	wire signed [17:0] audio_sum = {{2{ym_snd[15]}}, ym_snd} + oki0_g + oki1_g;
 	wire signed [15:0] audio_mix =
 		(audio_sum > 18'sd32767)  ? 16'sd32767  :
@@ -1927,6 +1932,8 @@ module tdragon2_core #(
 		audio_sum[15:0];
 	assign audio_l = audio_mix;
 	assign audio_r = audio_mix;
+	assign dbg_oki0_snd = oki0_snd;
+	assign dbg_oki1_snd = oki1_snd;
 
 	// ------------------------------------------------------------------
 	// Z80 read-data mux
