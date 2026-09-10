@@ -1030,7 +1030,14 @@ case, mirroring OP_INC/OP_DEC's own pattern exactly.
   Quartus: Gunnail +0.444 ns setup, Raphero +0.011 ns (positive; SEED
   23 unchanged). Both RBFs deployed, MD5-verified, boot into their
   attract demos with continuous audio (Raphero 23/25 s active from
-  load, Gunnail 21/25 s including the ROM-upload gap).
+  load, Gunnail 21/25 s including the ROM-upload gap). The full
+  sim-only sweep of every TLCS-90 user (mustang, bioship, vandyke,
+  blkheart, acrobatm, strahl, tdragon, tdragon1, hachamf, hachamfb,
+  macross, bjtwin's `run-prot` variant, gunnail, raphero — run
+  concurrently) is clean too; the three games sharing the NMK-215
+  protection firmware (gunnail, macross, bjtwin-prot) all report the
+  identical 2,824,804-instruction / last-PC `$0088` MCU run, so that
+  firmware is provably untouched by the writeback change.
 
 ## Sound effects corrupted on hardware: the OKI sample fetch
 
