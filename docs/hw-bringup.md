@@ -962,7 +962,8 @@ case, mirroring OP_INC/OP_DEC's own pattern exactly.
   run cleanly, no crashes or hangs. `gunnail_hw`/`raphero_hw` (the
   real hardware-path sims, SDRAM caches and all) re-verified: ROM and
   OKI golden-byte audits still 0 wrong.
-- **Not run**: the project's own standalone TLCS-90 opcode self-tests
+- **Were failing at the time (fixed later the same day — see the last
+  bullet)**: the project's own standalone TLCS-90 opcode self-tests
   (`sim/rtl/tlcs90/tb_*test.cpp` — banktest, blocktest, rldtest,
   muldivtest, ldarcallrtest, switest, extest) were found already
   failing on the *unmodified* tree (confirmed via `git stash`, e.g.
@@ -980,6 +981,22 @@ case, mirroring OP_INC/OP_DEC's own pattern exactly.
   path is Z80/jt03). `docs/hw-bringup.md`'s "Sound effects corrupted"
   section below and the OKI mixer-gain fix are unrelated, unaffected
   by this change.
+- **Audio band correlation re-measured on the board** (2026-09-10,
+  later the same day, shipped `Gunnail.rbf`, attract from boot, MAME
+  `-wavwrite` 100 s vs a 110 s `arecord` capture, `tools/audio_compare.py
+  --offset-search 20`): 0.919 mean band corr / 0.951 envelope over the
+  full 100 s at −1.1 dB, and **0.968 / 0.997 over the first 60 s** at
+  −1.3 dB — up from 0.849 / +2.4 dB before the two CPU fixes, and now
+  in Thunder Dragon 2's own hardware range (0.987). The 100 s figure is
+  lowered by the attract demo's known post-~1-minute divergence from
+  MAME (RNG/timing, see the GunNail section), not by the sound path.
+- **The TLCS-90 standalone self-tests were fixed the same day** (see
+  `docs/known-issues.md` NMK-4): they had been silently failing since
+  `tlcs90.sv` gained its `cen` input, because the raw-module
+  testbenches never drove it. With `top.cen = 1` all eight pass —
+  including `switest`'s "F restored by RETI (CF=1,XCF=1)", which
+  exercises the XCF path this fix changed. None of them cover the two
+  bugs themselves (NMK-5).
 
 ## Sound effects corrupted on hardware: the OKI sample fetch
 

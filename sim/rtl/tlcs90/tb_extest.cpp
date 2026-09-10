@@ -41,6 +41,7 @@ int main(int argc, char **argv) {
 	mem[0x2100] = 0x78; mem[0x2101] = 0x56; // EX (0x2100),BC's memory operand: 0x5678
 
 	Vtlcs90 top{&contextp};
+	top.cen = 1;   // tlcs90.sv gained a clock-enable input (raphero's 14 MHz path); the raw-module testbenches must tie it high or the core never steps
 	top.reset = 1;
 	top.nmi = 0;
 	top.irq_req = 0;
