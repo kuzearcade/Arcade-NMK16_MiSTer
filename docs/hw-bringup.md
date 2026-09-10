@@ -774,6 +774,77 @@ instruction costs) or finding an alternative cause if it doesn't hold
 up, and then the actual fix in either `tlcs90.sv`'s per-opcode cycle
 table or `nmk004_periph.sv`'s timer logic.
 
+### Third pass: the timer-drift theory is disproven; the real signature narrows the field
+
+Did the confirmation above. Counted every PC hit on the TLCS-90's
+interrupt vector addresses (`0x10 + irq*8` per `tlcs90.cpp`'s own
+`take_interrupt`, cross-checked against its own `tlcs90_e_irq` enum —
+`NMI=0x18`, `INTT0=0x30`, `INTT1=0x38`, `INTT2=0x40`, `INTT3=0x48`,
+`INTT4=0x50`, `INTT5=0x60`) in both the MAME oracle and RTL cycle
+traces, per second, across the full 20 s:
+
+- The watchdog NMI (from the 68000's own `nmk004_x0016_w` keepalive,
+  `0x080016/17`) fires **1094 times in both traces**, at 56-57/s
+  throughout, matching frame rate exactly.
+- GunNail's music firmware uses **Timer 1** (not T0/T4/T5 as first
+  guessed): **3587 (MAME) vs 3584 (RTL)** fires over 20 s, ~198-199/s in
+  both from ~3 s onward — a 3-event difference over 20 seconds is noise,
+  not drift, and both stay in lockstep straight through the divergence
+  point with no widening gap afterward.
+
+**This directly disproves the timer-drift theory** — the peripheral
+that was the leading suspect is not where the problem is; both its rate
+and its phase already track MAME almost exactly, including for the 5+
+seconds *after* 14.7 s where the instruction-level PC trace has already
+diverged. So whatever branches differently at 14.7-14.85 s isn't
+reading a timer value that disagrees between the two sides.
+
+Re-examined the actual scale of the divergence to make sure "timer
+drift" was even the right shape of theory to begin with: a fresh 90 s
+YM-register-write count, per second, RTL vs. a fresh MAME capture of
+the identical scenario (first independently re-run twice to rule out
+attract-mode non-determinism — MAME reproduced **byte-for-byte
+identical**, 0-line diff, so that's not a factor):
+
+| | total instrument-reg writes over 90s | seconds with any activity |
+|---|---|---|
+| MAME | 20,160 | 76 of 90 |
+| RTL | 2,832 | 10 of 90, in short isolated bursts |
+
+Not a small phase shift or an occasional missed tick — MAME keeps the
+music engine continuously active for the rest of the captured run
+while the RTL's mostly falls silent apart from a few bursts. That rules
+out "benign, self-correcting async jitter" as an explanation too (which
+would show up as a *differently-ordered but similarly active* output,
+not a near-total drop in activity) and confirms the user-audible
+"static/stalled music" symptom is a real, substantial divergence, not
+a rounding artifact.
+
+Also checked, and already fine: the actual host command bytes
+exchanged at the critical moment (`0x08001E`/`0x08000E`, the "play
+track" `$10` command around frame ~819-822) are bit-for-bit identical
+between MAME and the RTL — this was established in the first pass
+above and re-confirmed here. And MAME's own `nmk004_device::write()`
+(the handler for this specific register, unlike the deliberately
+unsynchronized `nmk004_x0016_w` NMI line) does call
+`machine().scheduler().synchronize()`, so this specific write is not
+the same already-documented "scheduler-arbitrary" class of gap that
+was found and closed as unfixable for mustang's NMI line.
+
+**Where this leaves it**: CPU opcode timing (verified independently to
+2/7779 residual for mustang), timer/NMI firing rate and phase, and the
+host command content are all now checked clean. The divergence is a
+real, localized, substantial event right at 14.7-14.85 s that these
+checks don't explain — most likely a genuine state difference (a
+register or RAM byte) that traces back to the identical-outcome but
+different-iteration-count boot poll loop found in the first pass, or a
+race at this specific moment not yet identified. Pinning it down needs
+register/RAM-state-level tracing (not just PC) around 14.6-14.9 s on
+both sides — a new capability, not yet built. No fix was attempted this
+pass: the leading theory it would have targeted (the timer peripheral)
+is now known not to be the cause, and guessing at a different fix
+without first finding the actual mechanism isn't warranted.
+
 ## Sound effects corrupted on hardware: the OKI sample fetch
 
 Reported after the fixes above: music fine, sound effects noisy/garbled
