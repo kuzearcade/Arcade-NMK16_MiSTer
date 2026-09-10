@@ -1812,24 +1812,33 @@ module tlcs90 (
 
 						OP_BIT: f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | (8'd1<<HF) | sz_bit8(val2[7:0] & (8'd1 << r1[2:0]));
 						OP_SET, OP_RES: begin : setres_blk
-							// mode2==M_R8 is this opcode group's compact
-							// "bit n,A / res n,A / set n,A" form — the
-							// register operand is *implicit* (decode never
-							// assigns d2_r2e for it, unlike every genuine
-							// r2-selected LD/ADD/etc form, so it defaults
-							// to 0/R8_B, not A), the same way OP_INC/DEC
-							// check mode1==M_R8 to write back to a register
-							// instead of memory. Missing here before: SET/
+							// mode2==M_R8 is the 0xF8+g prefix group's
+							// "bit b,g / res b,g / set b,g" form (reference:
+							// `OP( RES,4 ) BIT8( 1, b1 - 0xb0 ) R8( 2, b0 - 0xf8 )`
+							// — the register operand is g, the prefix
+							// byte's own embedded register code, NOT
+							// implicitly A). Decode leaves d2_r2e alone for
+							// this group; S_PFX_SEL's PFX_G8 fill puts gg
+							// into r2 (`r2 <= {12'h0, gg}`), and val2 is
+							// then r8_read(r2[2:0]) — so r2[2:0] is both
+							// where the value came from and where it must
+							// go back. Two bugs lived here in turn: (1) SET/
 							// RES always wrote to eff2/dout regardless of
-							// mode2, silently discarding the result for
-							// the register form entirely (found via a
-							// register-state trace diff against a MAME
-							// oracle capture, docs/hw-bringup.md's GunNail
-							// investigation — `res 7,a` left A unchanged).
+							// mode2, discarding the register form's result
+							// entirely (found via a register-state trace
+							// diff against a MAME oracle, docs/hw-bringup.md's
+							// GunNail investigation — `res 7,a` left A
+							// unchanged); (2) the first fix wrote back to
+							// R8_A unconditionally, which is right for the
+							// only form GunNail uses (g==A, prefix 0xFE) and
+							// wrong for every other g — caught by
+							// sim/rtl/tlcs90/tb_flagtest.cpp (`set 5,b`
+							// landing in A). Same shape as OP_INC/OP_DEC's
+							// mode1==M_R8 register writeback.
 							reg [7:0] rv;
 							rv = op == OP_SET ? (val2[7:0] | (8'd1 << r1[2:0])) : (val2[7:0] & ~(8'd1 << r1[2:0]));
 							if (mode2 == M_R8) begin
-								a_or_r8_write(R8_A[2:0], rv);
+								a_or_r8_write(r2[2:0], rv);
 								state <= S_FETCH_OP;
 							end else begin
 								wb_val <= {8'h00, rv};

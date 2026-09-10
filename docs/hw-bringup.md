@@ -995,8 +995,42 @@ case, mirroring OP_INC/OP_DEC's own pattern exactly.
   `tlcs90.sv` gained its `cen` input, because the raw-module
   testbenches never drove it. With `top.cen = 1` all eight pass —
   including `switest`'s "F restored by RETI (CF=1,XCF=1)", which
-  exercises the XCF path this fix changed. None of them cover the two
-  bugs themselves (NMK-5).
+  exercises the XCF path this fix changed. None of them covered the two
+  bugs themselves, so a dedicated gate was added next (NMK-5).
+- **`tb_flagtest` added, and it found a third bug** (2026-09-10,
+  `sim/rtl/tlcs90/gen_flagtest_rom.py` + `tb_flagtest.cpp`, `make
+  run-flagtest`, folded into `make run-selftests`): nine checks — XCF
+  set on a zero INC/DEC result and cleared on a non-zero one with CF
+  preserved, INCX/DECX firing exactly once across a memory pair (a
+  never-firing and an always-firing INCX each fail a distinct check),
+  and SET/RES `b,g` writing back to the register. The last one is
+  deliberately run on B and C as well as A, with bit choices that would
+  visibly corrupt A if the writeback went there regardless of `g` —
+  and it did: the SET/RES fix above wrote back to `R8_A`
+  unconditionally, which is right for prefix `0xFE` (`g=A`, the only
+  form GunNail's firmware uses) and wrong for `0xF8..0xFD`. The
+  reference decode is `R8( 2, b0 - 0xf8 )` — the prefix byte's own
+  register — and the RTL's `S_PFX_SEL` already fills `r2 <= gg` and
+  `val2 <= r8_read(r2)` for this group, so `r2[2:0]` was both where the
+  value came from and where it had to go back. Negative controls: the
+  RTL from before the GunNail fixes fails 6/9 checks (both XCF flag
+  checks, both INCX/DECX "hi ran once" checks, both SET/RES checks);
+  the write-to-A version fails exactly the two register-writeback
+  checks; the current RTL passes all nine and the other eight
+  self-tests. No shipped game is known to execute `set/res b,g` with
+  `g≠A`, so no behaviour change is expected on the board — Raphero and
+  Gunnail were rebuilt anyway so `releases/` matches the RTL.
+  Verification of that rebuild: `gunnail_hw` sim ROM audit 13.3M
+  words / 0 wrong, OKI audits 0/0, NMK-215 still emitting its 2 NMK214
+  config writes; `raphero_hw` ROM audit 18.9M / 0 wrong, OKI1 0 wrong,
+  OKI0 1 wrong of 727,249 — and re-running that exact sim against the
+  previous `tlcs90.sv` gives identical instruction counts and the same
+  single byte, so it is pre-existing (now tracked as NMK-15), and the
+  CPU change has no observable effect on Raphero's execution at all.
+  Quartus: Gunnail +0.444 ns setup, Raphero +0.011 ns (positive; SEED
+  23 unchanged). Both RBFs deployed, MD5-verified, boot into their
+  attract demos with continuous audio (Raphero 23/25 s active from
+  load, Gunnail 21/25 s including the ROM-upload gap).
 
 ## Sound effects corrupted on hardware: the OKI sample fetch
 
