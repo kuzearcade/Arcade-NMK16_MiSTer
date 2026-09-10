@@ -1272,21 +1272,17 @@ default gamepad face-button layout. `tools/gen_family_c_mra.py`'s
 `macross2g`/`macross2k`'s `.mra` files (tdragon2's own clones
 unaffected — their table entry didn't change).
 
-**Not independently verified with a physical gamepad** — this
-environment has no gamepad hardware to attach to the MiSTer, only the
-`tools/mister_keys.py` virtual *keyboard*, which doesn't exercise
-HPS's own joystick-default-mapping path at all. The diagnosis (button
-count/order must match the CONF_STR the shared core declares) is
-inferred from the code-level asymmetry between macross2.mra and
+This environment has no gamepad hardware to attach to the MiSTer, only
+the `tools/mister_keys.py` virtual *keyboard*, which doesn't exercise
+HPS's own joystick-default-mapping path at all, so the diagnosis
+(button count/order must match the CONF_STR the shared core declares)
+was inferred from the code-level asymmetry between macross2.mra and
 tdragon2.mra being the only meaningful input-related difference
 between two games whose CORE-side coin/start decode
-(`in0_i`/`kb_coin1`/etc.) is otherwise identical, and matches the
+(`in0_i`/`kb_coin1`/etc.) is otherwise identical, plus matching the
 reported symptom exactly (broken only on gamepad, only on macross2).
-Confirmed on the box only that the `.mra` files themselves are well-formed
-and load correctly (native screenshots, "Define macross2 buttons" OSD
-wizard opens and steps through prompts normally) — a user with a
-physical gamepad should re-test Coin specifically before considering
-this fully closed.
+**Confirmed fixed by the user with a real gamepad, 2026-09-10** —
+Coin now works on macross2 with the corrected `.mra` files.
 
 ## Sprite-on-sprite stacking: what MAME really does (a reverted "fix")
 
