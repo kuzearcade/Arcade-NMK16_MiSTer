@@ -62,14 +62,24 @@ but not proven), `infra` (build/test/doc health).
   bugs found via register tracing.
 
 ### NMK-5 · No regression test for the XCF-on-INC/DEC and SET/RES-on-register fixes
-- **Cores:** Gunnail, Raphero · **Severity:** infra · **Status:** open
-- **Ref:** "Fourth pass…"; `sim/rtl/tlcs90/gen_*_rom.py` for the pattern
-- The GunNail sequencer fix touched `szhv_inc8()/szhv_dec8()` and the
-  `OP_SET/OP_RES` writeback. `switest` happens to check XCF survives
-  RETI, but nothing asserts `dec a` sets XCF on a zero result, `INCX`
-  chaining, or that `res n,a` writes back to A. Add a
-  `gen_flagtest_rom.py` + `tb_flagtest.cpp` in the existing style so the
-  shared CPU core has a gate for exactly the paths that were wrong.
+- **Cores:** Gunnail, Raphero · **Severity:** infra · **Status:** fixed (unreleased until the Raphero/Gunnail RBF rebuild lands — see below)
+- **Ref:** "Fourth pass…"; `sim/rtl/tlcs90/gen_flagtest_rom.py`, `tb_flagtest.cpp`, `make run-flagtest` / `make run-selftests`
+- Added 2026-09-10: nine checks covering XCF recompute on 8-bit
+  INC/DEC (set on zero, cleared on non-zero, CF preserved), INCX/DECX
+  chaining in both the fires and must-not-fire directions on a memory
+  pair, and SET/RES `b,g` register writeback for `g=A` *and* `g=B/C`.
+- **Writing the test found a third bug:** the first GunNail fix wrote
+  the SET/RES `b,g` result back to A unconditionally. That is right for
+  prefix `0xFE` (`g=A`, the only form GunNail's firmware uses) and wrong
+  for `0xF8..0xFD` (`g=B..L`) — MAME's decode is
+  `R8( 2, b0 - 0xf8 )`, i.e. the prefix byte's own register, which the
+  RTL already loads into `r2`/`val2` but was not writing back to.
+  Fixed in `tlcs90.sv` (`a_or_r8_write(r2[2:0], rv)`). Negative
+  controls: the pre-fix RTL fails 6/9 checks, the write-to-A RTL fails
+  exactly the two register-writeback checks, current RTL passes all
+  nine plus the other eight self-tests. No shipped game is known to
+  execute `set/res b,g` with `g≠A`, so no audible/visible change is
+  expected — the RBFs are rebuilt so `releases/` matches the RTL.
 
 ## Gunnail
 
@@ -150,6 +160,22 @@ but not proven), `infra` (build/test/doc health).
   2 still lists the Orientation OSD option as "the remaining
   follow-up" — both resolved. The body of the doc is current; only
   these summary paragraphs lag.
+
+### NMK-15 · raphero_hw sim: one OKI0 sample byte unserved at latch
+- **Cores:** Raphero · **Severity:** gap (sim-observed residual) · **Status:** open
+- **Ref:** "Sound effects corrupted on hardware: the OKI sample fetch"; `sim/rtl/raphero_hw` `make run`
+- The `raphero_hw` golden-byte audit reports `oki0 727249 latches / 1
+  wrong` (`1 of 727249 sample bytes unserved at latch`); oki1 and the
+  ROM golden-word audit are clean, and `gunnail_hw` is 0/0. Found
+  2026-09-10 while re-running the sim after the SET/RES `b,g` fix;
+  re-running the identical sim against the previous `tlcs90.sv` gives
+  the exact same counts and the same single byte, so it predates that
+  change — a 1-in-727k residual of the OKI fetch-hazard fix (which
+  took stale bytes from 37.6% to this), not a CPU-core regression.
+  Raphero's OKI `cen` is withheld 26.5% of the time by cache stalls
+  (vs 10.3% on gunnail), so it is the core most exposed to any
+  remaining fetch race. Inaudible in practice (one ADPCM nibble pair
+  in ~15 s); worth finding because the audit is otherwise exact.
 
 ## Not shipped (for completeness)
 

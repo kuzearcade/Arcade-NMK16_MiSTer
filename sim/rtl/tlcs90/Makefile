@@ -171,5 +171,25 @@ $(EXTEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_extest.cpp
 run-extest: $(EXTEST_DIR)/Vtlcs90
 	./$(EXTEST_DIR)/Vtlcs90
 
+# XCF on 8-bit INC/DEC, INCX/DECX chaining, SET/RES b,g register
+# writeback — the regression gate for the GunNail sequencer CPU fixes
+# (docs/known-issues.md NMK-5; gen_flagtest_rom.py for the derivation).
+FLAGTEST_DIR := obj_dir_flagtest
+
+$(FLAGTEST_DIR)/Vtlcs90: $(CORE_DIR)/tlcs90.sv tb_flagtest.cpp
+	verilator --cc --exe --build -Wall -Wno-fatal --top-module tlcs90 \
+		-y $(CORE_DIR) \
+		$(CORE_DIR)/tlcs90.sv \
+		tb_flagtest.cpp \
+		-o Vtlcs90 \
+		--Mdir $(FLAGTEST_DIR)
+
+run-flagtest: $(FLAGTEST_DIR)/Vtlcs90
+	./$(FLAGTEST_DIR)/Vtlcs90
+
+# Every standalone self-test in one go (the wrapper-based run-irqtest /
+# run-nmk004 are trace generators, not pass/fail, and are left out).
+run-selftests: run run-banktest run-blocktest run-rldtest run-muldivtest run-ldarcallrtest run-switest run-extest run-flagtest
+
 clean:
-	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) $(RLDTEST_DIR) $(MULDIVTEST_DIR) $(LDARCALLRTEST_DIR) $(SWITEST_DIR) $(EXTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace
+	rm -rf $(OBJ_DIR) $(IRQTEST_DIR) $(BANKTEST_DIR) $(BLOCKTEST_DIR) $(RLDTEST_DIR) $(MULDIVTEST_DIR) $(LDARCALLRTEST_DIR) $(SWITEST_DIR) $(EXTEST_DIR) $(FLAGTEST_DIR) tlcs90_rtl.trace nmk004_rtl.trace irqtest.trace
