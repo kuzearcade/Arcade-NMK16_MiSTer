@@ -1560,6 +1560,27 @@ the frame of latency would need a scanline (line-buffer) sprite
 renderer. Hardware: the same demo instant that showed the cut through a
 large explosion before renders it continuous now.
 
+**Correction (2026-09-10, docs/known-issues.md NMK-1):** the "one frame
+after MAME and the real board" above is wrong, in both halves. MAME
+keeps *two* table copies — `sprite_dma()` in `nmk16.cpp` does
+`old2 <- old <- mainram` at line 242 ("2 buffers confirmed on PCB")
+and `screen_update_macross`, used by every shipped game, draws `old2`
+at VBOUT (line 240, before that frame's DMA) — so MAME's frame *j*
+shows the table from DMA *j-2*, the same two-stage pipeline as this
+whole-plane renderer. Measured directly: a Verilator-only `SPRLAT`
+tag in `video_macross2.sv` numbers every DMA trigger and carries the
+number through snapshot, pass and swap, and reports lag 2 on 59/59
+steady-state frames. Then sim frames (`TB_DUMP_PPM`) against MAME
+snapshots taken at *exact* frame numbers (a Lua `frame_done` hook
+calling `video:snapshot()`, since `-str` is seconds, not frames): sim
+frame *S* equals MAME frame *S-3* with 0 differing pixels on half the
+frames and 126-141 px (one 14-px HUD text column, NMK-16) on the rest,
+against 3,000-4,000 px for a one-frame motion step. The 94.7% / 96.7%
+figures above are this same comparison at an alignment off by one
+frame (offset 2 gives 2,932 px = 96.6%); the tilemaps "matching" at
+that offset was a scene that barely scrolls. Moving sprites are on the
+right frame. No line-buffer renderer is needed.
+
 ## Rapid Hero / Arcadia (the "Raphero" rbf)
 
 `rtl/raphero/raphero_core.sv` is the second hardware core, built on
@@ -1892,8 +1913,11 @@ the tree runs clean in simulation on the current core.
 
 What is still open is tracked, one entry per item with a stable ID and
 status, in `docs/known-issues.md` — that file, not this paragraph, is
-the authoritative list. As of 2026-09-10 the items a player could
-notice are the one-frame sprite latency inherent to the whole-plane
-sprite renderer (NMK-1) and the untuned HSync/VSync placement (NMK-2);
-the rest are verification gaps and build-margin notes (Raphero is at
-the edge of the device, NMK-10).
+the authoritative list. As of 2026-09-10 the only item a player could
+notice is the untuned HSync/VSync placement (NMK-2) — the supposed
+one-frame sprite latency (NMK-1) turned out on measurement to be an
+off-by-one in the old frame comparison; the core's sprite pipeline
+matches MAME's two-buffer PCB behaviour exactly, and the sole frame
+residual is a 14-px blinking HUD strip (NMK-16). The rest are
+verification gaps and build-margin notes (Raphero is at the edge of
+the device, NMK-10).
