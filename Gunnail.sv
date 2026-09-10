@@ -64,14 +64,17 @@ localparam CONF_STR = {
 	"H0O[17],Flip screen,Off,On;",
 	// Sync-position trims for CRT/analog users (docs/known-issues.md
 	// NMK-2): move the H/V sync pulses within blanking while the active
-	// picture (DE) stays put, so the image shifts on a CRT; 0 = the
-	// placement shipped before these options existed. Positive = picture
-	// right / down (sync earlier). H: ±16 px in 2-px steps, listed in
-	// two's-complement order so the 4-bit value 0 is the default. V: only
-	// 4 lines of vblank precede the current vsync (active ends at line
-	// 239, vsync starts at 244), so the list is 0..+4 then -8..-1.
+	// picture (DE) stays put, so the image shifts on a CRT. Positive =
+	// picture right / down (sync earlier). H: ±16 px in 2-px steps,
+	// listed in two's-complement order so the 4-bit value 0 is the
+	// default = the original placement (hsync at 440). V: ±20 lines,
+	// listed 0..+20 then -20..-1 so the 6-bit value 0 is the default;
+	// the vsync is nominally re-centred in the 54-line vblank (start at
+	// row 264 instead of the original 244, which had only 4 blank lines
+	// before it and could not take a ±20 range) — "+20" therefore
+	// reproduces the pre-2026-09-10 placement exactly.
 	"O[21:18],H Shift,0,+2,+4,+6,+8,+10,+12,+14,-16,-14,-12,-10,-8,-6,-4,-2;",
-	"O[25:22],V Shift,0,+1,+2,+3,+4,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"O[27:22],V Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
 	// Autofire on button 1: Off, or a frames-on/frames-off pattern
 	// clocked by the game's own vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3,
 	// 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1 (this game has no third button
@@ -361,24 +364,25 @@ assign AUDIO_R = audio_r;
 // hblank/vblank windows video_timing.sv defines (HTOTAL=512/HACTIVE
 // 28-412, VTOTAL=278/VACTIVE 16-240).
 // ------------------------------------------------------------------
-// H/V Shift (status[21:18], [25:22] — see CONF_STR): the sync pulses
+// H/V Shift (status[21:18], [27:22] — see CONF_STR): the sync pulses
 // move, the DE window does not. Positive = picture right/down = sync
-// earlier, so the start is 440/244 MINUS the shift. Ranges keep both
-// pulses inside blanking (hblank 412..511, vblank 240..277 of the
-// 512x278 raster): hsync start 426..456 (+32), vsync start 240..252 (+3).
+// earlier, so the start is the nominal MINUS the shift. H: nominal 440,
+// range 426..456 (+32), inside hblank 412..511. V: the 54-line vblank is
+// rows 240..277 followed by rows 0..15 of the next frame, so it is
+// handled as a blank-relative index (240..277 -> 0..37, 0..15 -> 38..53;
+// active rows 16..239 map to 54..277 and can never match). Nominal
+// vsync start = relative 24 = row 264, range 4..44 = row 244 (the
+// original placement, now "+20") .. row 6 of the next frame, pulse
+// end <= 47, always inside blanking.
 wire  [3:0] hshift_sel = status[21:18];
 wire  [9:0] hshift_px  = {{5{hshift_sel[3]}}, hshift_sel, 1'b0};   // two's complement x2: -16..+14
-reg   [9:0] vshift_ln;                                              // 0..+4, then -8..-1
-always @* case (status[25:22])
-	4'd1: vshift_ln = 10'd1;   4'd2: vshift_ln = 10'd2;   4'd3: vshift_ln = 10'd3;   4'd4: vshift_ln = 10'd4;
-	4'd5: vshift_ln = -10'd8;  4'd6: vshift_ln = -10'd7;  4'd7: vshift_ln = -10'd6;  4'd8: vshift_ln = -10'd5;
-	4'd9: vshift_ln = -10'd4;  4'd10: vshift_ln = -10'd3; 4'd11: vshift_ln = -10'd2; 4'd12: vshift_ln = -10'd1;
-	default: vshift_ln = 10'd0;
-endcase
+wire  [5:0] vshift_sel = status[27:22];                              // 0..20 = 0..+20, 21..40 = -20..-1
+wire  [9:0] vshift_ln  = (vshift_sel <= 6'd20) ? {4'd0, vshift_sel} : ({4'd0, vshift_sel} - 10'd41);
+wire  [9:0] vrel   = (vcount_core >= 10'd240) ? (vcount_core - 10'd240) : (vcount_core + 10'd38);
+wire  [9:0] vs_rel = 10'd24 - vshift_ln;
 wire [9:0] hs_start = 10'd440 - hshift_px;
-wire [9:0] vs_start = 10'd244 - vshift_ln;
 wire hsync = (hcount_core >= hs_start) && (hcount_core < hs_start + 10'd32);
-wire vsync = (vcount_core >= vs_start) && (vcount_core < vs_start + 10'd3);
+wire vsync = (vrel >= vs_rel) && (vrel < vs_rel + 10'd3);
 
 assign CLK_VIDEO = clk_sys;
 assign CE_PIXEL  = ce_pix_core;

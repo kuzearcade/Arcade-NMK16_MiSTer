@@ -49,10 +49,14 @@ but not proven), `infra` (build/test/doc health).
   documented anywhere this project has sourced). Cosmetic on HDMI;
   matters more for direct/analog video users.
 - Each core now has `H Shift` (±16 px, 2-px steps) and `V Shift`
-  (+4 / −8 lines) OSD trims that move the sync pulses inside blanking
-  with the picture (DE) fixed; 0 = the old placement. Next step is on
-  real CRT equipment: find the settings that centre the picture, then
-  fold them into the constants so 0 becomes the measured baseline.
+  (±20 lines) OSD trims that move the sync pulses inside blanking with
+  the picture (DE) fixed. H's 0 is the original placement. V's range
+  was widened from +4/−8 to ±20 the same day, which required
+  re-centring the nominal vsync in the 54-line vblank (row 264 instead
+  of the original 244, which had only four blank lines before it); the
+  original placement is exactly `V Shift +20`. Next step is on real
+  CRT equipment: find the settings that centre the picture, then fold
+  them into the constants so 0 becomes the measured baseline.
 
 ### NMK-3 · Residual TLCS-90 register divergence vs MAME (NMI phase)
 - **Cores:** Gunnail, Raphero (shared `tlcs90.sv`) · **Severity:** gap · **Status:** closed — characterized as a benign boot-phase timer phase offset (2026-09-10)

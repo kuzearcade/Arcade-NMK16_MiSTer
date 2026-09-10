@@ -1384,17 +1384,30 @@ guess, each core now exposes the position as two OSD trims (added
 
 - `H Shift` (status[21:18]): 0, +2 .. +14, -16 .. -2 px, listed in
   two's-complement order so the 4-bit value 0 is the shipped
-  placement. `V Shift` (status[25:22]): 0, +1 .. +4, -8 .. -1 lines.
+  placement (hsync at 440). `V Shift` (status[27:22]): 0, +1 .. +20,
+  -20 .. -1 lines (41 entries, 6 bits, value 0 = default).
 - Mechanism: only the sync pulses move; the DE window (the picture)
   does not. Positive = picture right / down on the CRT = sync
-  *earlier*, i.e. start = 440/244 minus the shift. On a CRT, moving
+  *earlier*, i.e. start = nominal minus the shift. On a CRT, moving
   the sync earlier makes the retrace happen sooner, so the same
   active video lands further right/down on the tube.
-- Ranges are chosen so no setting can push a pulse into active video:
-  hsync start 426..456 (+32 wide) stays inside hblank 412..511; vsync
-  start 240..252 (+3 wide) stays inside vblank 240..277. V is
-  asymmetric because only four blank lines precede the current vsync
-  (the pulse sits near the start of vblank) while thirty follow it.
+- H range: hsync start 426..456 (+32 wide) stays inside hblank
+  412..511 for every setting.
+- V range and the re-centred nominal (second pass, same day): the
+  first cut kept the original vsync start at row 244 and could only
+  offer +4 / −8, because only four blank lines precede row 244 (active
+  video ends at 239). A ±20 range asked for on the CRT side cannot fit
+  around that zero, so the nominal pulse is now placed in the middle of
+  the 54-line vblank — which is one contiguous interval, rows 240..277
+  followed by rows 0..15 of the next frame — at row 264. The RTL works
+  in a blank-relative index (rows 240..277 → 0..37, rows 0..15 → 38..53;
+  active rows map to 54..277 and can never match), nominal 24, range
+  4..44 = row 244 .. row 6 of the next frame, pulse end ≤ 47: every
+  setting stays in blanking, and the pulse may straddle the frame wrap.
+  Consequence, stated plainly: the CRT default moved 20 lines compared
+  with the previous build (picture 20 lines further *up* the tube at
+  V Shift 0); the previous placement is exactly `V Shift +20`. HDMI is
+  unaffected either way (DE-framed).
 - Persistence is the MiSTer's own (OSD > System > Save settings).
   Once a good baseline is found on a CRT, fold it into the constants
   and keep the trims at 0 = that new baseline.
@@ -1408,6 +1421,17 @@ guess, each core now exposes the position as two OSD trims (added
   leave alone. So the trims are analog-only by construction; the CRT
   measurement itself has to happen on real CRT equipment (this
   environment captures HDMI only).
+- Second pass (±20 V range, re-centred nominal) verified the same way:
+  all three RBFs rebuilt first time (Macross2 +0.335 / Raphero +0.296
+  / Gunnail +0.403 ns), deployed, MD5-checked; on tdragon2 the 41-entry
+  V list cycles 0 → +20 (twenty presses) → −20 (one more) → 0 (twenty
+  more), i.e. the list closes exactly; HDMI framing unchanged at both
+  extremes — at −20 the lit window is x 58..541 / y 26..453 (a
+  black-background title, identical to every earlier dark-scene
+  capture), at +20 it is 21..617 / 16..463 (a bright full-window
+  scene, identical to the earlier bright-scene capture at shift 0 —
+  the capture box bleeds a few pixels at the edges on bright content),
+  where a 20-line source shift would be ~43 px. Box left at 0/0.
 
 ## Flip screen option (all four games, upside-down over HDMI)
 
