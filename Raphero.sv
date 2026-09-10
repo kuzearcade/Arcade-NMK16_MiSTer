@@ -59,6 +59,13 @@ localparam CONF_STR = {
 	// framebuffer path is unavailable. MiSTer keeps status bits across
 	// sessions through the OSD's own settings save.
 	"H0O[9:8],Orientation,Horz,Vert 270,Vert 90;",
+	// Flip screen (180-degree upside-down, no quarter-turn): only takes
+	// visible effect while Orientation is Horz, since screen_rotate's own
+	// flip input is gated by no_rotate (sys/arcade_video.v). For a
+	// cabinet with a HORIZONTAL monitor mounted upside-down, playing this
+	// vertical game un-rotated (Horz) the way the board naturally outputs
+	// it. Hidden (H0, same tag/mask as Orientation) under direct video.
+	"H0O[17],Flip screen,Off,On;",
 	// Autofire on button 1: Off, or a frames-on/frames-off pattern
 	// clocked by the game's own vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3,
 	// 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1. While enabled for a player,
@@ -103,7 +110,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({1'b0, direct_video}), // [0] hides Orientation for direct video
+	.status_menumask({1'b0, direct_video}), // [0] hides Orientation and Flip screen (both H0) for direct video
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -364,25 +371,31 @@ assign VGA_G  = rd_rgb[15:8];
 assign VGA_B  = rd_rgb[7:0];
 
 // ------------------------------------------------------------------
-// Orientation (status[9:8], "Vert 270"/"Vert 90"): the framework's
-// screen_rotate (sys/arcade_video.v) copies the finished frame into a
-// DDR3 framebuffer rotated a quarter turn and hands it to the scaler
-// (FB_EN). With Horz selected, no_rotate holds FB_EN low and the
-// scaler takes the direct VGA_* path — the core's own video pipeline is
-// untouched either way. ROT270 in MAME: the board's image is turned
-// counter-clockwise to stand upright, which is screen_rotate's
-// rotate_ccw=1 case ("Vert 270"); "Vert 90" is rotate_ccw=0, the
-// opposite quarter-turn, for cabinets whose vertical monitor is mounted
-// the other way around.
+// Orientation (status[9:8], "Vert 270"/"Vert 90") and Flip screen
+// (status[17]): the framework's screen_rotate (sys/arcade_video.v)
+// copies the finished frame into a DDR3 framebuffer and hands it to
+// the scaler (FB_EN). With Horz selected and Flip screen off,
+// no_rotate holds FB_EN low and the scaler takes the direct VGA_*
+// path — the core's own video pipeline is untouched either way. ROT270
+// in MAME: the board's image is turned counter-clockwise to stand
+// upright, which is screen_rotate's rotate_ccw=1 case ("Vert 270");
+// "Vert 90" is rotate_ccw=0, the opposite quarter-turn, for cabinets
+// whose vertical monitor is mounted the other way around. Flip screen
+// only takes visible effect while Orientation is Horz (screen_rotate's
+// own flip input is gated by no_rotate internally), giving a
+// 180-degree upside-down image with no quarter-turn — for a horizontal
+// monitor mounted upside-down, playing this game un-rotated.
 // ------------------------------------------------------------------
 wire  [1:0] orientation = status[9:8];
+wire        flip_screen = status[17];
 wire        video_rotated;
 wire        no_rotate = (orientation == 2'd0) | direct_video;
 wire        rotate_ccw = orientation != 2'd2;
+wire        flip = flip_screen & ~direct_video;
 screen_rotate screen_rotate (
 	.CLK_VIDEO(CLK_VIDEO), .CE_PIXEL(CE_PIXEL),
 	.VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B), .VGA_HS(VGA_HS), .VGA_VS(VGA_VS), .VGA_DE(VGA_DE),
-	.rotate_ccw(rotate_ccw), .no_rotate(no_rotate), .flip(1'b0), .video_rotated(video_rotated),
+	.rotate_ccw(rotate_ccw), .no_rotate(no_rotate), .flip(flip), .video_rotated(video_rotated),
 	.FB_EN(FB_EN), .FB_FORMAT(FB_FORMAT), .FB_WIDTH(FB_WIDTH), .FB_HEIGHT(FB_HEIGHT),
 	.FB_BASE(FB_BASE), .FB_STRIDE(FB_STRIDE), .FB_VBL(FB_VBL), .FB_LL(FB_LL),
 	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),

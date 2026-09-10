@@ -86,19 +86,24 @@ localparam CONF_STR = {
 	// path is unavailable. MiSTer keeps status bits across sessions
 	// through the OSD's own settings save.
 	"H0O[9:8],Orientation,Horz,Vert 270,Vert 90;",
-	// macross2 is horizontal but "Flip screen" (upside-down, a 180-degree
-	// turn with no quarter-rotation) is offered for cabinets whose
-	// monitor ended up mounted inverted; hidden (H2) for tdragon2, which
-	// uses Orientation instead, and for direct video, same reason as
-	// above.
+	// "Flip screen" (upside-down, a 180-degree turn with no
+	// quarter-rotation): only takes visible effect while Orientation is
+	// Horz, since screen_rotate's own flip input is gated by no_rotate
+	// (sys/arcade_video.v) — meaningful for macross2 always (which is
+	// permanently Horz) and for tdragon2 when its own Orientation is left
+	// at Horz. Offered for cabinets whose monitor ended up mounted
+	// inverted: a HORIZONTAL monitor for macross2, or a horizontal
+	// monitor being used to play tdragon2 un-rotated for either. Hidden
+	// (H2) under direct video, same reason as Orientation above.
 	"H2O[17],Flip screen,Off,On;",
-	// Autofire on button 1 (tdragon2 only — hidden, H1, for macross2):
-	// Off, or a frames-on/frames-off pattern clocked by the game's own
-	// vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3, 15Hz = 2/2, 20Hz = 1/2,
-	// 30Hz = 1/1. While enabled for a player, that player's button 3 is
-	// a plain (non-autofire) button 1. See the autofire block below.
-	"H1O[12:10],P1 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
-	"H1O[15:13],P2 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
+	// Autofire on button 1: Off, or a frames-on/frames-off pattern
+	// clocked by the game's own vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3,
+	// 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1. While enabled for a player,
+	// that player's button 3 is a plain (non-autofire) button 1 — for
+	// macross2, which has no 3rd button in its own input port, that OR
+	// path simply never triggers. See the autofire block below.
+	"O[12:10],P1 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
+	"O[15:13],P2 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
 	"-;",
 	// "DIP;" is where MiSTer inserts the DIP-switch submenu it builds from
 	// the loaded .mra's <switches>/<dip> entries (releases/*.mra declare
@@ -141,7 +146,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({~game_macross2 | direct_video, game_macross2, game_macross2 | direct_video}), // [2] hides Flip screen (tdragon2/direct video), [1] hides the autofire entries, [0] hides Orientation (macross2/direct video)
+	.status_menumask({direct_video, 1'b0, game_macross2 | direct_video}), // [2] hides Flip screen (direct video only), [1] unused, [0] hides Orientation (macross2/direct video)
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -295,8 +300,8 @@ always @(posedge clk_sys) begin
 	if (p2_raw[4] & ~af2_held_d) af2_phase <= 4'd0;
 	else if (frame_tick) af2_phase <= (af2_phase + 4'd1 >= af_len(af2_mode)) ? 4'd0 : af2_phase + 4'd1;
 end
-wire af1_en = (af1_mode != 3'd0) & ~game_macross2;
-wire af2_en = (af2_mode != 3'd0) & ~game_macross2;
+wire af1_en = (af1_mode != 3'd0);
+wire af2_en = (af2_mode != 3'd0);
 wire p1_b1 = af1_en ? ((p1_raw[4] & (af1_phase < af_on(af1_mode))) | p1_raw[6]) : p1_raw[4];
 wire p2_b1 = af2_en ? ((p2_raw[4] & (af2_phase < af_on(af2_mode))) | p2_raw[6]) : p2_raw[4];
 wire p1_b3 = af1_en ? 1'b0 : p1_raw[6];
@@ -778,27 +783,29 @@ assign VGA_B  = final_rgb[7:0];
 
 // ------------------------------------------------------------------
 // Orientation (status[9:8], "Vert 270"/"Vert 90", tdragon2 only) and
-// Flip screen (status[17], macross2 only): the framework's
-// screen_rotate (sys/arcade_video.v) copies the finished frame into a
-// DDR3 framebuffer and hands it to the scaler (FB_EN). With neither
-// option in effect, no_rotate holds FB_EN low, nothing is written to
-// DDRAM and the scaler takes the direct VGA_* path exactly as before —
-// the core's own video pipeline above is untouched either way.
-// tdragon2 is ROT270 in MAME, i.e. the board's image has to be turned
+// Flip screen (status[17], both games): the framework's screen_rotate
+// (sys/arcade_video.v) copies the finished frame into a DDR3
+// framebuffer and hands it to the scaler (FB_EN). With neither option
+// in effect, no_rotate holds FB_EN low, nothing is written to DDRAM and
+// the scaler takes the direct VGA_* path exactly as before — the
+// core's own video pipeline above is untouched either way. tdragon2 is
+// ROT270 in MAME, i.e. the board's image has to be turned
 // counter-clockwise to stand upright, which is screen_rotate's
 // rotate_ccw=1 case ("Vert 270"); "Vert 90" is rotate_ccw=0, the
 // opposite quarter-turn, for cabinets whose vertical monitor is mounted
-// the other way around. macross2 is horizontal, so it instead gets
-// "Flip screen": screen_rotate's flip input only takes effect while
-// no_rotate is asserted, giving a 180-degree upside-down image with no
-// quarter-turn, for cabinets whose monitor ended up mounted inverted.
+// the other way around. "Flip screen" only takes visible effect while
+// no_rotate is asserted internally to screen_rotate, giving a
+// 180-degree upside-down image with no quarter-turn: meaningful for
+// macross2 always (permanently Horz) and for tdragon2 whenever its own
+// Orientation is left at Horz — offered for cabinets whose monitor
+// ended up mounted inverted.
 // ------------------------------------------------------------------
 wire  [1:0] orientation = status[9:8];
 wire        flip_screen = status[17];
 wire        video_rotated;
 wire        no_rotate = (orientation == 2'd0) | game_macross2 | direct_video;
 wire        rotate_ccw = orientation != 2'd2;
-wire        flip = flip_screen & game_macross2 & ~direct_video;
+wire        flip = flip_screen & ~direct_video;
 screen_rotate screen_rotate (
 	.CLK_VIDEO(CLK_VIDEO), .CE_PIXEL(CE_PIXEL),
 	.VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B), .VGA_HS(VGA_HS), .VGA_VS(VGA_VS), .VGA_DE(VGA_DE),

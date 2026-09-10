@@ -300,4 +300,4 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to SD_SPI*
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to USER_IO[*]
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to VGA_EN
 set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
-set_global_assignment -name SEED 19
+set_global_assignment -name SEED 23
