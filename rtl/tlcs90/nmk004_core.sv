@@ -97,6 +97,11 @@ module nmk004_core #(
 	output [7:0]  dbg_f,
 	output [15:0] dbg_hl,
 	output [7:0]  dbg_ram_hl,
+	output [15:0] dbg_de,
+	output [15:0] dbg_bc,
+	output [15:0] dbg_ix,
+	output [15:0] dbg_iy,
+	output [15:0] dbg_sp,
 
 	// P4 bit0 = future 68000-reset drive (nmk004_device::port4_w in the
 	// reference). BX/BY exposed for debug visibility; the same values are
@@ -128,7 +133,8 @@ module nmk004_core #(
 		.nmi(nmi), .irq_req(irq_req_to_cpu), .irq_mask(irq_mask),
 		.ix_bank(bx), .iy_bank(by),
 		.dbg_pc(dbg_pc), .dbg_valid(dbg_valid), .dbg_halt(),
-		.dbg_a(dbg_a), .dbg_f(dbg_f), .dbg_hl(dbg_hl), .dbg_de(), .dbg_iy()
+		.dbg_a(dbg_a), .dbg_f(dbg_f), .dbg_hl(dbg_hl), .dbg_de(dbg_de), .dbg_iy(dbg_iy),
+		.dbg_bc(dbg_bc), .dbg_ix(dbg_ix), .dbg_sp(dbg_sp)
 	);
 
 	// ------------------------------------------------------------------

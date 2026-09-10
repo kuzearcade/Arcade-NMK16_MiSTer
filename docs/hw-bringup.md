@@ -845,6 +845,142 @@ pass: the leading theory it would have targeted (the timer peripheral)
 is now known not to be the cause, and guessing at a different fix
 without first finding the actual mechanism isn't warranted.
 
+### Fourth pass: register-state tracing built, root cause found and fixed
+
+Built the register-state tracing the third pass called for.
+`sim/oracle/capture_reg_trace.py` (new, mirrors
+`capture_cyc_trace.py`'s mechanism) and a `TB_NMK004_REGS=<path>`
+option added to `tb_gunnail.cpp` capture A/F/BC/DE/HL/IX/IY/SP
+alongside PC at every instruction boundary, in the same "<cycles>
+<PC> ..." shape so the two sides diff directly. `tlcs90.sv` gained
+`dbg_bc`/`dbg_ix`/`dbg_sp` outputs (only `dbg_a`/`dbg_f`/`dbg_hl`/
+`dbg_de`/`dbg_iy` existed before) to have the full register file
+available.
+
+Two real gotchas hit building the MAME side, both worth remembering:
+- `tlcs90_device::device_start()` registers the accumulator as
+  `state_add(T90_A, "~A", ...)` — tilde-prefixed — and never registers
+  a standalone flags state at all, only the combined 16-bit `AF`. The
+  debugger's plain expression evaluator (what `tracelog`'s own
+  arguments are) has no way to reference a tilde-prefixed symbol
+  (`~a` parses as *bitwise NOT of the expression `a`*, not "the state
+  named ~A"), and a bare `a`/`f` silently resolved to *something* that
+  happened to read as a constant 0x0A/0x0F for an entire 16-second,
+  10-million-instruction capture — which looked exactly like a
+  glaring, systematic MAME-vs-RTL register divergence before it turned
+  out to be a symbol-name bug in the capture script, not a real value.
+  Caught by checking how many *distinct* values each field actually
+  took across the whole capture (`af`/`bc`/`hl` — real, unprefixed
+  symbols — showed hundreds to thousands; the broken `a`/`f` showed
+  exactly one). Fixed by capturing the working `af` symbol and
+  splitting it into A (high byte) / F (low byte) in the script's own
+  `reformat()`.
+- A same-nominal-time window cut across both traces only works at a
+  point already confirmed to have near-zero relative offset (checked
+  via the third pass's own landmark search) — cutting both at, say,
+  t=13.5 s and walking the ordered PC match from index 0 of each
+  failed after 5 instructions, not because the CPUs had actually
+  diverged that early, but because 13+ seconds of even a tiny relative
+  rate difference is enough absolute offset (tens of thousands of
+  instructions, at ~660K instr/s) to make "the same nominal second on
+  each side's own clock" not correspond to the same point in execution
+  at all. Anchoring the window at 14.60 s — a point the third pass had
+  already confirmed aligns to within tens of milliseconds — worked.
+
+**Result — the first divergence, isolated to a single instruction.**
+The ordered register+PC walk from a 14.60 s anchor matches every
+single register on both sides for the first ~200 instructions, then
+stops cold: at PC `$0DA1` (`jr ,$0D9C`, so the flags shown are the
+result of the *preceding* instruction, `$0DA0: dec a`), F differs by
+exactly one bit — MAME `0x4A`, RTL `0x42`, XCF (bit 3) set in MAME,
+clear in RTL — while A itself matches on both sides. A single-opcode
+flag bug, not a value bug: `dec a`'s numeric result was right, the
+flag it left behind was wrong.
+
+**Root cause 1 — XCF never set on 8-bit INC/DEC.** MAME's reference
+(`tlcs90.cpp`, `case DEC:`/`case INC:`) computes `F = (F & (IF|CF)) |
+SZHV_dec[a8]`, then, as a genuinely separate step, `if (a8 == 0) F |=
+XCF` — XCF is unconditionally *recomputed* every INC/DEC (cleared
+unless the result is exactly zero), never left holding a stale value.
+`tlcs90.sv`'s own `szhv_inc8()`/`szhv_dec8()` — shared by all four of
+OP_INC, OP_DEC, OP_INCX, OP_DECX — never included that bit at all, so
+XCF was silently cleared to 0 unconditionally on every 8-bit INC/DEC,
+regardless of the result. Consequence: XCF is INCX/DECX's own
+execute-gate (`if (F & XCF) { ...actually increment... }` in the
+reference — the mechanism TLCS-90 uses to chain a 16-bit increment or
+decrement across two 8-bit register operations, "INC lo; INCX hi",
+where INCX only fires when the low byte's own INC just wrapped to
+zero) — a permanently-clear XCF means any such chained pointer or
+counter can *never* advance its high byte. Fix: add the same
+"`XCF = (result == 0)`" term directly into `szhv_inc8()`/`szhv_dec8()`,
+so all four callers get it at once.
+
+**Root cause 2 — `SET`/`RES` on a register operand silently discarded**
+(found immediately after re-measuring with fix 1 alone — the match
+extended from 193 to 4,086 instructions before hitting a *second*,
+different bug). `tlcs90.sv`'s `OP_SET`/`OP_RES` execute block
+unconditionally wrote its result to a *memory* address (`addr <=
+eff2; dout <= ...; mem_wr <= 1`), with no check for `mode2 == M_R8` —
+unlike OP_INC/OP_DEC right next to it, which correctly branch on
+`mode1 == M_R8` to write back to a register via `a_or_r8_write()`
+instead. `mode2 == M_R8` here is this opcode group's compact "`bit
+n,A` / `res n,A` / `set n,A`" form (the register operand is
+*implicit* — decode never assigns `d2_r2e` for it, unlike every
+genuine register-selected LD/ADD/etc. form, so it silently defaults
+to 0/`R8_B`, confirming this path was never meant to look up a
+register selector at all — the target really is always A). Net
+effect: `res 7,a` (and every other register-form `bit`/`res`/`set`)
+was a complete no-op on the register — the bit-modified value was
+computed and then discarded into whatever `eff2` happened to resolve
+to for a register operand, never reaching A at all. Fix: branch on
+`mode2 == M_R8` and call `a_or_r8_write(R8_A[2:0], result)` in that
+case, mirroring OP_INC/OP_DEC's own pattern exactly.
+
+**Verification.**
+- Register+PC match now extends to 4,086 instructions with fix 1 only
+  (from 193), then to 4,086+ with both — the walk stops around
+  14.6085 s on a value that looks like the same already-documented,
+  already-accepted "scheduler-arbitrary NMI phase" class of artifact
+  (a port-toggle byte one NMI-firing out of phase — not a functional
+  bug, matches the mustang investigation's own closed finding), not a
+  new CPU bug.
+- The real-world test: instrument-register write activity over the
+  full 90 s, RTL vs. a fresh MAME capture of the identical scenario —
+  before the fix, 2,832 total writes, active only 10 of 90 seconds;
+  **after both fixes, 20,136 writes active 77 of 90 seconds, against
+  MAME's own 20,160 active 76 of 90** — the per-second activity
+  pattern now tracks MAME's almost line for line for the entire
+  capture. This is the actual, audible symptom the user originally
+  reported, now fixed.
+- Both fixes live in the CPU core (`tlcs90.sv`) shared by every
+  TLCS-90 user in this project, not anything gunnail-specific.
+  Regression swept: `raphero` (bare sound-CPU role) reference sim
+  runs unchanged (frame count, OKI/YM write counts identical before
+  and after); `mustang`/`bioship`/`vandyke`/`blkheart`/`acrobatm`/
+  `strahl`/`tdragon`/`tdragon1`/`hachamf`/`hachamfb`/`macross`/`bjtwin`
+  (NMK004 sound-MCU and NMK-215/protection-MCU roles) all rebuild and
+  run cleanly, no crashes or hangs. `gunnail_hw`/`raphero_hw` (the
+  real hardware-path sims, SDRAM caches and all) re-verified: ROM and
+  OKI golden-byte audits still 0 wrong.
+- **Not run**: the project's own standalone TLCS-90 opcode self-tests
+  (`sim/rtl/tlcs90/tb_*test.cpp` — banktest, blocktest, rldtest,
+  muldivtest, ldarcallrtest, switest, extest) were found already
+  failing on the *unmodified* tree (confirmed via `git stash`, e.g.
+  `extest` fails identically with or without this session's changes) —
+  a pre-existing test-harness issue, unrelated to and not caused by
+  this fix, out of scope here. Given several of the failing checks
+  (switest's `F restored by RETI (CF=1,XCF=1)`, banktest's own IX-
+  relative store) plausibly exercise the exact flag/opcode paths this
+  session just changed, these tests are worth fixing and re-running
+  as a real regression gate before trusting this area of the CPU core
+  again — not done in this pass.
+- **Rebuilt for hardware**: `releases/Raphero.rbf` and
+  `releases/Gunnail.rbf` (the only two bitstreams whose CPU core
+  changed — `Macross2.rbf` doesn't use `tlcs90.sv` at all, its sound
+  path is Z80/jt03). `docs/hw-bringup.md`'s "Sound effects corrupted"
+  section below and the OKI mixer-gain fix are unrelated, unaffected
+  by this change.
+
 ## Sound effects corrupted on hardware: the OKI sample fetch
 
 Reported after the fixes above: music fine, sound effects noisy/garbled

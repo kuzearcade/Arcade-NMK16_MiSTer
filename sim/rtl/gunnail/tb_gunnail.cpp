@@ -30,6 +30,12 @@ int main(int argc, char **argv) {
 	FILE *prot_trace = std::fopen("prot_sys.trace", "w");
 	FILE *prot_cyc_trace = std::fopen("prot_cyc.trace", "w");
 	FILE *prot_reg_trace = std::getenv("TB_LOG_PROT_REGS") != nullptr ? std::fopen("prot_regs.trace", "w") : nullptr;
+	// TB_NMK004_REGS=<path>: full NMK004 register-state trace, one line per
+	// instruction boundary — "<clk_sys/5> <PC> A=<a> F=<f> BC=<bc> DE=<de>
+	// HL=<hl> IX=<ix> IY=<iy> SP=<sp>", for register-level (not just PC)
+	// divergence hunting against a matching MAME oracle capture — see
+	// docs/hw-bringup.md's GunNail sequencer-divergence investigation.
+	FILE *nmk004_reg_trace = std::getenv("TB_NMK004_REGS") ? std::fopen(std::getenv("TB_NMK004_REGS"), "w") : nullptr;
 	NmkTraceWriter trace("gunnail_video.trace", "gunnail", 10000000, "", "program", 0, 0xffffff, ":screen");
 	Crc32 crc;
 
@@ -118,6 +124,12 @@ int main(int argc, char **argv) {
 			uint16_t pc = top.dbg_nmk004_pc;
 			std::fprintf(nmk004_trace, "%04X\n", pc);
 			std::fprintf(nmk004_cyc_trace, "%llu %04X\n", (unsigned long long)(clk_sys_ticks / 5), pc);
+			if (nmk004_reg_trace)
+				std::fprintf(nmk004_reg_trace, "%llu %04X A=%02X F=%02X BC=%04X DE=%04X HL=%04X IX=%04X IY=%04X SP=%04X\n",
+					(unsigned long long)(clk_sys_ticks / 5), pc,
+					(unsigned)top.dbg_nmk004_a, (unsigned)top.dbg_nmk004_f, (unsigned)top.dbg_nmk004_bc,
+					(unsigned)top.dbg_nmk004_de, (unsigned)top.dbg_nmk004_hl, (unsigned)top.dbg_nmk004_ix,
+					(unsigned)top.dbg_nmk004_iy, (unsigned)top.dbg_nmk004_sp);
 			nmk004_instrs++;
 			last_pc = pc;
 		}
@@ -271,6 +283,7 @@ int main(int argc, char **argv) {
 	std::fclose(prot_trace);
 	std::fclose(prot_cyc_trace);
 	if (prot_reg_trace) std::fclose(prot_reg_trace);
+	if (nmk004_reg_trace) std::fclose(nmk004_reg_trace);
 	std::fclose(m68k_trace);
 	std::fclose(m68k_cyc_trace);
 	if (audio_f) std::fclose(audio_f);
