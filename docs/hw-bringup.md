@@ -1124,30 +1124,64 @@ driving the OSD with `tools/mister_keys.py`: Lives 3 -> 1 saved as
 macross2's submenu shows Language and 1C_1C coins. F12 from inside a
 submenu returns to the core page; a second F12 closes the OSD.
 
-## Orientation option (tdragon2 upright over HDMI)
+## Orientation option (vertical games upright over HDMI, both quarter-turn directions)
 
-tdragon2 is MAME ROT270: the board draws it on its side. `Macross2.sv`
-now offers `Orientation: Horz/Vert` in the OSD (`H0O[9]`, default
-Horz). "Vert" enables the framework's `screen_rotate` (the second
-module in `sys/arcade_video.v`): it copies each finished frame into a
-DDR3 framebuffer a quarter turn counter-clockwise (`rotate_ccw=1`) and
-raises FB_EN so the scaler shows that buffer; "Original" aspect
-follows it to 3:4. With the option off, `no_rotate` keeps FB_EN low,
-nothing touches DDRAM and the scaler takes the direct VGA path as
-before — the core's own video pipeline is not in the loop either way.
-The entry is hidden (status_menumask bit 0) for macross2, which is
-horizontal, and under direct_video, where the framebuffer path does
-not exist; `no_rotate` is forced in both cases too. The framebuffer
-ports need `MISTER_FB=1` in the .qsf, which is also what compiles
-ascal's DDR read path into the framework — that costs a little slack
-on the HDMI PLL domain (see the build notes in the commit).
+tdragon2 is MAME ROT270: the board draws it on its side. Same for
+gunnail and raphero. `Macross2.sv`/`Gunnail.sv`/`Raphero.sv` each
+offer `Orientation: Horz/Vert 270/Vert 90` in the OSD (`H0O[9:8]`,
+default Horz — 2 status bits now, was a single bit before 2026-09-10).
+Both "Vert" choices enable the framework's `screen_rotate` (the second
+module in `sys/arcade_video.v`) and raise FB_EN so the scaler shows
+the DDR3 framebuffer it writes into; "Original" aspect follows to 3:4
+for either. "Vert 270" is `rotate_ccw=1` — the MAME-correct direction,
+same as the original single-choice "Vert" — and "Vert 90" is
+`rotate_ccw=0`, the opposite quarter-turn. Both present the game
+upright on an HDMI monitor; the reason to offer both is that on a real
+vertical cabinet, which physical direction the CRT/LCD is actually
+mounted in is a property of that cabinet, not of the game or the
+core, and only one of the two choices will match a given cabinet's
+DDR3->scaler->HDMI output orientation without the operator manually
+rotating the physical display. With Horz selected, `no_rotate` keeps
+FB_EN low, nothing touches DDRAM and the scaler takes the direct VGA
+path as before — the core's own video pipeline is not in the loop
+either way. In `Macross2.sv` the entry is hidden (status_menumask bit
+0) for macross2, which is horizontal (and gets its own Flip screen
+option instead, below); in `Gunnail.sv`/`Raphero.sv`, which only serve
+vertical games, it's shown unconditionally. All three hide it under
+direct_video, where the framebuffer path does not exist; `no_rotate`
+is forced in that case too. The framebuffer ports need `MISTER_FB=1`
+in the .qsf, which is also what compiles ascal's DDR read path into
+the framework — that costs a little slack on the HDMI PLL domain (see
+the build notes in the commit).
+
+## Flip screen option (macross2 upside-down over HDMI)
+
+macross2 is horizontal, so it doesn't use Orientation — instead
+`Macross2.sv` offers `Flip screen: Off/On` (`H2O[17]`, default Off),
+hidden for tdragon2 (which uses Orientation instead) and under
+direct_video. `screen_rotate`'s own `flip` input only takes effect
+while `no_rotate` is asserted (`do_flip <= no_rotate && flip` in
+`sys/arcade_video.v`) — it still routes through the DDR3 framebuffer
+(`fb_en` is raised on `~no_rotate | flip`, not just `~no_rotate`), but
+writes pixels into it in reverse raster order instead of doing a
+quarter-turn, producing a 180-degree upside-down image with no
+rotation. Aspect stays 4:3 either way, since `video_rotated` (which
+drives the 4:3-vs-3:4 choice) is tied to `~no_rotate`, and `no_rotate`
+stays asserted for a flip-only selection. Exists for cabinets whose
+horizontal monitor ended up physically mounted inverted — same
+reasoning as the Vert 270/90 split above, just for the 180-degree case
+instead of the 90-degree one.
 
 Persistence is the MiSTer's own: OSD > System > "Save settings" writes
-`config/tdragon2.CFG`, and the option comes back on the next load of
-that .mra. Verified on the box by driving the OSD with
-`tools/mister_keys.py` (F12, cursor keys, Enter; Right/Left switch
-between the Core and System pages) and capturing HDMI before/after and
-after a core reload.
+`config/<mra name>.CFG`, and the option(s) come back on the next load
+of that .mra. The original single-choice Orientation was verified on
+the box by driving the OSD with `tools/mister_keys.py` (F12, cursor
+keys, Enter; Right/Left switch between the Core and System pages) and
+capturing HDMI before/after and after a core reload; the expanded
+3-way Orientation and the new Flip screen option were added
+2026-09-10 (commit follows this doc update) — same OSD mechanism,
+re-verify all three cores' new choices on the box before considering
+this closed.
 
 ## Keyboard input (MAME default keys)
 

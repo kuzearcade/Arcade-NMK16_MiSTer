@@ -76,12 +76,22 @@ localparam CONF_STR = {
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	// tdragon2 is a vertical (MAME ROT270) game drawn on its side by the
-	// board; "Vert" rotates it upright through the framebuffer, as MAME
-	// presents it. Off by default; hidden (H0) for macross2, which is
+	// board; the two "Vert" choices both present it upright through the
+	// framebuffer, as MAME does — "Vert 270" (the MAME-correct
+	// rotate_ccw direction) and "Vert 90" (the opposite quarter-turn)
+	// exist because a physical vertical cabinet's monitor can be mounted
+	// rotated either way, and only one of the two will match a given
+	// cabinet. Off (Horz) by default; hidden (H0) for macross2, which is
 	// horizontal, and for direct (analog) video, where the framebuffer
 	// path is unavailable. MiSTer keeps status bits across sessions
 	// through the OSD's own settings save.
-	"H0O[9],Orientation,Horz,Vert;",
+	"H0O[9:8],Orientation,Horz,Vert 270,Vert 90;",
+	// macross2 is horizontal but "Flip screen" (upside-down, a 180-degree
+	// turn with no quarter-rotation) is offered for cabinets whose
+	// monitor ended up mounted inverted; hidden (H2) for tdragon2, which
+	// uses Orientation instead, and for direct video, same reason as
+	// above.
+	"H2O[17],Flip screen,Off,On;",
 	// Autofire on button 1 (tdragon2 only — hidden, H1, for macross2):
 	// Off, or a frames-on/frames-off pattern clocked by the game's own
 	// vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3, 15Hz = 2/2, 20Hz = 1/2,
@@ -131,7 +141,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({game_macross2, game_macross2 | direct_video}), // [1] hides the autofire entries, [0] Orientation
+	.status_menumask({~game_macross2 | direct_video, game_macross2, game_macross2 | direct_video}), // [2] hides Flip screen (tdragon2/direct video), [1] hides the autofire entries, [0] hides Orientation (macross2/direct video)
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -767,21 +777,32 @@ assign VGA_G  = final_rgb[15:8];
 assign VGA_B  = final_rgb[7:0];
 
 // ------------------------------------------------------------------
-// Orientation (status[9], "Vert"): the framework's screen_rotate
-// (sys/arcade_video.v) copies the finished frame into a DDR3
-// framebuffer rotated a quarter turn and hands it to the scaler
-// (FB_EN). With the option off, no_rotate holds FB_EN low, nothing is
-// written to DDRAM and the scaler takes the direct VGA_* path exactly
-// as before — the core's own video pipeline above is untouched either
-// way. tdragon2 is ROT270 in MAME, i.e. the board's image has to be
-// turned counter-clockwise to stand upright.
+// Orientation (status[9:8], "Vert 270"/"Vert 90", tdragon2 only) and
+// Flip screen (status[17], macross2 only): the framework's
+// screen_rotate (sys/arcade_video.v) copies the finished frame into a
+// DDR3 framebuffer and hands it to the scaler (FB_EN). With neither
+// option in effect, no_rotate holds FB_EN low, nothing is written to
+// DDRAM and the scaler takes the direct VGA_* path exactly as before —
+// the core's own video pipeline above is untouched either way.
+// tdragon2 is ROT270 in MAME, i.e. the board's image has to be turned
+// counter-clockwise to stand upright, which is screen_rotate's
+// rotate_ccw=1 case ("Vert 270"); "Vert 90" is rotate_ccw=0, the
+// opposite quarter-turn, for cabinets whose vertical monitor is mounted
+// the other way around. macross2 is horizontal, so it instead gets
+// "Flip screen": screen_rotate's flip input only takes effect while
+// no_rotate is asserted, giving a 180-degree upside-down image with no
+// quarter-turn, for cabinets whose monitor ended up mounted inverted.
 // ------------------------------------------------------------------
-wire video_rotated;
-wire no_rotate = ~status[9] | game_macross2 | direct_video;
+wire  [1:0] orientation = status[9:8];
+wire        flip_screen = status[17];
+wire        video_rotated;
+wire        no_rotate = (orientation == 2'd0) | game_macross2 | direct_video;
+wire        rotate_ccw = orientation != 2'd2;
+wire        flip = flip_screen & game_macross2 & ~direct_video;
 screen_rotate screen_rotate (
 	.CLK_VIDEO(CLK_VIDEO), .CE_PIXEL(CE_PIXEL),
 	.VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B), .VGA_HS(VGA_HS), .VGA_VS(VGA_VS), .VGA_DE(VGA_DE),
-	.rotate_ccw(1'b1), .no_rotate(no_rotate), .flip(1'b0), .video_rotated(video_rotated),
+	.rotate_ccw(rotate_ccw), .no_rotate(no_rotate), .flip(flip), .video_rotated(video_rotated),
 	.FB_EN(FB_EN), .FB_FORMAT(FB_FORMAT), .FB_WIDTH(FB_WIDTH), .FB_HEIGHT(FB_HEIGHT),
 	.FB_BASE(FB_BASE), .FB_STRIDE(FB_STRIDE), .FB_VBL(FB_VBL), .FB_LL(FB_LL),
 	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),

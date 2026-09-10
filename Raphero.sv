@@ -49,12 +49,16 @@ localparam CONF_STR = {
 	"Raphero;;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-	// A vertical (MAME ROT270) game drawn on its side by the board; "Vert"
-	// rotates it upright through the framebuffer, as MAME presents it.
-	// Off by default; hidden (H0) for direct (analog) video, where the
+	// A vertical (MAME ROT270) game drawn on its side by the board; the
+	// two "Vert" choices both present it upright through the framebuffer,
+	// as MAME does — "Vert 270" (the MAME-correct rotate_ccw direction)
+	// and "Vert 90" (the opposite quarter-turn) exist because a physical
+	// vertical cabinet's monitor can be mounted rotated either way, and
+	// only one of the two will match a given cabinet. Off (Horz) by
+	// default; hidden (H0) for direct (analog) video, where the
 	// framebuffer path is unavailable. MiSTer keeps status bits across
 	// sessions through the OSD's own settings save.
-	"H0O[9],Orientation,Horz,Vert;",
+	"H0O[9:8],Orientation,Horz,Vert 270,Vert 90;",
 	// Autofire on button 1: Off, or a frames-on/frames-off pattern
 	// clocked by the game's own vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3,
 	// 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1. While enabled for a player,
@@ -360,20 +364,25 @@ assign VGA_G  = rd_rgb[15:8];
 assign VGA_B  = rd_rgb[7:0];
 
 // ------------------------------------------------------------------
-// Orientation (status[9], "Vert"): the framework's screen_rotate
-// (sys/arcade_video.v) copies the finished frame into a DDR3
-// framebuffer rotated a quarter turn and hands it to the scaler
-// (FB_EN). With the option off, no_rotate holds FB_EN low and the
+// Orientation (status[9:8], "Vert 270"/"Vert 90"): the framework's
+// screen_rotate (sys/arcade_video.v) copies the finished frame into a
+// DDR3 framebuffer rotated a quarter turn and hands it to the scaler
+// (FB_EN). With Horz selected, no_rotate holds FB_EN low and the
 // scaler takes the direct VGA_* path — the core's own video pipeline is
 // untouched either way. ROT270 in MAME: the board's image is turned
-// counter-clockwise to stand upright.
+// counter-clockwise to stand upright, which is screen_rotate's
+// rotate_ccw=1 case ("Vert 270"); "Vert 90" is rotate_ccw=0, the
+// opposite quarter-turn, for cabinets whose vertical monitor is mounted
+// the other way around.
 // ------------------------------------------------------------------
-wire video_rotated;
-wire no_rotate = ~status[9] | direct_video;
+wire  [1:0] orientation = status[9:8];
+wire        video_rotated;
+wire        no_rotate = (orientation == 2'd0) | direct_video;
+wire        rotate_ccw = orientation != 2'd2;
 screen_rotate screen_rotate (
 	.CLK_VIDEO(CLK_VIDEO), .CE_PIXEL(CE_PIXEL),
 	.VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B), .VGA_HS(VGA_HS), .VGA_VS(VGA_VS), .VGA_DE(VGA_DE),
-	.rotate_ccw(1'b1), .no_rotate(no_rotate), .flip(1'b0), .video_rotated(video_rotated),
+	.rotate_ccw(rotate_ccw), .no_rotate(no_rotate), .flip(1'b0), .video_rotated(video_rotated),
 	.FB_EN(FB_EN), .FB_FORMAT(FB_FORMAT), .FB_WIDTH(FB_WIDTH), .FB_HEIGHT(FB_HEIGHT),
 	.FB_BASE(FB_BASE), .FB_STRIDE(FB_STRIDE), .FB_VBL(FB_VBL), .FB_LL(FB_LL),
 	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
