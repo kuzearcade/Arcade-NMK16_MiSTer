@@ -517,8 +517,9 @@ separate things did, the first two of which are core bugs:
    has to do it, and the framework ships the standard way in
    `sys/arcade_video.v` (`screen_rotate`: a DDR3-backed rotating
    framebuffer driven from `VGA_*`, exposing `FB_*`/`DDRAM_*` which
-   `Macross2.sv` currently ties off). Wiring that in, with the usual
-   "Orientation" OSD option, is the remaining follow-up.
+   `Macross2.sv` tied off at the time). That was wired in next — see
+   "Orientation option" below, since extended to both quarter-turn
+   directions plus a Flip screen option on all three cores.
 3. **The black borders are the MiSTer's own scaler setting.** The box's
    `MiSTer.ini` has `vscale_mode=1` (integer vertical scale only): 224
    lines fit 1080 at 4x = 896 lines (83% of the height), and the 4:3
@@ -1160,11 +1161,13 @@ that player's button 3 is OR'd in as a plain non-autofire button 1 and
 its own bit is not sent to the game — `af1_en`/`af2_en` (`Macross2.sv`)
 used to be gated `& ~game_macross2`, both to match the menu being
 hidden for that game and because macross2's own `INPUT_PORTS_START`
-has no 3rd button at all. Removing the gate is safe: macross2 has no
-joystick bit mapped to a 3rd button in practice, so the OR path simply
-never fires, and the autofire pattern on button 1 itself works
-identically to tdragon2's. Saved with the other status bits by OSD >
-System > Save settings.
+has no 3rd button at all. Removing the gate is safe, and the OR path
+is not dead on macross2 either: since macross2.mra now declares the
+full 5-entry `<buttons>` list (the gamepad Coin fix), a gamepad's
+Button 3 *is* mapped, and while autofire is on it acts as the plain,
+non-autofire Button 1 — exactly as on tdragon2. With autofire off it
+does nothing, as the game itself never reads that bit. Saved with the
+other status bits by OSD > System > Save settings.
 
 ## DIP switches in the OSD
 
@@ -1779,21 +1782,32 @@ bit-identical (the change is inside the `HW_ROMS=1` branches).
 
 ## Status
 
-`HW_ROMS=1` implemented for both games (`rtl/tdragon2/tdragon2_core.sv`
-serving both at runtime, `rtl/macross2/video_macross2.sv`, `rtl/sdram_req.sv`,
-`Macross2.sv`/`.qsf`/`.sdc`, the `releases/*.mra` files),
-Verilator-verified under real SDRAM wait-state latency, and — with the
-`ioctl_index` fix above — booting on a real DE10-Nano with the ROM
-checksum matching simulation, with sprites rendering in the attract
-demos (see the sprite section above). With `rtl/sdram.sv` on the 96MHz
-`clk_ram`, the prefetching tile cache, BG and TX on separate SDRAM
-ports and the arbiter duplicate-grant fix (see the SDRAM sections
-above) both games render without the horizontal smearing the
-single-clock design showed, with audio, on hardware and in the
-`HW_ROMS=1` sim frames; reads return two words per transaction as a
-throughput margin (see item 3 above — the "residual" it was built for
-was a paint-detector false positive on genuine game colours). Remaining known limitations: HSync/VSync
-placement is still the documented placeholder (the scaler locks and
-reports 384x224 @ 56.2Hz, but it has not been tuned against a reference),
-and player-input mapping has been cross-checked against
-`INPUT_PORTS_START` but not yet exercised in play on hardware.
+Three RBFs run on the DE10-Nano and are tracked in `releases/`:
+`Macross2` (tdragon2, macross2 and their clones — one runtime-selected
+core), `Raphero` (raphero, rapheroa, arcadian) and `Gunnail` (gunnail,
+gunnailp). Each one boots through the `.mra` loader with its ROM image
+matching simulation, renders its attract demo without the smearing,
+tearing or missing-sprite problems the sections above walk through,
+and is pixel-identical to MAME in native screenshots of the scenes
+that can be compared (the video-state harness covers the ones the
+demo's timing drift puts out of reach). Audio is level-corrected and
+compared band by band against MAME (`tools/audio_compare.py`): 0.987
+on tdragon2, 0.988 on raphero, 0.968 on gunnail over the first 60 s
+after the NMK004 sequencer fix. Coin/start/joystick/fire work from
+both the keyboard path and a gamepad (the macross2 gamepad Coin bug
+was a `.mra` button-count mismatch, fixed above), the OSD carries
+Orientation (Horz / Vert 270 / Vert 90), Flip screen, P1/P2 Autofire
+and the per-game DIP submenu, and settings persist through the
+MiSTer's own save. In-play slowdown on the sprite-heavy stages is
+gone (56.2 plane swaps/s in every measured window). The shared TLCS-90
+core has a passing nine-target standalone self-test suite (`make
+run-selftests` in `sim/rtl/tlcs90/`), and every TLCS-90-using game in
+the tree runs clean in simulation on the current core.
+
+What is still open is tracked, one entry per item with a stable ID and
+status, in `docs/known-issues.md` — that file, not this paragraph, is
+the authoritative list. As of 2026-09-10 the items a player could
+notice are the one-frame sprite latency inherent to the whole-plane
+sprite renderer (NMK-1) and the untuned HSync/VSync placement (NMK-2);
+the rest are verification gaps and build-margin notes (Raphero is at
+the edge of the device, NMK-10).

@@ -106,15 +106,19 @@ but not proven), `infra` (build/test/doc health).
 ## Macross2 (tdragon2 / macross2)
 
 ### NMK-8 · macross2 shows a dead "Button 3" in the OSD button wizard
-- **Severity:** limitation (cosmetic) · **Status:** open
-- **Ref:** "Gamepad Coin broken on macross2 only"
-- Required placeholder: the shared core's CONF_STR has one fixed 5-slot
-  `J1` list and MiSTer's default gamepad mapping is positional against
-  the `.mra`'s `<buttons>`, so macross2.mra must declare 5 names even
-  though the game reads 2. A user defining controls will be asked to
-  press a button that does nothing in macross2. Only avoidable by
-  splitting the merged core (not possible within the ALM budget) or by
-  MiSTer gaining per-game button lists for a shared CONF_STR.
+- **Severity:** limitation (cosmetic) · **Status:** fixed (2026-09-10 — not dead after all)
+- **Ref:** "Gamepad Coin broken on macross2 only", "Autofire (tdragon2 and macross2)"
+- The shared core's CONF_STR has one fixed 5-slot `J1` list and
+  MiSTer's default gamepad mapping is positional against the `.mra`'s
+  `<buttons>`, so macross2.mra must declare 5 names even though the
+  game's own input port reads 2. That third slot was assumed to be a
+  dead placeholder — but the autofire mux gives it a job: while P1/P2
+  Autofire is on (enabled for macross2 the same day), the player's
+  Button 3 is OR'd into Button 1 as a plain, non-autofire fire, exactly
+  as on tdragon2. So the button a user is asked to define is the
+  "hold-to-fire-normally" button when autofire is active, and only
+  unused when autofire is off. Documented as such in `Macross2.sv` and
+  the Autofire section rather than as a dead slot.
 
 ### NMK-9 · tdragon2 heavy-sprite slowdown fixed with thin margin
 - **Severity:** limitation · **Status:** open (monitor)
@@ -154,12 +158,14 @@ but not proven), `infra` (build/test/doc health).
 ## Documentation
 
 ### NMK-13 · `docs/hw-bringup.md` "Status" section and picture-offset item 2 are stale
-- **Severity:** infra · **Status:** open
-- The "## Status" section still says input mapping is "not yet
-  exercised in play on hardware" and the picture-offset section's item
-  2 still lists the Orientation OSD option as "the remaining
-  follow-up" — both resolved. The body of the doc is current; only
-  these summary paragraphs lag.
+- **Severity:** infra · **Status:** fixed (2026-09-10)
+- The "## Status" section said input mapping was "not yet exercised in
+  play on hardware" and the picture-offset section's item 2 listed the
+  Orientation OSD option as "the remaining follow-up" — both long
+  resolved. Rewritten: Status now summarizes the three shipped cores'
+  verified state and defers the open-item list to this file (so it
+  can't drift again), and item 2 points forward to the Orientation
+  section.
 
 ### NMK-15 · raphero_hw sim: one OKI0 sample byte unserved at latch
 - **Cores:** Raphero · **Severity:** gap (sim-observed residual) · **Status:** open
