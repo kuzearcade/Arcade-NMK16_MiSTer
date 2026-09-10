@@ -99,9 +99,11 @@ localparam CONF_STR = {
 	// Autofire on button 1: Off, or a frames-on/frames-off pattern
 	// clocked by the game's own vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3,
 	// 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1. While enabled for a player,
-	// that player's button 3 is a plain (non-autofire) button 1 — for
-	// macross2, which has no 3rd button in its own input port, that OR
-	// path simply never triggers. See the autofire block below.
+	// that player's button 3 is a plain (non-autofire) button 1 — on
+	// macross2 too: the game's own input port has no 3rd button, but
+	// macross2.mra declares the full 5-entry <buttons> list (see the
+	// gamepad Coin note in docs/hw-bringup.md), so a gamepad's Button 3
+	// is mapped and reaches this OR path. See the autofire block below.
 	"O[12:10],P1 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
 	"O[15:13],P2 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
 	"-;",
