@@ -907,12 +907,17 @@ module raphero_core #(
 	wire nmk112_we = sel_snd_nmk112 & snd_mem_wr & snd_cen;
 	wire [17:0] oki0_rom_addr_raw, oki1_rom_addr_raw;
 	wire [21:0] oki0_rom_addr, oki1_rom_addr;
+	// "A gated OKI cen is passing this clock" — a bank write landing on
+	// this edge would change the remapped address inside jt6295's
+	// registered-cen latch window (rtl/nmk112.sv `hold`, NMK-15). Assigned
+	// below, after the stall wires exist.
+	wire nmk112_hold;
 	nmk112 #(
 		.ROM0_BYTES(4194304), // rhp94099.6+7 (oki1)
 		.ROM1_BYTES(4194304)  // rhp94099.5+6 (oki2)
 	) nmk112_inst (
 		.clk_sys(clk_sys), .reset(reset),
-		.reg_sel(snd_addr[2:0]), .reg_data(snd_dout), .reg_we(nmk112_we),
+		.reg_sel(snd_addr[2:0]), .reg_data(snd_dout), .reg_we(nmk112_we), .hold(nmk112_hold),
 		.rom0_addr_in(oki0_rom_addr_raw), .rom0_addr_out(oki0_rom_addr),
 		.rom1_addr_in(oki1_rom_addr_raw), .rom1_addr_out(oki1_rom_addr)
 	);
@@ -925,6 +930,7 @@ module raphero_core #(
 	wire [7:0] oki0_rom_data, oki1_rom_data;
 	wire       oki0_rom_ok, oki1_rom_ok;
 	wire       oki0_stall, oki1_stall;
+	assign nmk112_hold = oki_cen & (~oki0_stall | ~oki1_stall);
 	generate
 	if (!HW_ROMS) begin : g_oki_sim
 		reg [7:0] oki0_rom [0:4194303]; // rhp94099.6+7
@@ -966,6 +972,24 @@ module raphero_core #(
 		initial if (OKI1_ROM_FILE != "") $readmemh(OKI1_ROM_FILE, golden0);
 		initial if (OKI2_ROM_FILE != "") $readmemh(OKI2_ROM_FILE, golden1);
 		reg [31:0] oki0_bytes_wrong = 32'd0, oki1_bytes_wrong = 32'd0, oki0_bytes_checked = 32'd0, oki1_bytes_checked = 32'd0;
+		// One- and two-clock history of the OKI0 fetch interface, so a
+		// mismatch line can say what changed in the registered-cen window
+		// (NMK-15): was the address different a clock ago, was it resident
+		// then, and did the cache fill anything on the last two clocks.
+		reg [21:0] oki0_addr_d1 = 22'd0, oki0_addr_d2 = 22'd0;
+		reg        oki0_ok_d1 = 1'b0, oki0_ok_d2 = 1'b0;
+		reg        oki0_fill_d1 = 1'b0, oki0_fill_d2 = 1'b0;
+		reg  [3:0] oki0_fill_victim_d1 = 4'd0, oki0_fill_victim_d2 = 4'd0;
+		reg        oki0_fill_pf_d1 = 1'b0, oki0_fill_pf_d2 = 1'b0;
+		reg        oki0_cen_d1 = 1'b0;
+		always @(posedge clk_sys) begin
+			oki0_addr_d2 <= oki0_addr_d1; oki0_addr_d1 <= oki0_rom_addr;
+			oki0_ok_d2   <= oki0_ok_d1;   oki0_ok_d1   <= oki0_rom_ok;
+			oki0_fill_d2 <= oki0_fill_d1; oki0_fill_d1 <= oki0_cache_inst.pending & oki0_cache_inst.sd_valid;
+			oki0_fill_victim_d2 <= oki0_fill_victim_d1; oki0_fill_victim_d1 <= oki0_cache_inst.victim;
+			oki0_fill_pf_d2 <= oki0_fill_pf_d1; oki0_fill_pf_d1 <= oki0_cache_inst.req_is_prefetch;
+			oki0_cen_d1 <= oki_cen & ~oki0_stall;
+		end
 		always @(posedge clk_sys) begin
 			if (oki_cen) begin
 				oki_cen_total_r <= oki_cen_total_r + 32'd1;
@@ -977,7 +1001,16 @@ module raphero_core #(
 				if (!oki0_rom_ok) oki0_adpcm_unserved_r <= oki0_adpcm_unserved_r + 32'd1;
 				if (OKI1_ROM_FILE != "") begin
 					oki0_bytes_checked <= oki0_bytes_checked + 32'd1;
-					if (oki0_rom_data != golden0[oki0_rom_addr]) oki0_bytes_wrong <= oki0_bytes_wrong + 32'd1;
+					if (oki0_rom_data != golden0[oki0_rom_addr]) begin
+						oki0_bytes_wrong <= oki0_bytes_wrong + 32'd1;
+						// Every mismatch is worth a line: the audit is otherwise exact,
+						// so a stray byte is a real fetch race to chase (NMK-15).
+						$display("OKI0 GOLDEN MISMATCH addr=%06x got=%02x want=%02x rom_ok=%0d stall=%0d latch#%0d | 1clk ago: addr=%06x ok=%0d cen_passed=%0d fill=%0d(victim %0d pf %0d) | 2clk ago: addr=%06x ok=%0d fill=%0d(victim %0d pf %0d) | cache now: hit=%0d idx=%0d pending=%0d victim=%0d pf=%0d req_line=%05x",
+							oki0_rom_addr, oki0_rom_data, golden0[oki0_rom_addr], oki0_rom_ok, oki0_stall, oki0_bytes_checked,
+							oki0_addr_d1, oki0_ok_d1, oki0_cen_d1, oki0_fill_d1, oki0_fill_victim_d1, oki0_fill_pf_d1,
+							oki0_addr_d2, oki0_ok_d2, oki0_fill_d2, oki0_fill_victim_d2, oki0_fill_pf_d2,
+							oki0_cache_inst.hit_cur, oki0_cache_inst.idx_cur, oki0_cache_inst.pending, oki0_cache_inst.victim, oki0_cache_inst.req_is_prefetch, oki0_cache_inst.req_line);
+					end
 				end
 			end
 			if (oki1_chip.u_rom.st == 8'h02 && oki1_chip.u_rom.cen32) begin
@@ -985,7 +1018,11 @@ module raphero_core #(
 				if (!oki1_rom_ok) oki1_adpcm_unserved_r <= oki1_adpcm_unserved_r + 32'd1;
 				if (OKI2_ROM_FILE != "") begin
 					oki1_bytes_checked <= oki1_bytes_checked + 32'd1;
-					if (oki1_rom_data != golden1[oki1_rom_addr]) oki1_bytes_wrong <= oki1_bytes_wrong + 32'd1;
+					if (oki1_rom_data != golden1[oki1_rom_addr]) begin
+						oki1_bytes_wrong <= oki1_bytes_wrong + 32'd1;
+						$display("OKI1 GOLDEN MISMATCH t=%0t addr=%06x got=%02x want=%02x rom_ok=%0d stall=%0d latch#%0d",
+							$time, oki1_rom_addr, oki1_rom_data, golden1[oki1_rom_addr], oki1_rom_ok, oki1_stall, oki1_bytes_checked);
+					end
 				end
 			end
 		end

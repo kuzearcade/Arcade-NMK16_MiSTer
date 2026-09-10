@@ -1708,13 +1708,18 @@ module tdragon2_core #(
 	wire nmk112_we = z80_io_we & sel_io_nmk112;
 	wire [17:0] oki0_rom_addr_raw, oki1_rom_addr_raw;
 	wire [21:0] oki0_rom_addr, oki1_rom_addr;
+	// "A gated OKI cen is passing this clock" — a bank write landing on
+	// this edge would change the remapped address inside jt6295's
+	// registered-cen latch window (rtl/nmk112.sv `hold`, NMK-15). Assigned
+	// below, after the stall wires exist.
+	wire nmk112_hold;
 
 	nmk112 #(
 		.ROM0_BYTES(2097152), // ww930916.4 / bp932an.a06, 0x200000 (oki1, same both games)
 		.ROM1_BYTES(2097152)  // ww930915.3, 0x200000 (oki2 — macross2's own bp932an.a05 is half this; harmless, see header)
 	) nmk112_inst (
 		.clk_sys(clk_sys), .reset(reset),
-		.reg_sel(z80_a[2:0]), .reg_data(z80_do), .reg_we(nmk112_we),
+		.reg_sel(z80_a[2:0]), .reg_data(z80_do), .reg_we(nmk112_we), .hold(nmk112_hold),
 		.rom0_addr_in(oki0_rom_addr_raw), .rom0_addr_out(oki0_rom_addr),
 		.rom1_addr_in(oki1_rom_addr_raw), .rom1_addr_out(oki1_rom_addr)
 	);
@@ -1739,6 +1744,7 @@ module tdragon2_core #(
 	wire [7:0] oki0_rom_data, oki1_rom_data;
 	wire       oki0_rom_ok, oki1_rom_ok;
 	wire       oki0_stall, oki1_stall;   // HW path: sample byte not resident yet — hold the chip's cen
+	assign nmk112_hold = oki_cen & (~oki0_stall | ~oki1_stall);
 	generate
 	if (!HW_ROMS) begin : g_oki_sim
 		reg [7:0] oki0_rom [0:2097151]; // ww930916.4 / bp932an.a06, 0x200000

@@ -1149,6 +1149,92 @@ Note on the MiSTer screenshot rows for the overlay: the native
 and repeat lines (the box now runs the 640x480 output mode), so decode
 overlay rows by their marker colour, never by absolute y.
 
+## NMK-15: the one OKI byte the fetch-hazard fix left (2026-09-10)
+
+The `raphero_hw` golden-byte audit had one residual: `oki0 727249
+latches / 1 wrong`, and the same latch counted as "unserved" — the chip
+latched a sample byte while `rom_ok=0`, which the `cen` stall gating
+of the OKI section above exists to make impossible. Identical against
+the previous `tlcs90.sv`, so not a CPU-core regression.
+
+**First hypothesis, refuted.** The obvious one-clock hole: jt6295's
+internal pulses (`cen_sr32` etc., `jt6295_timing.v`) are *registered*
+copies of the gated `cen`, so the ADPCM latch (`adpcm_dout <= rom_data`
+on the clock `st` leaves state 2, `jt6295_rom.v`) lands one clock after
+the stall check that let the `cen` through. `oki_rom_cache`'s
+"never evict the line in use" guard is only evaluated when a prefetch is
+*issued*; its fill lands many clocks later, and the chip could have
+moved onto that line — a fill in that clock would clobber the byte
+being latched. A guard was added to drop such a fill (kept: it closes
+a real sibling hazard), and the audit went to 0 wrong — but the
+dropped-prefetch counter read **0 on every OKI cache**; the 16 drops
+were all in the audio CPU's program cache (also an `oki_rom_cache`),
+and OKI0's stall and latch counts had shifted by a few clocks. The
+byte had been *displaced*, not fixed. That is exactly the failure
+mode a "fix" can hide behind when the only evidence is a count going
+to zero.
+
+**The diagnostic that settled it.** The audit's mismatch branch now
+prints the previous two clocks' address, residency and fill activity
+(`raphero_core.sv`, `g_oki_hw`). On the pre-fix cache: one clock
+before the latch the address was `0x1D0000`, resident, gated `cen`
+passed; at the latch it was `0x170000`, not resident; **no fill on
+either clock**. Same 64 KB-page offset (`0x0000`), different bank —
+an **NMK112 bank-register write** landing on the very edge that
+sampled the passing `cen`. The bank registers update on `reg_we` on
+any clock (the sound CPU's write is sampled on `clk`, not `cen`) and
+the remap is combinational, so the cache sees a new, non-resident
+address inside the registered-`cen` window and the chip latches
+whatever `data` shows for it (the default line's byte, `0xBB`). The
+chip's own address pipeline cannot cause this — its updates are
+cen-aligned and ten clocks apart — and jt6295's phrase-start address
+load is `cen4`-aligned too, so NMK112 writes are the only
+asynchronous path. Gunnail has no NMK112, hence its permanent 0/0.
+
+**Fix.** `nmk112.sv` gains a `hold` input: a write arriving while
+hold is high is captured in a one-entry slot and applied on the next
+clock. Each core drives `hold = oki_cen & (~oki0_stall | ~oki1_stall)`
+— "a gated cen is passing *this* clock" (combinational: the harmful
+write is the one coincident with the `cen`, since it lands on the edge
+that samples it; a registered copy would block the wrong clock). The
+deferred write lands after the latch; the chip takes the old bank's
+byte — a 25 ns shift, inside MAME's own sub-sample write/fetch
+ordering, and inside the real ROM's access time. `oki_cen` is 1-in-10,
+so one clock always suffices. tdragon2's Z80 `io_we` is a level held
+for the whole I/O cycle and simply re-captures the same write each
+clock (idempotent); only a *different* write within one clock of a
+pending one could be lost, which neither CPU can produce — the
+Verilator counter for that case reads 0.
+
+**Proof, the right way round.** The pre-fix cache (no prefetch guard)
+with the hold alone, on the *original* timeline — same 727,249
+latches, same 10,829,725 stall count as the failing run — gives 0
+wrong / 0 unserved, 40 writes deferred, 0 lost. `gunnail_hw`,
+`tdragon2_hw` and `macross2_hw` stay clean on the final RTL;
+`tdragon2_hw` shows the hold firing on its Z80 path as well. The
+`oki_rom_cache` unit test is unchanged (99.94% resident, 0 wrong,
+0.12% stall).
+
+**Build note.** Gunnail's first rebuild with the cache guard missed
+timing by −1.066 ns; a `quartus_sta` path report showed every failing
+path on `video_timing hcount[4] → video_macross2 tile_rgb_r[18/19]` —
+the compositing path, untouched — i.e. placement wobble, and `SEED 3
+→ 11` gave +0.378 ns. Raphero then did the same twice on the final
+RTL — `SEED 23` −0.132 ns on the framework's `d[14] → hdmi_out_d[14]`
+register, `SEED 31` −0.080 ns inside `ascal` (`o_vacpt[0] →
+o_vpixq_pre[2].b[5]`) — neither anywhere near the cores; seeds 7, 19
+and 43 run in parallel all passed (+0.069, +0.356, +0.429) and 43 is
+now the tracked seed. Macross2 passed first time (+0.132). Worth
+remembering: check *which* paths fail before attributing a miss to the
+change that triggered the rebuild — and that three parallel Quartus
+runs plus the scratch copies of earlier builds overflow the 16 GB
+`/tmp` tmpfs (all three died with "Disk is full"); delete finished
+`build_*` copies before launching a batch.
+
+All three RBFs deployed and MD5-verified: tdragon2 20/20 s audio
+active from load, gunnail 16/20 s (ROM-upload gap), raphero 18/20 s,
+each in its attract demo.
+
 ## Autofire (tdragon2 and macross2)
 
 OSD `P1 Autofire` / `P2 Autofire` (status[12:10] / [15:13], default
