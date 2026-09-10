@@ -42,12 +42,17 @@ but not proven), `infra` (build/test/doc health).
   it is moot.
 
 ### NMK-2 · HSync/VSync placement is an untuned placeholder
-- **Cores:** all three · **Severity:** limitation · **Status:** open
-- **Ref:** "Status" (and `Macross2.sv`'s header)
+- **Cores:** all three · **Severity:** limitation · **Status:** in progress (trims shipped 2026-09-10; baseline awaits CRT measurement)
+- **Ref:** "H Shift / V Shift options (sync-position trims for CRT users, NMK-2)"
 - Scaler locks and reports 384x224 @ 56.2 Hz; sync *position* has never
   been tuned against a reference (real board sync timing isn't
   documented anywhere this project has sourced). Cosmetic on HDMI;
   matters more for direct/analog video users.
+- Each core now has `H Shift` (±16 px, 2-px steps) and `V Shift`
+  (+4 / −8 lines) OSD trims that move the sync pulses inside blanking
+  with the picture (DE) fixed; 0 = the old placement. Next step is on
+  real CRT equipment: find the settings that centre the picture, then
+  fold them into the constants so 0 becomes the measured baseline.
 
 ### NMK-3 · Residual TLCS-90 register divergence vs MAME (NMI phase)
 - **Cores:** Gunnail, Raphero (shared `tlcs90.sv`) · **Severity:** gap · **Status:** open
