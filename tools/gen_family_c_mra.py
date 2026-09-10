@@ -55,7 +55,14 @@ MACROSS2 = dict(
         ('8,11', "Coin B", "5C_3C,2C_1C,3C_2C,1C_4C,4C_1C,1C_6C,2C_5C,1C_2C,4C_3C,1C_7C,3C_1C,1C_3C,3C_4C,1C_5C,2C_3C,1C_1C"),
         ('12,15', "Coin A", "Free_Play,2C_1C,3C_2C,1C_4C,4C_1C,1C_6C,2C_5C,1C_2C,4C_3C,1C_7C,3C_1C,1C_3C,3C_4C,1C_5C,2C_3C,1C_1C"),
     ],
-    buttons=("Button 1,Button 2,Start,Coin", "Y,B,Start,R"),
+    # 5 entries (including an unused-by-this-game placeholder "Button 3"),
+    # matching TDRAGON2's own list, to keep MiSTer's default gamepad
+    # mapping (positional against THIS list) aligned with the shared
+    # core's fixed CONF_STR "J1,Button 1,Button 2,Button 3,Start,Coin;" —
+    # a 4-entry list shifts Start/Coin one bit position and breaks
+    # gamepad Coin (see releases/macross2.mra's own comment; found and
+    # fixed 2026-09-10).
+    buttons=("Button 1,Button 2,Button 3,Start,Coin", "Y,B,A,Start,R"),
     shared=[
         ("b4aa8ac7", "mcrs2j.2", "audiocpu, 0x020000 @ 0x080000"),
         ("c7417410", "mcrs2j.1", "fgtile, 0x020000 @ 0x0A0000"),
