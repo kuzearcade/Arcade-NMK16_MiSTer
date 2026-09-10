@@ -143,11 +143,12 @@ but not proven), `infra` (build/test/doc health).
 ## Verification gaps (works, not proven)
 
 ### NMK-11 · macross2 autofire verified via OSD only
-- **Severity:** gap · **Status:** open
-- The setting was seen to take hold in the OSD; no gameplay
-  firing-rate capture was made for macross2 specifically. Mechanism is
+- **Severity:** gap · **Status:** fixed (2026-09-10 — confirmed by the user in manual play on the board)
+- The setting had only been seen to take hold in the OSD; no gameplay
+  firing-rate capture was made for macross2 specifically (mechanism is
   tdragon2's already-proven path with the `& ~game_macross2` gate
-  removed, so risk is low.
+  removed). Manual testing on the DE10-Nano confirmed autofire fires
+  in macross2 gameplay, closing the gap.
 
 ### NMK-12 · New Orientation/Flip options not re-verified for settings persistence
 - **Cores:** all three · **Severity:** gap · **Status:** open
