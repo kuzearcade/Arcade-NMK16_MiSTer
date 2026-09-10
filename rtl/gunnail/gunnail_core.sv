@@ -186,6 +186,11 @@ module gunnail_core #(
 	output [7:0]  dbg_nmk004_f,
 	output [15:0] dbg_nmk004_hl,
 	output [7:0]  dbg_nmk004_ram_hl,
+	output [15:0] dbg_nmk004_de,
+	output [15:0] dbg_nmk004_bc,
+	output [15:0] dbg_nmk004_ix,
+	output [15:0] dbg_nmk004_iy,
+	output [15:0] dbg_nmk004_sp,
 
 	// pixel readback (mirrors MAME's screen:pixel(x,y))
 	input  [8:0]  rd_x,
@@ -868,6 +873,8 @@ module gunnail_core #(
 		.dbg_pc(dbg_nmk004_pc), .dbg_valid(dbg_nmk004_valid),
 		.dbg_a(dbg_nmk004_a), .dbg_f(dbg_nmk004_f), .dbg_hl(dbg_nmk004_hl),
 		.dbg_ram_hl(dbg_nmk004_ram_hl),
+		.dbg_de(dbg_nmk004_de), .dbg_bc(dbg_nmk004_bc), .dbg_ix(dbg_nmk004_ix),
+		.dbg_iy(dbg_nmk004_iy), .dbg_sp(dbg_nmk004_sp),
 		.p4(nmk004_p4), .bx(), .by()
 	);
 	assign dbg_nmk004_cen   = snd_cen;

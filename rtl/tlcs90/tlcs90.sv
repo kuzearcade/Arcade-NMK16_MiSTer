@@ -201,7 +201,10 @@ module tlcs90 (
 	output      [7:0]  dbg_f,
 	output      [15:0] dbg_hl,
 	output      [15:0] dbg_de,
-	output      [15:0] dbg_iy
+	output      [15:0] dbg_iy,
+	output      [15:0] dbg_bc,
+	output      [15:0] dbg_ix,
+	output      [15:0] dbg_sp
 );
 
 	// ------------------------------------------------------------------
@@ -223,6 +226,9 @@ module tlcs90 (
 	assign dbg_hl = hl;
 	assign dbg_de = de;
 	assign dbg_iy = iy;
+	assign dbg_bc = bc;
+	assign dbg_ix = ix;
+	assign dbg_sp = sp;
 
 	// ------------------------------------------------------------------
 	// Register-pair / register select codes (match the reference exactly)
@@ -848,11 +854,34 @@ module tlcs90 (
 	function automatic [7:0] szp8(input [7:0] v);
 		szp8 = sz8(v) | (^v ? 8'h00 : (8'd1 << PF));
 	endfunction
+	// XCF ("extra carry", bit 3) on INC/INCX/DEC/DECX: the reference
+	// (tlcs90.cpp's INC/INCX/DEC/DECX cases) computes F from the SZHV
+	// table alone (which never touches XCF) and then, as a genuinely
+	// separate step, sets XCF if-and-only-if the 8-bit result is exactly
+	// zero — i.e. XCF is unconditionally RECOMPUTED every INC/DEC, never
+	// just left holding whatever it had before. This core's own
+	// szhv_inc8()/szhv_dec8() never included that bit, so every one of
+	// their 4 callers (OP_INC/OP_DEC's 8-bit forms, OP_INCX/OP_DECX) was
+	// silently clearing XCF to 0 unconditionally instead — found via a
+	// register-state trace diff against a MAME oracle capture (GunNail's
+	// sound-sequencer divergence at ~14.7s, docs/hw-bringup.md): the
+	// first hard evidence was a lone F-register mismatch on a `dec a` in
+	// the shared NMK004 boot ROM, XCF set in MAME but not here, A itself
+	// matching (i.e. an arithmetic result, not a value, bug). Real
+	// consequence: XCF is INCX/DECX's own execute-gate (chaining a 16-bit
+	// inc/dec across two 8-bit register ops via "INC lo; INCX hi" —
+	// INCX only fires when the low byte's own INC just wrapped to zero),
+	// so a stuck-clear XCF means any such chained 16-bit pointer/counter
+	// simply never advances its high byte — a plausible, structural
+	// explanation for a table-walking pointer silently failing to step
+	// forward. Not yet re-verified end to end (see docs/hw-bringup.md).
 	function automatic [7:0] szhv_inc8(input [7:0] v);
-		szhv_inc8 = sz8(v) | (v == 8'h80 ? (8'd1 << PF) : 8'h00) | (v[3:0] == 4'h0 ? (8'd1 << HF) : 8'h00);
+		szhv_inc8 = sz8(v) | (v == 8'h80 ? (8'd1 << PF) : 8'h00) | (v[3:0] == 4'h0 ? (8'd1 << HF) : 8'h00)
+		          | (v == 8'h00 ? (8'd1 << XCF) : 8'h00);
 	endfunction
 	function automatic [7:0] szhv_dec8(input [7:0] v);
-		szhv_dec8 = sz8(v) | (8'd1 << NF) | (v == 8'h7f ? (8'd1 << PF) : 8'h00) | (v[3:0] == 4'hf ? (8'd1 << HF) : 8'h00);
+		szhv_dec8 = sz8(v) | (8'd1 << NF) | (v == 8'h7f ? (8'd1 << PF) : 8'h00) | (v[3:0] == 4'hf ? (8'd1 << HF) : 8'h00)
+		          | (v == 8'h00 ? (8'd1 << XCF) : 8'h00);
 	endfunction
 
 	// ------------------------------------------------------------------
@@ -1782,12 +1811,33 @@ module tlcs90 (
 						OP_CCF: f <= (f & ((8'd1<<SF)|(8'd1<<ZF)|(8'd1<<IFB)|(8'd1<<PF))) | (f[CF] ? (8'd1<<HF) : ((8'd1<<XCF)|(8'd1<<CF)));
 
 						OP_BIT: f <= (f & ((8'd1<<IFB)|(8'd1<<CF))) | (8'd1<<HF) | sz_bit8(val2[7:0] & (8'd1 << r1[2:0]));
-						OP_SET, OP_RES: begin
-							wb_val <= op == OP_SET ? {8'h00, val2[7:0] | (8'd1 << r1[2:0])} : {8'h00, val2[7:0] & ~(8'd1 << r1[2:0])};
-							addr <= eff2; addr_bank <= bank2;
-							dout <= op == OP_SET ? (val2[7:0] | (8'd1 << r1[2:0])) : (val2[7:0] & ~(8'd1 << r1[2:0]));
-							mem_wr <= 1'b1;
-							state <= S_FETCH_OP;
+						OP_SET, OP_RES: begin : setres_blk
+							// mode2==M_R8 is this opcode group's compact
+							// "bit n,A / res n,A / set n,A" form — the
+							// register operand is *implicit* (decode never
+							// assigns d2_r2e for it, unlike every genuine
+							// r2-selected LD/ADD/etc form, so it defaults
+							// to 0/R8_B, not A), the same way OP_INC/DEC
+							// check mode1==M_R8 to write back to a register
+							// instead of memory. Missing here before: SET/
+							// RES always wrote to eff2/dout regardless of
+							// mode2, silently discarding the result for
+							// the register form entirely (found via a
+							// register-state trace diff against a MAME
+							// oracle capture, docs/hw-bringup.md's GunNail
+							// investigation — `res 7,a` left A unchanged).
+							reg [7:0] rv;
+							rv = op == OP_SET ? (val2[7:0] | (8'd1 << r1[2:0])) : (val2[7:0] & ~(8'd1 << r1[2:0]));
+							if (mode2 == M_R8) begin
+								a_or_r8_write(R8_A[2:0], rv);
+								state <= S_FETCH_OP;
+							end else begin
+								wb_val <= {8'h00, rv};
+								addr <= eff2; addr_bank <= bank2;
+								dout <= rv;
+								mem_wr <= 1'b1;
+								state <= S_FETCH_OP;
+							end
 						end
 
 						OP_INC: begin : inc_blk
