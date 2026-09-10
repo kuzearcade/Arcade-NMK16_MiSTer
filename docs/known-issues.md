@@ -85,22 +85,28 @@ but not proven), `infra` (build/test/doc health).
   same 2,791 Timer-1 entries, same 3-tick offset — that fix touches
   nothing GunNail's firmware executes.
 
-### NMK-17 · Timer-1 long-mode period ~0.1% shorter than MAME's
-- **Cores:** Gunnail, Raphero (NMK004 / bare TLCS-90 timers, `nmk004_periph.sv`) · **Severity:** gap · **Status:** open
-- **Ref:** "Fifth pass…"
-- Found while characterizing NMK-3. GunNail's firmware runs Timer 1 in
-  two period modes: ~40,320 cycles normally and ~113k cycles in three
-  episodes (boot, ~11.9 s, ~14.6 s — the track-change moments). In the
-  normal mode the RTL and MAME agree to a few cycles (40,316 vs 40,320
-  median). In the long mode the RTL's intervals alternate 113,248 /
-  113,372 while MAME's sit at 113,320-113,496 (its own timer-callback
-  jitter), a mean shortfall of ~100-150 cycles per tick (≈0.1%). Not
-  audible (a 0.1% tempo difference for a few seconds at a time), and
-  it is not known which side matches the silicon — MAME's timer model
-  is itself an approximation — but it is a reproducible, quantified
-  difference in one prescaler/reload configuration and should be
-  checked against the TMP90C840 datasheet's prescaler rules before
-  the next NMK004 game is brought up.
+### NMK-17 · Timer-1 "long-mode period" ~0.1% shorter than MAME's — not a timer difference
+- **Cores:** Gunnail, Raphero (NMK004 / bare TLCS-90) · **Severity:** gap · **Status:** closed — explained (2026-09-10)
+- **Ref:** "Fifth pass…" (addendum); `nmk004_periph.sv` `+define+TIMER_TRACE`
+- Found while characterizing NMK-3: with partial intervals excluded,
+  the free-running mode agrees to 0.01 cycles (40,319.99 vs 40,320.01 =
+  8 × 16 × 315, the boot ROM's 16-bit T0/T1 setup) while the boot
+  phase's ~113k-cycle Timer-1 intervals were 81 cycles shorter on the
+  RTL (113,347 vs 113,428). Tracing every TREG/TCLK/TMOD/TRUN write
+  (`TIMER_TRACE`) shows the boot phase is not a timer mode at all: from
+  0.57 s the sound program stops the timers, rewrites TMOD=04 / TCLK=aa
+  / TREG0..3 and restarts with TRUN=23 every ~14.1 ms, so each interval
+  is one 40,320-cycle hardware period plus ~73k cycles of software
+  between restarts (the game's own program also uses T0/T1/T2 as
+  one-shot delays, TRUN 27→25→21→20→27, in its first 0.05 s). The
+  hardware part is identical by the free-running measurement; the 81
+  cycles sit in the software part — 0.11%, the CPU core's known
+  per-instruction cycle-cost residual against MAME's TLCS-90 cycle
+  table (cf. 2/7779 on mustang). Restart semantics were checked too:
+  both models reset the count and prescaler phase on a TRUN start (the
+  RTL's free-running ÷8 base gives 0..7 cycles of start jitter, mean
+  3.5). Nothing to fix in the timer; the cycle-cost residual is
+  inaudible and already documented.
 
 ### NMK-4 · TLCS-90 standalone self-tests were silently not running
 - **Cores:** Gunnail, Raphero (+ every sim-only TLCS-90 game) · **Severity:** infra · **Status:** fixed (unreleased — harness only, no RBF change)
