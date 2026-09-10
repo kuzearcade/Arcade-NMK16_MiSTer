@@ -646,8 +646,8 @@ congestion issue (Raphero was already at 82% ALM / 94% M10K with 0.27 ns
 of setup slack before this change), not caused by the new expression,
 which costs the same one adder as the old one.
 
-## GunNail: the NMK004 sound sequencer stops loading new FM
-instruments a few seconds into a track (open, not yet root-caused)
+## GunNail: the NMK004 sound sequencer diverges from MAME at 14.7-14.85s
+into a track (root mechanism identified, underlying cause open)
 
 Found while investigating the mix-balance issue above: GunNail's music
 sounds static/looped fairly early into a track on both the RTL sim and
@@ -656,39 +656,123 @@ hardware, distinct from the level bug. Traced with two Lua taps
 YM2203 register/data ports) and the RTL's own equivalent debug ports
 (`dbg_ym_we`, already wired to `dbg_ym_wdata`/`dbg_ym_waddr` added this
 session) plus the existing `dbg_host_cmd_we`/`dbg_mcu_reply_we` 68000-
-to-sound-CPU latch taps:
+to-sound-CPU latch taps, and later a full PC/cycle-level instruction
+trace comparison (below).
+
+### First pass: the host-command path and gross CPU activity are fine
 
 - The 68000-to-NMK004 command handshake (`0x08001E` write / `0x08000E`
   read, a periodic `CC`/`F7` ping plus the occasional real command)
   matches MAME's **exactly**, frame for frame, including the point
-  where it goes quiet (frame ~819-822 in the first 25 s of the attract
-  demo) — this is not a divergence, it's normal: the 68000 sends a
-  command once (`10`, "play track") and the sound CPU's own firmware
-  plays the whole track without further host pokes, in both MAME and
-  the RTL.
+  where it goes quiet (frame ~819-822, ~14.6 s, in the first 25 s of
+  the attract demo) — this is not a divergence, it's normal: the 68000
+  sends a command once (`10`, "play track") and the sound CPU's own
+  firmware plays the whole track without further host pokes, in both
+  MAME and the RTL.
 - The RTL's NMK004 (TLCS-90) is not stalled: a PC-cycle trace
   (`nmk004_cyc.trace`, cycle = `clk_sys_ticks/5`) shows 500-800
   *distinct* program addresses executed per second, steadily, both
   before and after the point where new YM2203 instrument-register
   writes (`0x30-0x8F`) stop — the CPU keeps running comparable code,
   it just stops calling whatever routine loads a new instrument.
-  Roughly 40% of every second's instructions bounce between two
-  adjacent addresses (`$01DA`/`$01DB`), unchanged before and after —
-  looks like an idle/poll pair, not the hang site.
-- MAME's own NMK004, given the identical `10` command, keeps emitting
-  fresh instrument writes for many more seconds (432 register
-  writes/s from ~16 s onward in a 25 s capture) — a real, ongoing
-  melody — while the RTL's only repeats key-on retriggers of the
-  instrument it already loaded.
 
-Net: this is a firmware-logic or data divergence inside the sound
-CPU's own track-playing routine (most likely something that should
-advance a note/step index but doesn't), not a CPU hang and not the
-host-command path. Pinning it down needs a PC-level instruction trace
-of MAME's `nmk004:mcu` compared cycle-for-cycle against the RTL's
-existing `nmk004_cyc.trace`, in the style of the earlier
-"cycle-timestamped NMK004 trace tooling" work for the protection MCU —
-not yet done.
+### Second pass: PC/cycle-level trace comparison pins the divergence to a 150ms window
+
+Reused the "cycle-timestamped NMK004 trace tooling" built earlier for
+the protection-MCU/mustang investigation
+(`sim/oracle/capture_cyc_trace.py`, `sim/compare/cyc_diff.py`; format:
+`"<cumulative cycles> <PC>"`, gunnail's own reference testbench already
+writes the RTL side to `nmk004_cyc.trace`). Captured a fresh 20 s MAME
+oracle trace of `:nmk004:mcu` (`--seconds-to-run 20`, ~13.2M
+instructions) and a matching 20 s RTL trace (13.1M instructions; must
+be run from `sim/rtl/gunnail/` itself — the `$readmemh` paths baked
+into the Verilated binary via `-G...FILE=` are resolved relative to
+the process's CWD at run time, not compile time, so running the same
+binary from a different directory silently loads all-zero ROMs).
+
+`cyc_diff.py`'s strict ordered-PC-subsequence walk breaks almost
+immediately (at oracle instruction 293,571, ~0.445 s in) on a genuine
+but **benign** async timing artifact, not the real bug: the boot
+handshake's own status-poll loop (`$0EC7: ld a,($FB00)` /
+`$0ECB: or a,a` / `$0ECD: jr nz,$0EC7`, waiting for the 68000 to clear
+its own command latch) takes one more pass in MAME than in the RTL at
+that specific moment — an expected consequence of the two CPUs'
+residual, already-documented sub-1%-per-instruction cycle-cost
+differences (see "TLCS-90 cycle-timing fix" above) compounding into a
+few-microsecond relative skew by then. Confirmed harmless: both sides
+take the identical branch immediately afterward
+(`$0196: jr c,$01A8`, carry clear on both, same fall-through).
+
+Since the strict matcher can't recover from a loop-count skew, checked
+alignment directly instead: took a run of 40-60 consecutive oracle PCs
+as a landmark (discarding windows with under ~10 distinct addresses,
+which are just the same generic 2-instruction idle-poll recurring
+everywhere and match everywhere/nowhere meaninglessly) and searched for
+that exact contiguous sequence anywhere in the full RTL trace:
+
+| MAME time | landmark found in RTL trace at | verdict |
+|---|---|---|
+| 14.60 s | 14.614 s (+14 ms) | still in lockstep |
+| 14.65 s | 14.650 s (+0 ms) | still in lockstep |
+| 14.70 s | 14.619 s (-81 ms) | still in lockstep |
+| 14.75 s | not this exact sequence (coincidental early match only) | diverging |
+| 14.85 s | not found anywhere in the 20 s RTL trace | diverged |
+| 15.4-18.0 s | not found anywhere in the 20 s RTL trace | diverged |
+
+So the two CPUs run the **identical instruction sequence**, in
+lockstep to within ~100 ms, all the way to ~14.7 s — then MAME
+executes something the RTL's own 20-second run never executes at all,
+starting somewhere in 14.7-14.85 s. That 150 ms window is real time
+right after the `10` host command (~14.6 s) — consistent with "the
+68000 kicks off a track and the sound CPU's self-driven player
+diverges shortly after starting it."
+
+### What MAME executes in that window: a table-driven register loader
+
+The MAME PCs right at 14.7-14.85 s repeatedly enter this loop (address
+correspondence confirmed against an earlier 1-second full-disassembly
+capture, same addresses, same code — this loop is a shared subroutine
+called from many places, not something unique to this one moment):
+
+```
+00160: ld  a,(hl)        ; register number
+00162: inc hl
+00163: ld  ($F800),a     ; YM2203 register-select port
+00167: call $03BD        ; fixed-length push/pop-bc pad, no host wait
+0016A: ld  a,(hl)        ; register value
+0016C: inc hl
+0016D: call $03B9        ; -> ld ($F801),a  (YM2203 data port), same pad
+00170: cp  (hl),$FF      ; end-of-table marker?
+00173: jr  nz,$0160      ; loop until $FF
+```
+
+A straight-line `(register, value)` byte-pair table walk, terminated
+by `$FF`, with `HL` as the read pointer — this **is** the instrument
+register loader (`$3B9`/`$3BD` write exactly the YM2203 data/register
+ports the earlier `dbg_ym_we` trace was watching). Critically, the
+loop itself has no host- or timer-wait inside it: given the same
+starting `HL`, it is entirely deterministic. So the actual divergence
+is not in this loop — it's in whatever computes the `HL` pointer (i.e.
+which note/instrument to load next) before each call, which was
+already configuring the TLCS-90's internal hardware timer
+(`TRUN`/`TMOD`/`TCLK`/`TFFCR`/`TREG0-3`) during the very earliest boot
+instructions traced. `rtl/tlcs90/nmk004_periph.sv` does implement that
+timer (real prescale/compare-match counters, with its own comments
+noting prior careful matching against MAME's `t90_timer_callback`/
+`t90_timer4_callback`) — but the leading theory, not yet confirmed, is
+that the same class of sub-1% residual per-instruction cycle-cost
+imperfection documented for the CPU core compounds, via this timer,
+into a one-tick-different note-advance point by ~14.7 s of elapsed
+real time: individually tiny errors, invisible for 14+ seconds while
+nothing depends on absolute timing, then large enough in aggregate to
+shift which table offset a periodic timer-driven event loads from.
+
+**Not yet done**: confirming the timer-drift theory directly (compare
+the TLCS-90's own timer-compare event count/timing between the two
+traces in the few seconds before 14.7 s, the way `cyc_diff.py` compares
+instruction costs) or finding an alternative cause if it doesn't hold
+up, and then the actual fix in either `tlcs90.sv`'s per-opcode cycle
+table or `nmk004_periph.sv`'s timer logic.
 
 ## Sound effects corrupted on hardware: the OKI sample fetch
 
