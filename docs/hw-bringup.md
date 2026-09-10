@@ -1040,6 +1040,57 @@ case, mirroring OP_INC/OP_DEC's own pattern exactly.
   identical 2,824,804-instruction / last-PC `$0088` MCU run, so that
   firmware is provably untouched by the writeback change.
 
+### Fifth pass: the residual is a 3-tick Timer-1 phase offset from boot
+
+The fourth pass left one open thread (docs/known-issues.md NMK-3): after
+the two CPU fixes the register walk from the 14.60 s anchor still
+stopped, ~4,000 instructions in, on "a port-toggle byte one NMI out of
+phase". That was a guess. Disassembling the NMK004 boot ROM
+(`mame/unidasm -arch tmp90840`, mind that `-skip` needs `-basepc` or
+every address prints 0x10 low) pins it: the NMI vector `$0018` jumps to
+`$0079`, which only reloads the watchdog countdown `($FF30)` from
+`($EFFC)`; the divergent PC `$009C` is in the **Timer-1** handler at
+`$0082` — `di; decw ($FF30); jr z,<halt>; …five sequencer calls…;
+ld a,($FF80); xor a,$08; ld ($FF80),a; ld (P4),a; reti`. P4.3 is a
+heartbeat that flips every T1 tick, so the mismatch means one side had
+taken one more Timer-1 interrupt. And MAME's `check_interrupts()`
+returns early when IF is clear for *every* source, NMI included, so
+NMI gating is identical on both sides — the NMI was never involved.
+
+Counting T1 handler entries in both 16-second register traces
+(`t1stats.py`; the MAME trace prints PC as five hex digits, so compare
+numerically): steady-state period identical (median 40,316 vs 40,320
+cycles; 198-199 entries/s on both), but the cumulative MAME−RTL
+difference per second is 0, 1, 3, 3, 3, … 3 — the RTL loses one tick
+in second 1 and two in second 2, during the boot phase where the timer
+runs its long ~113k-cycle mode, and is then exactly three behind for
+the remaining thirteen seconds. Three is odd; hence the parity flip.
+The first tick lands 4.5 ms later on the RTL (0.5611 vs 0.5566 s), the
+same boot-handshake timing the second pass saw as the poll-loop
+iteration difference — where the timer starts relative to the 68000's
+boot progress, which MAME resolves at scheduler granularity.
+
+What the offset does: the host's "play track" commands arrive with
+the same bytes (`00` then `10`), the same 12.5 ms spacing, on both
+sides (`$01DD` is the per-tick command poll: `ld a,($FB00)`, dedup
+against `($FF21)`, append at `$FF00+($FF22)`), but relative to a
+sequencer running ~15 ms behind they fall on different ticks — at one
+tick the RTL's queue holds 2 commands where MAME's holds 0, which is
+exactly the "BC′ 0002 vs 0000" the widened trace shows (`$0201`:
+`ld b,($FF22)`, the queue count, with the alternate register set
+live). From there the two execute the same program one tick apart.
+Re-anchoring the register walk later in the window then locks onto the
+per-channel loop one iteration out of phase (IX F600 vs F640 is
+channel 0's vs channel 1's block) — the tool's limit, not divergence.
+The right yardsticks are semantic: the track-start routine `$0A63`
+runs 36 times on both sides; YM instrument writes match to 0.1% over
+90 s; band correlation 0.968. Closed as benign, with numbers.
+
+One real discrepancy fell out (NMK-17): in the long timer mode the
+RTL's period alternates 113,248/113,372 cycles against MAME's
+113,320–113,496 — about 0.1% short, inaudible, and it is not known
+which side the silicon agrees with.
+
 ## Sound effects corrupted on hardware: the OKI sample fetch
 
 Reported after the fixes above: music fine, sound effects noisy/garbled

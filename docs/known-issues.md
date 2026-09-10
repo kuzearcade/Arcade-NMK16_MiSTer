@@ -55,14 +55,49 @@ but not proven), `infra` (build/test/doc health).
   fold them into the constants so 0 becomes the measured baseline.
 
 ### NMK-3 · Residual TLCS-90 register divergence vs MAME (NMI phase)
-- **Cores:** Gunnail, Raphero (shared `tlcs90.sv`) · **Severity:** gap · **Status:** open
-- **Ref:** "Fourth pass: register-state tracing built, root cause found and fixed"
-- After the XCF and SET/RES fixes the register-trace match against the
-  MAME oracle runs 4,086+ instructions from the 14.60 s anchor, then
-  stops on a port-toggle byte one NMI-firing out of phase. Assessed as
-  the same benign "scheduler-arbitrary NMI timing" class already
-  accepted for mustang, but not chased to a proof. Real-world YM write
-  activity matches MAME within ~0.1%, so no known audible consequence.
+- **Cores:** Gunnail, Raphero (shared `tlcs90.sv`) · **Severity:** gap · **Status:** closed — characterized as a benign boot-phase timer phase offset (2026-09-10)
+- **Ref:** "Fifth pass: the residual is a 3-tick Timer-1 phase offset from boot"
+- The "port-toggle byte" is `$009C` in the NMK004 boot ROM's Timer-1
+  handler — `ld a,($FF80); xor a,$08; ld (P4),a`, a heartbeat that
+  flips P4.3 every tick — so a mismatch there means one side has taken
+  one more T1 interrupt. It was never the NMI: the NMI handler only
+  reloads the watchdog countdown, and MAME gates NMI on IF exactly as
+  the RTL does. Counting T1 entries in both register traces: steady-
+  state period identical (median 40,316 vs 40,320 cycles, 198-199/s on
+  both), but the RTL loses one tick in second 1 and two in second 2
+  of the boot phase and then stays exactly 3 behind for the rest of
+  the trace (cumulative MAME−RTL: 0,1,3,3,3,…). Three is odd, hence
+  the parity flip. The offset comes from where the timer starts
+  relative to the 68000 boot handshake (first tick 0.5611 vs 0.5566 s;
+  the previously-noted boot poll-loop iteration difference) — the same
+  cross-CPU-timing class already accepted for mustang, now measured.
+- Consequence: the host's "play track" commands (`00`, `10`, same
+  bytes, same 12.5 ms spacing on both sides) land on different ticks
+  relative to the sequencer, so at one tick the RTL's command queue
+  holds 2 where MAME's holds 0 (`$0201`: B′ ← ($FF22) is the queue
+  count — the "BC′ 0002 vs 0000" the trace shows). From there the two
+  run the same program one tick (~5 ms) apart, so register-exact
+  comparison stops being the right yardstick; the semantic ones are:
+  the track-start routine `$0A63` executes 36 times on both sides,
+  YM instrument writes match to 0.1% over 90 s, band correlation 0.968.
+  Nothing left to fix here.
+
+### NMK-17 · Timer-1 long-mode period ~0.1% shorter than MAME's
+- **Cores:** Gunnail, Raphero (NMK004 / bare TLCS-90 timers, `nmk004_periph.sv`) · **Severity:** gap · **Status:** open
+- **Ref:** "Fifth pass…"
+- Found while characterizing NMK-3. GunNail's firmware runs Timer 1 in
+  two period modes: ~40,320 cycles normally and ~113k cycles in three
+  episodes (boot, ~11.9 s, ~14.6 s — the track-change moments). In the
+  normal mode the RTL and MAME agree to a few cycles (40,316 vs 40,320
+  median). In the long mode the RTL's intervals alternate 113,248 /
+  113,372 while MAME's sit at 113,320-113,496 (its own timer-callback
+  jitter), a mean shortfall of ~100-150 cycles per tick (≈0.1%). Not
+  audible (a 0.1% tempo difference for a few seconds at a time), and
+  it is not known which side matches the silicon — MAME's timer model
+  is itself an approximation — but it is a reproducible, quantified
+  difference in one prescaler/reload configuration and should be
+  checked against the TMP90C840 datasheet's prescaler rules before
+  the next NMK004 game is brought up.
 
 ### NMK-4 · TLCS-90 standalone self-tests were silently not running
 - **Cores:** Gunnail, Raphero (+ every sim-only TLCS-90 game) · **Severity:** infra · **Status:** fixed (unreleased — harness only, no RBF change)
