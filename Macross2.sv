@@ -96,6 +96,16 @@ localparam CONF_STR = {
 	// monitor being used to play tdragon2 un-rotated for either. Hidden
 	// (H2) under direct video, same reason as Orientation above.
 	"H2O[17],Flip screen,Off,On;",
+	// Sync-position trims for CRT/analog users (docs/known-issues.md
+	// NMK-2): move the H/V sync pulses within blanking while the active
+	// picture (DE) stays put, so the image shifts on a CRT; 0 = the
+	// placement shipped before these options existed. Positive = picture
+	// right / down (sync earlier). H: ±16 px in 2-px steps, listed in
+	// two's-complement order so the 4-bit value 0 is the default. V: only
+	// 4 lines of vblank precede the current vsync (active ends at line
+	// 239, vsync starts at 244), so the list is 0..+4 then -8..-1.
+	"O[21:18],H Shift,0,+2,+4,+6,+8,+10,+12,+14,-16,-14,-12,-10,-8,-6,-4,-2;",
+	"O[25:22],V Shift,0,+1,+2,+3,+4,-8,-7,-6,-5,-4,-3,-2,-1;",
 	// Autofire on button 1: Off, or a frames-on/frames-off pattern
 	// clocked by the game's own vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3,
 	// 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1. While enabled for a player,
@@ -555,8 +565,24 @@ assign AUDIO_R = audio_r;
 // the existing hblank/vblank windows video_timing.sv already defines
 // (HTOTAL=512/HACTIVE 28-412, VTOTAL=278/VACTIVE 16-240).
 // ------------------------------------------------------------------
-wire hsync = (hcount_core >= 10'd440) && (hcount_core < 10'd472);
-wire vsync = (vcount_core >= 10'd244) && (vcount_core < 10'd247);
+// H/V Shift (status[21:18], [25:22] — see CONF_STR): the sync pulses
+// move, the DE window does not. Positive = picture right/down = sync
+// earlier, so the start is 440/244 MINUS the shift. Ranges keep both
+// pulses inside blanking (hblank 412..511, vblank 240..277 of the
+// 512x278 raster): hsync start 426..456 (+32), vsync start 240..252 (+3).
+wire  [3:0] hshift_sel = status[21:18];
+wire  [9:0] hshift_px  = {{5{hshift_sel[3]}}, hshift_sel, 1'b0};   // two's complement x2: -16..+14
+reg   [9:0] vshift_ln;                                              // 0..+4, then -8..-1
+always @* case (status[25:22])
+	4'd1: vshift_ln = 10'd1;   4'd2: vshift_ln = 10'd2;   4'd3: vshift_ln = 10'd3;   4'd4: vshift_ln = 10'd4;
+	4'd5: vshift_ln = -10'd8;  4'd6: vshift_ln = -10'd7;  4'd7: vshift_ln = -10'd6;  4'd8: vshift_ln = -10'd5;
+	4'd9: vshift_ln = -10'd4;  4'd10: vshift_ln = -10'd3; 4'd11: vshift_ln = -10'd2; 4'd12: vshift_ln = -10'd1;
+	default: vshift_ln = 10'd0;
+endcase
+wire [9:0] hs_start = 10'd440 - hshift_px;
+wire [9:0] vs_start = 10'd244 - vshift_ln;
+wire hsync = (hcount_core >= hs_start) && (hcount_core < hs_start + 10'd32);
+wire vsync = (vcount_core >= vs_start) && (vcount_core < vs_start + 10'd3);
 
 assign CLK_VIDEO = clk_sys;
 assign CE_PIXEL  = ce_pix_core;

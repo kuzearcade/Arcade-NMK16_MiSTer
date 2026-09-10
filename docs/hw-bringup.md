@@ -1309,6 +1309,43 @@ also what compiles ascal's DDR read path into the framework — that
 costs a little slack on the HDMI PLL domain (see the build notes in
 the commit).
 
+## H Shift / V Shift options (sync-position trims for CRT users, NMK-2)
+
+The sync placement (`hsync` at hcount 440..471, `vsync` at vcount
+244..246 of the 512x278 raster, active x 28..411 / y 16..239) was
+always a documented placeholder — this board's real CRT sync timing
+isn't published anywhere this project has sourced, and the sim/HDMI
+paths don't care (the scaler frames the picture by DE). Rather than
+guess, each core now exposes the position as two OSD trims (added
+2026-09-10) so a baseline can be measured on real CRT equipment:
+
+- `H Shift` (status[21:18]): 0, +2 .. +14, -16 .. -2 px, listed in
+  two's-complement order so the 4-bit value 0 is the shipped
+  placement. `V Shift` (status[25:22]): 0, +1 .. +4, -8 .. -1 lines.
+- Mechanism: only the sync pulses move; the DE window (the picture)
+  does not. Positive = picture right / down on the CRT = sync
+  *earlier*, i.e. start = 440/244 minus the shift. On a CRT, moving
+  the sync earlier makes the retrace happen sooner, so the same
+  active video lands further right/down on the tube.
+- Ranges are chosen so no setting can push a pulse into active video:
+  hsync start 426..456 (+32 wide) stays inside hblank 412..511; vsync
+  start 240..252 (+3 wide) stays inside vblank 240..277. V is
+  asymmetric because only four blank lines precede the current vsync
+  (the pulse sits near the start of vblank) while thirty follow it.
+- Persistence is the MiSTer's own (OSD > System > Save settings).
+  Once a good baseline is found on a CRT, fold it into the constants
+  and keep the trims at 0 = that new baseline.
+- Verified on the box (all three RBFs rebuilt first time, Macross2
+  +0.263 / Raphero +0.541 / Gunnail +0.359 ns): both entries appear
+  and cycle as listed (H wraps 0 → +14 → −16 → −2 → 0, V 0 → +4 →
+  −8 → −1 → 0). Over HDMI the picture does not move at all — the lit
+  window in a 640x480 capture is x 58..541 / y 26..453 at H+14 and at
+  V+4, exactly the documented game area, where a 14-px source shift
+  would be ~23 px — because the scaler frames by DE, which the trims
+  leave alone. So the trims are analog-only by construction; the CRT
+  measurement itself has to happen on real CRT equipment (this
+  environment captures HDMI only).
+
 ## Flip screen option (all four games, upside-down over HDMI)
 
 `screen_rotate`'s own `flip` input only takes effect while `no_rotate`
