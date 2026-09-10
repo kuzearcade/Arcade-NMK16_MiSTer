@@ -80,7 +80,10 @@ but not proven), `infra` (build/test/doc health).
   comparison stops being the right yardstick; the semantic ones are:
   the track-start routine `$0A63` executes 36 times on both sides,
   YM instrument writes match to 0.1% over 90 s, band correlation 0.968.
-  Nothing left to fix here.
+  Nothing left to fix here. Re-traced on the final core (after the
+  SET/RES `b,g` writeback fix): byte-identical instruction stream,
+  same 2,791 Timer-1 entries, same 3-tick offset — that fix touches
+  nothing GunNail's firmware executes.
 
 ### NMK-17 · Timer-1 long-mode period ~0.1% shorter than MAME's
 - **Cores:** Gunnail, Raphero (NMK004 / bare TLCS-90 timers, `nmk004_periph.sv`) · **Severity:** gap · **Status:** open
