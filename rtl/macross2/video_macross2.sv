@@ -1054,4 +1054,32 @@ module video_macross2 #(
 		end
 	end
 
+`ifdef VERILATOR
+	// Sprite-latency tags (docs/known-issues.md NMK-1): number every DMA
+	// trigger, carry that number with its snapshot through the draw pass
+	// and the plane swap, and report at each trigger which DMA's table was
+	// on screen during the frame that just ended. Reference (nmk16_v.cpp
+	// screen_update_macross draws m_spriteram_old2, sprite_dma() shifts
+	// old2 <- old <- mainram at line 242, the frame is rendered at VBOUT
+	// 240 before that DMA): frame j shows the table from DMA j-2. Pure
+	// RTL measurement — no MAME frame-index alignment involved.
+	integer lat_dma_seq = 0;      // triggers seen so far
+	integer lat_snap_seq = 0;     // DMA number of the copy in flight
+	integer lat_done_seq = 0;     // DMA number of the completed copy
+	integer lat_pass_seq = 0;     // DMA number the running/finished pass rendered
+	integer lat_disp_seq = 0;     // DMA number of the plane on screen
+	reg     lat_snap_ready_d = 1'b0;
+	always @(posedge clk_sys) begin
+		lat_snap_ready_d <= snap_ready;
+		if (sprite_dma_trigger) begin
+			$display("SPRLAT dma#%0d: frame %0d showed table from dma#%0d (lag %0d)", lat_dma_seq + 1, lat_dma_seq + 1, lat_disp_seq, lat_dma_seq + 1 - lat_disp_seq);
+			if (pass_done || state == S_DONE) lat_disp_seq = lat_pass_seq;   // same condition as the swap above
+			if (!snap_active) lat_snap_seq = lat_dma_seq + 1;                 // same condition as the snapshot start
+			lat_dma_seq = lat_dma_seq + 1;
+		end
+		if (snap_ready && !lat_snap_ready_d) lat_done_seq = lat_snap_seq;    // copy completed
+		if (snap_consume) lat_pass_seq = lat_done_seq;                        // pass took it
+	end
+`endif
+
 endmodule

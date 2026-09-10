@@ -18,16 +18,28 @@ but not proven), `infra` (build/test/doc health).
 ## Cross-core
 
 ### NMK-1 · Sprites display one frame late
-- **Cores:** Macross2, Raphero, Gunnail · **Severity:** limitation · **Status:** open
-- **Ref:** "Lines through moving sprites, and flicker"
-- The core draws a whole sprite plane per frame (most of a frame's
-  time); the board and MAME render per-scanline from the table copied
-  at scanline 242. Moving sprites therefore sit one motion step behind
-  tilemaps/HUD — the sim matches MAME on ~94.7% of pixels on
-  sprite-heavy frames purely from this lag (tilemaps/HUD/text identical).
-- **Fix needs:** a scanline (line-buffer) sprite renderer — a redesign,
-  not a tweak. Blocked in practice by NMK-9 (Raphero has no ALM/M10K
-  room for it as-is).
+- **Cores:** Macross2, Raphero, Gunnail · **Severity:** limitation · **Status:** not a bug (measured 2026-09-10 — the core matches MAME and the PCB exactly)
+- **Ref:** "Lines through moving sprites, and flicker" (with its dated correction)
+- The premise was that MAME/the board show the DMA'd table on the
+  *next* frame while the whole-plane renderer shows it a frame later.
+  Both halves were wrong. MAME (`nmk16_v.cpp`) keeps two copies —
+  `sprite_dma()` does `old2 <- old <- mainram` at line 242, with the
+  comment "2 buffers confirmed on PCB" — and every shipped game's
+  `screen_update_macross` draws `old2`, rendered at VBOUT (240) before
+  that frame's DMA: frame *j* shows the table from DMA *j-2*. A
+  Verilator-only tag in `video_macross2.sv` (`SPRLAT`, numbering each
+  DMA and carrying it through snapshot, pass and swap) reports the core
+  at lag 2 on 59/59 steady-state frames — identical. Then a direct
+  frame comparison (sim `TB_DUMP_PPM` vs MAME snapshots taken at exact
+  frame numbers by a Lua `frame_done` hook) shows sim frame *S* equal to
+  MAME frame *S-3* with **0 differing pixels** on half the frames and
+  126-141 px on the rest (see NMK-16), where one motion step is
+  3,000-4,000 px. The earlier "94.7% at the same index" figure is what
+  this same table gives at an off-by-one alignment (2,932 px = 96.6%),
+  i.e. the old comparison was misaligned by one frame — MAME's `-str`
+  is *seconds*, not frames, so the index pairing was empirical.
+- No line-buffer renderer is needed; NMK-9/NMK-10's budget concern for
+  it is moot.
 
 ### NMK-2 · HSync/VSync placement is an untuned placeholder
 - **Cores:** all three · **Severity:** limitation · **Status:** open
@@ -203,6 +215,24 @@ but not proven), `infra` (build/test/doc health).
   hazard, but it fired 0 times on every OKI cache in every run and was
   not the fix (its 0-wrong result came from perturbing the audio-CPU
   cache's timing, which is why the diagnostic was needed).
+
+### NMK-16 · tdragon2 HUD text column differs from MAME on alternating frames (~130 px)
+- **Cores:** Macross2 (tdragon2 measured; likely all) · **Severity:** limitation (0.15% of the frame) · **Status:** open
+- **Ref:** NMK-1's frame comparison
+- With the sim and MAME frame-aligned (sim *S* = MAME *S-3*), half the
+  frames are pixel-identical and the other half differ by 126-141 px,
+  always in the same 14-px-wide strip (x 353-366, rows 17-205 in
+  groups) — the vertical HUD text column on this sideways-drawn game.
+  A strictly alternating pattern in a text strip is a blinking element
+  whose phase is one frame off: MAME renders the TX layer from VRAM as
+  of VBOUT (line 240), the core scans TX VRAM live, so a text write
+  landing between VBOUT and that row's scanout shows a frame earlier
+  in the core (or later, depending on where in the frame it lands).
+  Inaudible/near-invisible, but it is the one remaining known
+  frame-comparison residual, so it is worth pinning down which write
+  it is (a `TB_LOG_M68K` filter on TX VRAM writes in that column
+  around VBOUT would say) before deciding whether the core or MAME is
+  the one that matches the board.
 
 ## Not shipped (for completeness)
 
