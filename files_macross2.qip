@@ -12,6 +12,8 @@ set_global_assignment -name SEARCH_PATH rtl/third_party/jt6295/hdl
 
 set_global_assignment -name SYSTEMVERILOG_FILE Macross2.sv
 set_global_assignment -name VERILOG_FILE rtl/pll.v
+set_global_assignment -name VERILOG_FILE rtl/pll_video.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video_retime.sv
 
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tdragon2/tdragon2_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/macross2/video_macross2.sv
