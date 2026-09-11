@@ -46,6 +46,7 @@ SEL_cactus   := 18
 SEL_nouryokup := 19
 SEL_tharrier := 20
 SEL_vandykeb := 21
+SEL_mustangb3 := 22
 SEL := $(SEL_$(GAME))
 
 SOURCES := $(TOP).sv $(CORE_DIR)/gunnail_core.sv $(MACROSS2_DIR)/video_macross2.sv \

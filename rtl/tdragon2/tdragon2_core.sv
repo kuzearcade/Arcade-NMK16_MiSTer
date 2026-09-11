@@ -157,6 +157,34 @@ module tdragon2_core #(
 	// layout (BASE_WORD_* below), its own V-PROM (nmk_irq table 1) and
 	// video_macross2.sv's game_powerins mode. Never both selects at once.
 	input game_powerins,
+	// Clone modes (2026-09-12), each a small delta on one of the games
+	// above; every existing testbench leaves them floating at 0.
+	//   game_tdragon3h: tdragon2 with a 12 MHz 68000, DSW2 and the Z80's
+	//     reply latch swapped (0x10000E / 0x10000B, tdragon3h_map), one OKI
+	//     (the chip on port 0x80 is not fitted — its writes are dropped and
+	//     its output muted) and the oki2 data in the oki1 SDRAM slot. MAME
+	//     runs it silent (no YM2203 on the PCB, "needs emulation of the
+	//     mechanism used to simulate the missing YM2203's IRQs"); the PCB
+	//     works with a YM fitted and the sound program is tdragon2's, so
+	//     this core keeps the YM2203 and plays the full soundtrack.
+	//   game_pi_bootleg (powerinsa/b/c, with game_powerins): no interrupt
+	//     PROM — IRQ4 and the sprite double-buffer copy at vblank
+	//     (screen_vblank_powerins_bootleg); the Z80 (when present) has no
+	//     YM2203: port 0 reads 1, writes are dropped, a 120 Hz timer is its
+	//     INT (powerinsb/powerinsc machine configs).
+	//   game_pi_nosnd (powerinsa): no Z80 at all — the 68000 drives one
+	//     OKIM6295 at 0x10003F (990 kHz) with a bank byte at 0x100031
+	//     (powerinsa_okibank_w: 0x30000-0x3FFFF = page n of the 0x80000
+	//     ROM from +0x30000).
+	//   game_pi_gfxlsb (powerinsc): gfx_powerinsc — every tile byte's
+	//     nibbles swapped (packed_lsb), the 8x8 layer's ROM at +0x280000 of
+	//     the BG region, the sprite ROMs loaded as byte pairs (MAME marks
+	//     the set not working: its sprite format is undeciphered, and this
+	//     core draws them exactly as MAME does, i.e. wrong).
+	input game_tdragon3h,
+	input game_pi_bootleg,
+	input game_pi_nosnd,
+	input game_pi_gfxlsb,
 
 	// ------------------------------------------------------------------
 	// Hardware-mode-only ports (HW_ROMS=1). Unused/unconnected at
@@ -547,8 +575,9 @@ module tdragon2_core #(
 			end
 		end
 	end
-	wire enPhi1 = game_powerins ? cpu_acc_phi1 : (cpu_div == 2'd3);
-	wire enPhi2 = game_powerins ? cpu_acc_phi2 : (cpu_div == 2'd1);
+	wire cpu_fast = game_powerins | game_tdragon3h; // 12 MHz (tdragon3h: MC68000P12, 12 MHz XTAL)
+	wire enPhi1 = cpu_fast ? cpu_acc_phi1 : (cpu_div == 2'd3);
+	wire enPhi2 = cpu_fast ? cpu_acc_phi2 : (cpu_div == 2'd1);
 
 	reg [2:0] pix_div = 3'd0;
 	wire ce_pix = (pix_div == 3'd4);
@@ -595,6 +624,14 @@ module tdragon2_core #(
 	reg [3:0] oki_cen_cnt = 4'd0;
 	wire      oki_cen = (oki_cen_cnt == 4'd9);
 	always @(posedge clk_sys) oki_cen_cnt <= oki_cen ? 4'd0 : oki_cen_cnt + 4'd1;
+	// powerinsa's lone OKI runs at 990 kHz (pin 7 low): 990/40000 = 99/4000.
+	reg [11:0] oki990_acc = 12'd0;
+	reg        oki990_cen = 1'b0;
+	always @(posedge clk_sys) begin
+		if (oki990_acc + 12'd99 >= 12'd4000) begin oki990_acc <= oki990_acc + 12'd99 - 12'd4000; oki990_cen <= 1'b1; end
+		else begin oki990_acc <= oki990_acc + 12'd99; oki990_cen <= 1'b0; end
+	end
+	wire oki0_cen = game_pi_nosnd ? oki990_cen : oki_cen;
 
 	// ------------------------------------------------------------------
 	// fx68k
@@ -671,8 +708,13 @@ module tdragon2_core #(
 	wire sel_in0       = (byte_addr[23:1] == 23'h080000); // 100000/100001
 	wire sel_in1       = (byte_addr[23:1] == 23'h080001); // 100002/100003
 	wire sel_dsw1      = (byte_addr[23:1] == 23'h080004); // 100008/100009
-	wire sel_dsw2      = (byte_addr[23:1] == 23'h080005); // 10000A/10000B
-	wire sel_soundlatch2_r = ~game_powerins & (byte_addr[23:1] == 23'h080007); // 10000E/10000F word, byte reg at odd
+	// tdragon3h_map: "bootleg has these 2 swapped" — DSW2 at 0x10000E, the
+	// Z80's reply latch at 0x10000B.
+	wire sel_dsw2      = (byte_addr[23:1] == (game_tdragon3h ? 23'h080007 : 23'h080005)); // 10000A/10000B
+	wire sel_soundlatch2_r = ~game_powerins & (byte_addr[23:1] == (game_tdragon3h ? 23'h080005 : 23'h080007)); // 10000E/10000F word, byte reg at odd
+	// powerinsa_map: the 68000 drives the OKI itself (byte registers at odd addresses)
+	wire sel_pia_okibank = game_pi_nosnd & (byte_addr[23:1] == 23'h080018); // 100031 powerinsa_okibank_w
+	wire sel_pia_oki     = game_pi_nosnd & (byte_addr[23:1] == 23'h08001F); // 10003F okim6295 r/w
 	wire sel_flip      = (byte_addr[23:1] == 23'h08000A); // 100014/100015, LDS=low byte
 	wire sel_sndreset  = ~game_powerins & (byte_addr[23:1] == 23'h08000B); // 100016/100017 word
 	wire sel_tilebank  = (byte_addr[23:1] == 23'h08000C); // 100018/100019, LDS=low byte
@@ -1614,6 +1656,11 @@ module tdragon2_core #(
 			if (sel_sndreset)         z80_reset_n_reg <= (oEdb != 16'h0000);
 		end
 	end
+	reg [2:0] pia_okibank;
+	always @(posedge clk_sys) begin
+		if (reset) pia_okibank <= 3'd0;
+		else if (sel_pia_okibank & cpu_write & ~LDSn) pia_okibank <= oEdb[2:0]; // set_entry(data & 7)
+	end
 
 
 	// ------------------------------------------------------------------
@@ -1637,8 +1684,21 @@ module tdragon2_core #(
 	wire        z80_m1_n, z80_mreq_n, z80_iorq_n, z80_rd_n, z80_wr_n, z80_rfsh_n, z80_halt_n, z80_busak_n;
 	wire        z80_int_n;
 
-	assign z80_int_n = ym_chip_irq_n;
-	wire z80_reset_n = ~reset & (z80_reset_n_reg | game_powerins); // powerins: no 68000-driven Z80 reset (0x100016 is a nopw)
+	// powerinsb/powerinsc: no YM2203 to raise INT — the board substitutes a
+	// 120 Hz timer (set_periodic_int(irq0_line_hold, 120 Hz)); held until
+	// the Z80's own acknowledge cycle, as HOLD_LINE means.
+	wire z80_bootleg = game_pi_bootleg & ~game_pi_nosnd;
+	reg [18:0] irq120_cnt = 19'd0;
+	reg        irq120_pending = 1'b0;
+	wire       z80_iack = ~z80_m1_n & ~z80_iorq_n;
+	always @(posedge clk_sys) begin
+		if (irq120_cnt == 19'd333332) irq120_cnt <= 19'd0; else irq120_cnt <= irq120_cnt + 19'd1; // 40 MHz / 120
+		if (~z80_reset_n) irq120_pending <= 1'b0;
+		else if (irq120_cnt == 19'd0) irq120_pending <= 1'b1;
+		else if (z80_iack) irq120_pending <= 1'b0;
+	end
+	assign z80_int_n = z80_bootleg ? ~irq120_pending : ym_chip_irq_n;
+	wire z80_reset_n = ~reset & (z80_reset_n_reg | game_powerins) & ~game_pi_nosnd; // powerins: no 68000-driven Z80 reset (0x100016 is a nopw); powerinsa: no Z80
 
 	T80s z80_cpu (
 		.RESET_n(z80_reset_n),
@@ -1703,12 +1763,20 @@ module tdragon2_core #(
 	//     fgtile 0x120000 (128 KB), bgtile 0x140000 (0x280000),
 	//     sprites 0x3C0000 (8 MB), oki1 0xBC0000, oki2 0xDC0000 (2 MB
 	//     each) — end 0xFC0000. The .mra <part> order must match.
+	//   tdragon3h: tdragon2's, with the single OKI's data (MAME "oki2") in
+	//     the oki1 slot (0x6C0000) — no 2 MB filler for the absent chip.
+	//   powerinsa: no Z80 ROM — fgtile 0x100000, bgtile 0x120000
+	//     (0x280000), sprites 0x3A0000 (8 MB), oki1 0xBA0000 (0x80000).
+	//   powerinsc: maincpu 0x000000, audiocpu 0x100000, sprites 0x120000
+	//     (8 MB), oki1 0x920000, oki2 0xB20000, then the 3 MB BG region
+	//     at 0xD20000 last (its 8x8 tiles live at +0x280000 = 0xFA0000;
+	//     the blank final 0x60000 spills past 16 MB, never fetched).
 	wire [22:0] BASE_WORD_AUDIOCPU = game_powerins ? 23'h080000 : 23'h040000;
-	wire [22:0] BASE_WORD_FGTILE   = game_powerins ? 23'h090000 : 23'h050000;
-	wire [22:0] BASE_WORD_BGTILE   = game_powerins ? 23'h0A0000 : 23'h060000;
-	wire [22:0] BASE_WORD_SPRITES  = game_powerins ? 23'h1E0000 : 23'h160000;
-	wire [22:0] BASE_WORD_OKI1     = game_powerins ? 23'h5E0000 : 23'h360000;
-	wire [22:0] BASE_WORD_OKI2     = game_powerins ? 23'h6E0000 : 23'h460000;
+	wire [22:0] BASE_WORD_FGTILE   = game_pi_gfxlsb ? 23'h7D0000 : game_pi_nosnd ? 23'h080000 : game_powerins ? 23'h090000 : 23'h050000;
+	wire [22:0] BASE_WORD_BGTILE   = game_pi_gfxlsb ? 23'h690000 : game_pi_nosnd ? 23'h090000 : game_powerins ? 23'h0A0000 : 23'h060000;
+	wire [22:0] BASE_WORD_SPRITES  = game_pi_gfxlsb ? 23'h090000 : game_pi_nosnd ? 23'h1D0000 : game_powerins ? 23'h1E0000 : 23'h160000;
+	wire [22:0] BASE_WORD_OKI1     = game_pi_gfxlsb ? 23'h490000 : game_pi_nosnd ? 23'h5D0000 : game_powerins ? 23'h5E0000 : 23'h360000;
+	wire [22:0] BASE_WORD_OKI2     = game_pi_gfxlsb ? 23'h590000 : game_powerins ? 23'h6E0000 : game_tdragon3h ? 23'h360000 : 23'h460000;
 
 	wire [7:0] audiocpu_dout;
 	wire       audiocpu_ready;
@@ -1796,7 +1864,7 @@ module tdragon2_core #(
 	reg       ym_addr_latch;
 	reg [5:0] ym_wr_hold = 6'd0;
 	reg       ym_we_prev = 1'b0;
-	wire      ym_we_raw = z80_io_we & sel_io_ym;
+	wire      ym_we_raw = z80_io_we & sel_io_ym & ~game_pi_bootleg; // powerinsb/c: no YM2203 fitted, the sound code's writes go nowhere
 	always @(posedge clk_sys) begin
 		ym_we_prev <= ym_we_raw;
 		if (ym_we_raw && !ym_we_prev) begin
@@ -1837,7 +1905,13 @@ module tdragon2_core #(
 	// ------------------------------------------------------------------
 	wire nmk112_we = z80_io_we & sel_io_nmk112;
 	wire [17:0] oki0_rom_addr_raw, oki1_rom_addr_raw;
-	wire [21:0] oki0_rom_addr, oki1_rom_addr;
+	wire [21:0] oki0_rom_addr_n112, oki1_rom_addr;
+	// powerinsa_oki_map: 0x00000-0x2FFFF fixed, 0x30000-0x3FFFF = page
+	// pia_okibank of the 0x10000 pages from +0x30000 (no NMK112).
+	wire [21:0] pia_oki_phys = (oki0_rom_addr_raw[17:16] == 2'b11)
+		? (22'h030000 + {3'd0, pia_okibank, 16'd0} + {6'd0, oki0_rom_addr_raw[15:0]})
+		: {4'd0, oki0_rom_addr_raw};
+	wire [21:0] oki0_rom_addr = game_pi_nosnd ? pia_oki_phys : oki0_rom_addr_n112;
 	// "A gated OKI cen is passing this clock" — a bank write landing on
 	// this edge would change the remapped address inside jt6295's
 	// registered-cen latch window (rtl/nmk112.sv `hold`, NMK-15). Assigned
@@ -1850,7 +1924,7 @@ module tdragon2_core #(
 	) nmk112_inst (
 		.clk_sys(clk_sys), .reset(reset),
 		.reg_sel(z80_a[2:0]), .reg_data(z80_do), .reg_we(nmk112_we), .hold(nmk112_hold),
-		.rom0_addr_in(oki0_rom_addr_raw), .rom0_addr_out(oki0_rom_addr),
+		.rom0_addr_in(oki0_rom_addr_raw), .rom0_addr_out(oki0_rom_addr_n112),
 		.rom1_addr_in(oki1_rom_addr_raw), .rom1_addr_out(oki1_rom_addr)
 	);
 
@@ -2003,15 +2077,18 @@ module tdragon2_core #(
 	end
 	endgenerate
 
-	wire sel_oki0_we = z80_io_we & sel_io_oki0;
+	// Chip 0's write source: the Z80's port 0x80 (dropped on tdragon3h,
+	// whose PCB has no chip there) or, on powerinsa, the 68000's 0x10003F.
+	wire sel_oki0_we = game_pi_nosnd ? (sel_pia_oki & cpu_write & ~LDSn) : (z80_io_we & sel_io_oki0 & ~game_tdragon3h);
 	wire sel_oki1_we = z80_io_we & sel_io_oki1;
+	wire [7:0] oki0_din_src = game_pi_nosnd ? oEdb[7:0] : z80_do;
 	reg [7:0] oki0_din_latch, oki1_din_latch;
 	reg [5:0] oki0_wr_hold = 6'd0, oki1_wr_hold = 6'd0;
 	reg       oki0_we_prev = 1'b0, oki1_we_prev = 1'b0;
 	always @(posedge clk_sys) begin
 		oki0_we_prev <= sel_oki0_we;
 		if (sel_oki0_we && !oki0_we_prev) begin
-			oki0_din_latch <= z80_do;
+			oki0_din_latch <= oki0_din_src;
 			oki0_wr_hold   <= 6'd40;
 		end else if (oki0_wr_hold != 6'd0) begin
 			oki0_wr_hold <= oki0_wr_hold - 6'd1;
@@ -2032,7 +2109,7 @@ module tdragon2_core #(
 	wire [7:0] oki0_chip_dout, oki1_chip_dout;
 	wire signed [13:0] oki0_snd, oki1_snd;
 	jt6295 oki0_chip (
-		.rst(reset), .clk(clk_sys), .cen(oki_cen & ~oki0_stall), .ss(1'b0),
+		.rst(reset), .clk(clk_sys), .cen(oki0_cen & ~oki0_stall), .ss(1'b0),
 		.wrn(oki0_wr_n), .din(oki0_din_latch), .dout(oki0_chip_dout),
 		.rom_addr(oki0_rom_addr_raw), .rom_data(oki0_rom_data), .rom_ok(oki0_rom_ok),
 		.sound(oki0_snd), .sample()
@@ -2061,9 +2138,10 @@ module tdragon2_core #(
 	// ------------------------------------------------------------------
 	wire signed [17:0] oki0_ext = {{4{oki0_snd[13]}}, oki0_snd};
 	wire signed [17:0] oki1_ext = {{4{oki1_snd[13]}}, oki1_snd};
-	wire signed [17:0] oki0_g   = oki0_ext + (oki0_ext >>> 1); // x 3/2 (was 3/8 -- measured 8-13dB quiet vs MAME's real OKI:FM balance)
+	wire signed [17:0] oki0_g   = game_tdragon3h ? 18'sd0 : oki0_ext + (oki0_ext >>> 1); // x 3/2 (was 3/8 -- measured 8-13dB quiet vs MAME's real OKI:FM balance); tdragon3h: chip not fitted
 	wire signed [17:0] oki1_g   = oki1_ext + (oki1_ext >>> 1);
-	wire signed [17:0] audio_sum = {{2{ym_snd[15]}}, ym_snd} + oki0_g + oki1_g;
+	wire signed [17:0] ym_g     = game_pi_bootleg ? 18'sd0 : {{2{ym_snd[15]}}, ym_snd}; // powerins bootlegs: no YM2203
+	wire signed [17:0] audio_sum = ym_g + oki0_g + oki1_g;
 	wire signed [15:0] audio_mix =
 		(audio_sum > 18'sd32767)  ? 16'sd32767  :
 		(audio_sum < -18'sd32768) ? -16'sd32768 :
@@ -2090,7 +2168,7 @@ module tdragon2_core #(
 		else if (z80_mem_re & sel_z80_bank)  z80_rdata = audiocpu_dout;
 		else if (z80_mem_re & sel_z80_ram)   z80_rdata = z80_ram[z80_a[12:0]];
 		else if (z80_mem_re & sel_z80_soundlatch_r) z80_rdata = soundlatch_data;
-		else if (z80_io_re & sel_io_ym)   z80_rdata = ym_chip_dout;
+		else if (z80_io_re & sel_io_ym)   z80_rdata = game_pi_bootleg ? {7'd0, sel_io_ym_addr} : ym_chip_dout; // bootleg: powerins_bootleg_fake_ym2203_r = 1 on port 0, port 1 nop
 		else if (z80_io_re & sel_io_oki0) z80_rdata = oki0_chip_dout;
 		else if (z80_io_re & sel_io_oki1) z80_rdata = oki1_chip_dout;
 		else                     z80_rdata = 8'hFF;
@@ -2108,6 +2186,7 @@ module tdragon2_core #(
 		else if (sel_bgvram)  rdata = bgvram_dout;
 		else if (sel_txvram)  rdata = txvram_dout;
 		else if (sel_soundlatch2_r) rdata = {8'h00, soundlatch2_data};
+		else if (sel_pia_oki) rdata = {8'h00, oki0_chip_dout};
 		else if (sel_in0)     rdata = HW_ROMS ? in0_i  : 16'hFFFF;
 		else if (sel_in1)     rdata = HW_ROMS ? in1_i  : 16'hFFFF;
 		else if (sel_dsw1)    rdata = HW_ROMS ? dsw1_i : 16'hFFFF;
@@ -2134,6 +2213,8 @@ module tdragon2_core #(
 	assign vblank_o = vt_vblank;
 
 	wire sprite_dma_trigger;
+	wire [2:0] ipl_level_prom;
+	wire       sprite_dma_trigger_prom;
 	nmk_irq #(
 		.VTIMING_FILE(VTIMING_FILE)
 	) irq_gen (
@@ -2144,9 +2225,22 @@ module tdragon2_core #(
 		.vcount(vt_vcount),
 		.iack_cycle(iack_cycle),
 		.iack_level(eab[3:1]),
-		.ipl_level(ipl_level),
-		.sprite_dma_trigger(sprite_dma_trigger)
+		.ipl_level(ipl_level_prom),
+		.sprite_dma_trigger(sprite_dma_trigger_prom)
 	);
+	// Power Instinct bootlegs: no interrupt PROM. screen_vblank_powerins_
+	// bootleg — at vblank start (line 240, the first line after the 224
+	// visible ones) IRQ4 (HOLD_LINE: pending until acknowledged) and the
+	// two-stage sprite buffer copy the PROM's DMA bit normally triggers.
+	wire vbl_start = vt_line_start & (vt_vcount == 10'd240);
+	reg  irq4_pending = 1'b0;
+	always @(posedge clk_sys) begin
+		if (reset) irq4_pending <= 1'b0;
+		else if (vbl_start) irq4_pending <= 1'b1;
+		else if (iack_cycle && eab[3:1] == 3'd4) irq4_pending <= 1'b0;
+	end
+	assign ipl_level          = game_pi_bootleg ? (irq4_pending ? 3'd4 : 3'd0) : ipl_level_prom;
+	assign sprite_dma_trigger = game_pi_bootleg ? vbl_start : sprite_dma_trigger_prom;
 
 	// ------------------------------------------------------------------
 	// Video pipeline — rtl/macross2/video_macross2.sv, reused UNMODIFIED
@@ -2164,7 +2258,7 @@ module tdragon2_core #(
 		.DBG_MISS_PAINT(DBG_MISS_PAINT)
 	) video (
 		.clk_sys(clk_sys), .reset(reset),
-		.game_powerins(game_powerins),
+		.game_powerins(game_powerins), .tile_lsb(game_pi_gfxlsb),
 		.lowres(1'b0), .raster_scroll(1'b1), .cfg_rt(1'b0), .bga_pal_base_i(11'd0), .bgb_pal_base_i(11'd0), .spr_pal_base_i(11'd0), .tx_pal_base_i(11'd0),
 		.bga_code_mask_i(14'd0), .bgb_code_mask_i(14'd0), .spr_units_i(18'd0), .sprdma_word_base(15'h4000), .nmk214_en(1'b1), .spr_swap(1'b1), .tx_bg_mode(1'b0), .tx_yscroll(8'd0), .tx_bank_off(24'd0), .spr_flip_en(1'b0), .spr_lag1(1'b0), .vis_start(1'b0),
 		.bg2_en(1'b0), .bga_rom2(1'b0), .bgb_rom2(1'b0), .base_word_bgtile_b(23'd0), .bgvram_b_addr(), .bgvram_b_data(16'd0), .bgb_xscroll(16'd0), .bgb_yscroll(16'd0),

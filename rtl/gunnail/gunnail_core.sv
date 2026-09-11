@@ -298,11 +298,13 @@ module gunnail_core #(
 	                 G_CACTUS   = 5'd18,   // cactus: sabotenb's ROM data on a board without the MCU (init_nmk decode = the NMK214s with the NMK-215's config), pair sprites, fixed-scanline IRQs
 	                 G_NOURYOKUP = 5'd19,  // nouryokup: no MCU, plain GFX, 2 MB bgtile (4 files), pair sprites
 	                 G_THARRIER = 5'd20,   // tharrier, tharrieru
-	                 G_VANDYKEB = 5'd21;   // vandykeb: no sound, PIC scroll registers, fixed-scanline IRQs
-	wire g_gunnail  = (game_sel == G_GUNNAIL) || (game_sel > G_VANDYKEB); // unknown ids fall back to gunnail
+	                 G_VANDYKEB = 5'd21,   // vandykeb: no sound, PIC scroll registers, fixed-scanline IRQs
+	                 G_MUSTANGB3 = 5'd22;  // mustangb3 (Lettering bootleg): mustang's video/map on an 8 MHz 68000, tharrier's Z80+YM2203 sound board (unbanked 0x20000 OKI ROMs), fixed-scanline IRQs, a PC-keyed read at 0x080006
+	wire g_gunnail  = (game_sel == G_GUNNAIL) || (game_sel > G_MUSTANGB3); // unknown ids fall back to gunnail
 	wire g_macross  = (game_sel == G_MACROSS);
 	wire g_blkheart = (game_sel == G_BLKHEART);
-	wire g_mustang  = (game_sel == G_MUSTANG) || (game_sel == G_MUSTANGS);
+	wire g_mustangb3 = (game_sel == G_MUSTANGB3);
+	wire g_mustang  = (game_sel == G_MUSTANG) || (game_sel == G_MUSTANGS) || g_mustangb3; // mustang's map, scroll register and video for all three
 	wire g_bioship  = (game_sel == G_BIOSHIP);
 	wire g_vandyke  = (game_sel == G_VANDYKE);
 	wire g_acrobatm = (game_sel == G_ACROBATM);
@@ -318,10 +320,11 @@ module gunnail_core #(
 	wire g_bjtwin   = g_bjtwin_prot || g_cactus || (game_sel == G_BJTWINP) || (game_sel == G_NOURYOKUP); // the whole family
 	wire g_tharrier = (game_sel == G_THARRIER);
 	wire g_vandykeb = (game_sel == G_VANDYKEB);
-	wire has_nmk004 = ~(g_bjtwin | g_tharrier | g_vandykeb);           // else the NMK004 is held in reset
+	wire g_z80snd   = g_tharrier | g_mustangb3;                          // the Z80 + YM2203 sound board (tharrier_sound_map)
+	wire has_nmk004 = ~(g_bjtwin | g_z80snd | g_vandykeb);             // else the NMK004 is held in reset
 
 	wire lowres          = ~(g_gunnail | g_bjtwin);                      // set_screen_lowres (gunnail and bjtwin are hires)
-	wire cpu_8mhz        = g_blkheart | g_mustang | g_tdragon | g_tdragon1;
+	wire cpu_8mhz        = g_blkheart | g_mustang | g_tdragon | g_tdragon1; // mustangb3: XTAL(8 MHz) verified on PCB
 	wire cpu_12mhz       = g_strahl;                                     // "12 MHz ?"
 	wire has_prot        = g_gunnail | g_macross | (g_hachamf & ~g_hachamfp) | g_tdragon1 | g_bjtwin_prot; // NMK-215 / NMK-113 / NMK-110 (hachamfp/hachamfb: none)
 	wire has_214         = g_gunnail | g_macross | g_bjtwin_prot | g_cactus; // base_nmk214_215: bgtile + sprites scrambled (cactus: same data, config injected below)
@@ -329,7 +332,7 @@ module gunnail_core #(
 	wire nmi_invert      = g_bioship;                                    // nmk004_bioship_x0016_w
 	wire mainram_strange = g_macross | g_blkheart | g_mustang | g_bioship | g_vandyke | g_tharrier | g_vandykeb; // macross_map/mustang_map/bioship_map/vandyke_map/tharrier_map mainram_strange_w
 	wire bg2             = g_bioship | g_strahl;                         // screen_update_strahl: two BG layers
-	wire irq_hacky       = g_strahl | g_cactus | g_vandykeb;             // set_hacky_interrupt_timing (no V-PROM)
+	wire irq_hacky       = g_strahl | g_cactus | g_vandykeb | g_mustangb3; // set_hacky_interrupt_timing (no V-PROM)
 	wire spr_plain       = g_bioship | g_strahl | g_acrobatm;            // sprite ROMs are plain ROM_LOAD byte files (the rest: WORD_SWAP / odd-first byte pairs), see video_macross2 spr_swap
 	wire [2:0] vprom_sel = (g_blkheart | g_bioship | g_vandyke) ? 3'd1 : // 98ed1c97
 	                       (g_tdragon | g_tdragon1)             ? 3'd2 : // e6ead349
@@ -363,7 +366,7 @@ module gunnail_core #(
 		case (game_sel)
 			G_MACROSS:  begin cfg_bga_mask = 14'h3FFF; end                                  // bgtile 0x200000
 			G_BLKHEART: begin cfg_spr_units = 18'd8192; end
-			G_MUSTANG:  begin cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd8192; end        // bgtile 0x80000
+			G_MUSTANG, G_MUSTANGB3: begin cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd8192; end // bgtile 0x80000
 			G_BIOSHIP:  begin // gfx_bioship: TX 0x300, bgtile (VRAM layer, gfx1) 0x100, sprites 0x200, bg2tile (ROM tilemap, gfx3) 0x000
 			            cfg_bga_pal = 11'h000; cfg_bgb_pal = 11'h100; cfg_spr_pal = 11'h200; cfg_tx_pal = 11'h300;
 			            cfg_bga_mask = 14'h0FFF; cfg_bgb_mask = 14'h0FFF; cfg_spr_units = 18'd4096; end
@@ -763,6 +766,10 @@ module gunnail_core #(
 			G_VANDYKEB: begin // maincpu 0x40000, fg 0x10000, bg 0x80000, spr 0x180000 (4 pairs), oki1 0x80000 (4 files)
 				BASE_BYTE_NMK004_EXT = 24'h000000; BASE_BYTE_FGTILE = 24'h040000;
 				BASE_BYTE_BGTILE = 24'h050000; BASE_BYTE_SPRITES = 24'h0D0000; BASE_BYTE_OKI1 = 24'h250000; BASE_BYTE_OKI2 = 24'h250000;
+			end
+			G_MUSTANGB3: begin // maincpu 0x40000, Z80 0x10000 (the NMK004 ext slot), mustang's fg 0x20000 / bg 0x80000 / spr 0x100000 (pair), oki 0x20000 x2
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h050000;
+				BASE_BYTE_BGTILE = 24'h070000; BASE_BYTE_SPRITES = 24'h0F0000; BASE_BYTE_OKI1 = 24'h1F0000; BASE_BYTE_OKI2 = 24'h210000;
 			end
 			default: begin // gunnail
 				BASE_BYTE_NMK004_EXT = 24'h080000; BASE_BYTE_PROT = 24'h092000; BASE_BYTE_FGTILE = 24'h094000;
@@ -1449,7 +1456,7 @@ module gunnail_core #(
 
 	reg [7:0] nmk004_to_host_latch = 8'hFF;
 	always @(posedge clk_sys) begin
-		if (g_tharrier) begin
+		if (g_z80snd) begin
 			if (~z80_reset_n) nmk004_to_host_latch <= 8'h00;
 			else if (z80_mem_we & sel_z80_latch) nmk004_to_host_latch <= z80_do; // tharrier: soundlatch2 (Z80 -> 68000)
 		end else if (nmk004_mcu_to_host_we & snd_cen) nmk004_to_host_latch <= nmk004_mcu_to_host;
@@ -1595,9 +1602,9 @@ module gunnail_core #(
 	reg [5:0] ym_wr_hold = 6'd0;
 	reg       ym_we_prev = 1'b0;
 	// Write source: the NMK004, or tharrier's Z80 (I/O ports 0/1).
-	wire       ym_we_src   = g_tharrier ? (z80_io_we & sel_io_ym) : ym_we;
-	wire [7:0] ym_dout_src = g_tharrier ? z80_do : ym_dout;
-	wire       ym_addr_src = g_tharrier ? z80_a[0] : ym_addr_sel;
+	wire       ym_we_src   = g_z80snd ? (z80_io_we & sel_io_ym) : ym_we;
+	wire [7:0] ym_dout_src = g_z80snd ? z80_do : ym_dout;
+	wire       ym_addr_src = g_z80snd ? z80_a[0] : ym_addr_sel;
 	always @(posedge clk_sys) begin
 		ym_we_prev <= ym_we_src;
 		if (ym_we_src && !ym_we_prev) begin
@@ -1763,11 +1770,11 @@ module gunnail_core #(
 	reg [7:0] oki0_din_latch, oki1_din_latch;
 	reg [5:0] oki0_wr_hold = 6'd0, oki1_wr_hold = 6'd0;
 	reg       oki0_we_prev = 1'b0, oki1_we_prev = 1'b0;
-	wire       oki0_we_src = g_bjtwin ? (sel_oki0 & cpu_write & ~LDSn) : g_tharrier ? (z80_mem_we & sel_z80_oki0) : oki0_we;
-	wire       oki1_we_src = g_bjtwin ? (sel_oki1 & cpu_write & ~LDSn) : g_tharrier ? (z80_mem_we & sel_z80_oki1) : oki1_we;
+	wire       oki0_we_src = g_bjtwin ? (sel_oki0 & cpu_write & ~LDSn) : g_z80snd ? (z80_mem_we & sel_z80_oki0) : oki0_we;
+	wire       oki1_we_src = g_bjtwin ? (sel_oki1 & cpu_write & ~LDSn) : g_z80snd ? (z80_mem_we & sel_z80_oki1) : oki1_we;
 	wire [7:0] oki_d_src   = g_bjtwin ? oEdb[7:0] : z80_do;
-	wire [7:0] oki0_dout_src = (g_bjtwin | g_tharrier) ? oki_d_src : oki0_dout;
-	wire [7:0] oki1_dout_src = (g_bjtwin | g_tharrier) ? oki_d_src : oki1_dout;
+	wire [7:0] oki0_dout_src = (g_bjtwin | g_z80snd) ? oki_d_src : oki0_dout;
+	wire [7:0] oki1_dout_src = (g_bjtwin | g_z80snd) ? oki_d_src : oki1_dout;
 	always @(posedge clk_sys) begin
 		oki0_we_prev <= oki0_we_src;
 		if (oki0_we_src && !oki0_we_prev) begin
@@ -1952,6 +1959,18 @@ module gunnail_core #(
 	                      ~in1_eff[6], ~in1_eff[3], ~in1_eff[2], ~in1_eff[1], ~in1_eff[0], ~in1_eff[5], ~in1_eff[4], 1'b0};
 	reg  [23:0] last_fetch_pc;
 	always @(posedge clk_sys) if (cpu_read & FC1 & ~FC0) last_fetch_pc <= byte_addr;   // the most recent instruction-fetch address
+	// mustangb3_map's 0x080006 ("gross hack. Protection?"): MAME keys on
+	// m_maincpu->pc() == 0x416 / 0x64E — the address AFTER the reading
+	// instruction (move.w $80006,D0 at 0x410 / 0x648, six bytes each; the
+	// boot loops there until the word equals ROM $640 = 0x9000, then ROM
+	// $3E7C = 0x548D); a third loop at 0x666 wants 0, which is the default.
+	// The windows include the following opcode word (0x416 / 0x64E): the
+	// 68000 prefetches it before the data read, so last_fetch_pc is that
+	// address at read time (the tharrier windows have the same shape; a
+	// window ending at 0x416 left the boot spinning at 0x410-0x41C).
+	wire sel_mb3_prot = g_mustangb3 & (byte_addr[23:1] == 23'h040003);
+	wire [15:0] mb3_prot_val = ((last_fetch_pc >= 24'h000410) && (last_fetch_pc < 24'h000418)) ? 16'h9000 :
+	                           ((last_fetch_pc >= 24'h000648) && (last_fetch_pc < 24'h000650)) ? 16'h548D : 16'h0000;
 	wire th_pc_8aa = (last_fetch_pc >= 24'h0008A4) && (last_fetch_pc < 24'h0008AC);
 	wire th_pc_8ce = (last_fetch_pc >= 24'h0008C8) && (last_fetch_pc < 24'h0008D0);
 	reg  [3:0]  th_prot_count;
@@ -1983,15 +2002,16 @@ module gunnail_core #(
 	// ------------------------------------------------------------------
 	reg [16:0] z80_acc = 17'd0;
 	reg        z80_cen = 1'b0;
-	always @(posedge clk_sys) begin // 4.9152 / 40 = 12288 / 100000
-		if (z80_acc + 17'd12288 >= 17'd100000) begin z80_acc <= z80_acc + 17'd12288 - 17'd100000; z80_cen <= 1'b1; end
-		else begin z80_acc <= z80_acc + 17'd12288; z80_cen <= 1'b0; end
+	wire [16:0] z80_inc = g_mustangb3 ? 17'd8949 : 17'd12288; // mustangb3: 14.31818/4 = 3.5795 MHz; tharrier 4.9152 MHz (/40 MHz, per 100000)
+	always @(posedge clk_sys) begin
+		if (z80_acc + z80_inc >= 17'd100000) begin z80_acc <= z80_acc + z80_inc - 17'd100000; z80_cen <= 1'b1; end
+		else begin z80_acc <= z80_acc + z80_inc; z80_cen <= 1'b0; end
 	end
 	wire [15:0] z80_a;
 	wire [7:0]  z80_do;
 	reg  [7:0]  z80_di;
 	wire        z80_mreq_n, z80_iorq_n, z80_rd_n, z80_wr_n;
-	wire        z80_reset_n = ~reset & g_tharrier;
+	wire        z80_reset_n = ~reset & g_z80snd;
 	wire        z80_mem_we = ~z80_mreq_n & ~z80_wr_n;
 	wire        z80_mem_re = ~z80_mreq_n & ~z80_rd_n;
 	wire        z80_io_we  = ~z80_iorq_n & ~z80_wr_n;
@@ -2021,7 +2041,7 @@ module gunnail_core #(
 	reg [7:0] soundlatch_data; // 68000 -> Z80 (tharrier: 0x08001F)
 	always @(posedge clk_sys) begin
 		if (reset) soundlatch_data <= 8'h00;
-		else if (g_tharrier & sel_nmk004_w & cpu_write & ~LDSn) soundlatch_data <= oEdb[7:0];
+		else if (g_z80snd & sel_nmk004_w & cpu_write & ~LDSn) soundlatch_data <= oEdb[7:0];
 	end
 	always @(*) begin
 		if (~z80_iorq_n)        z80_di = ym_chip_dout;
@@ -2084,6 +2104,7 @@ module gunnail_core #(
 		else if (sel_nmk004_r) rdata = g_vandykeb ? 16'h0000 : {8'h00, nmk004_to_host_latch}; // vandykeb_r: 0; tharrier: soundlatch2
 		else if (sel_oki0)    rdata = {8'h00, oki1_chip_dout};
 		else if (sel_oki1)    rdata = {8'h00, oki2_chip_dout};
+		else if (sel_mb3_prot) rdata = mb3_prot_val;
 		else if (sel_in0)     rdata = g_tharrier ? th_in0 : (in0_eff & ~{9'd0, g_vandykeb, 6'd0}); // vandykeb: IN0 bit 6 is IP_ACTIVE_HIGH "tested on boot" — reading it 1 drops the game into its service-mode test loop (WRAM check / tile / grid screens)
 		else if (sel_in1)     rdata = g_tharrier ? (LDSn ? {th_mcu_val, 8'h00} : th_in1) : (HW_ROMS ? in1_i : 16'hFFFF); // tharrier: upper-byte-only reads = the MCU
 		else if (sel_in2)     rdata = th_in2;
@@ -2185,7 +2206,7 @@ module gunnail_core #(
 		.tx_bg_mode(g_bjtwin), .tx_yscroll(8'd0 - tx_scroll_reg), .tx_bank_off(cfg_tx_bank_off),
 		.spr_flip_en(g_tharrier), .spr_lag1(g_bjtwin), .vis_start(vt_line_start & (vt_vcount == 10'd16)),
 		.bg_bank(bgbank_reg),
-		.game_powerins(1'b0), .base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE_A), .base_word_sprites(BASE_WORD_SPRITES),
+		.game_powerins(1'b0), .tile_lsb(1'b0), .base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE_A), .base_word_sprites(BASE_WORD_SPRITES),
 		.tilerambank(2'd0),
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),

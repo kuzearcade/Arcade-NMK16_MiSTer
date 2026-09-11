@@ -12,7 +12,8 @@ Conventions (see docs/hw-bringup.md):
     0 gunnail, 1 macross, 2 blkheart, 3 mustang, 4 bioship, 5 vandyke,
     6 acrobatm, 7 strahl, 8 tdragon, 9 hachamf, 10 tdragon1, 11 hachamfp,
     12 mustangs, 13 hachamfb, 14 bjtwin, 15 bjtwinp, 16 bjtwinpa,
-    17 sabotenb/nouryoku, 18 cactus, 19 nouryokup, 20 tharrier, 21 vandykeb.
+    17 sabotenb/nouryoku, 18 cactus, 19 nouryokup, 20 tharrier, 21 vandykeb,
+    22 mustangb3.
     ids are listed in bit-value order (value 0 first).
   - ROM part order = the core's per-game SDRAM layout (BASE_BYTE_* in
     gunnail_core.sv): maincpu, NMK004 program, NMK004 boot ROM
@@ -459,6 +460,23 @@ VANDYKEB = dict(VANDYKE, id=21, manufacturer="bootleg",
         ("oki1, 0x080000 (4 files; never played — the board has no sound CPU)", [("9.bin", "56bf774f"), ("8.bin", "89851fcf"), ("7.bin", "d7bf0f6a"), ("6.bin", "a7fcf709")]),
     ])
 
+# mustangb3 (Lettering bootleg, 2026-09-12): mustang's game with the
+# Task Force Harrier-style Z80 + YM2203 sound board (tharrier_sound_map,
+# the OKI bank writes unmapped: 0x20000 sample ROMs), 8 MHz 68000, fixed-
+# scanline IRQs and a PC-keyed read at 0x080006 (gunnail_core.sv id 22).
+# Its GFX ROMs are not dumped; MAME uses the parent's (BAD_DUMP), so the
+# .mra takes them from mustang.zip.
+MUSTANGB3 = dict(MUSTANG, id=22, manufacturer="bootleg (Lettering)",
+    regions=[
+        ("maincpu, 0x040000", [pair(("u2.bin", "1c6c0aaf"), ("u1.bin", "e954d6da"))]),
+        ("Z80 sound program, 0x010000", [("u14.bin", "26041abd")]),
+        ("fgtile, 0x020000 (mustang's, undumped on this board)", [("90058-1", "81ccfcad")]),
+        ("bgtile, 0x080000 (mustang's)", [("90058-4", "a07a2002")]),
+        ("sprites, 0x100000 (mustang's ROM_LOAD16_BYTE pair)", [pair(("90058-8", "560bff04"), ("90058-9", "b9d72a03"))]),
+        ("oki1, 0x020000 (unbanked)", [("u13.bin", "90961f37")]),
+        ("oki2, 0x020000 (unbanked)", [("u12.bin", "0a28eaca")]),
+    ])
+
 # setname, description, GAME() line, parent spec, parent setname (for the zip
 # search list) and region overrides: {old part name: (new name, crc)}.
 SETS = [
@@ -504,6 +522,7 @@ SETS = [
     ("cactus",      "Cactus (bootleg of Saboten Bombers)",                         10753, CACTUS,   "sabotenb", {}),
     ("nouryoku",    "Nouryoku Koujou Iinkai",                                      10760, NOURYOKU, None, {}),
     ("nouryokup",   "Nouryoku Koujou Iinkai (prototype)",                          10761, NOURYOKUP, "nouryoku", {}),
+    ("mustangb3",   "US AAF Mustang (Lettering bootleg)",                          10791, MUSTANGB3, "mustang", {}),
     ("tharrier",    "Task Force Harrier",                                          10699, THARRIER, None, {}),
     ("tharrieru",   "Task Force Harrier (US)",                                     10700, THARRIER, "tharrier",
      {"2.18b": ("u_2.18b", "78923aaa"), "3.21b": ("u_3.21b", "99cea259"), "1.13b": ("1.13b", "c7402e4a")}),
