@@ -135,7 +135,11 @@ module tdragon2_core #(
 	// (visible in the MiSTer's native screenshots): OKI0 cache stall >1ms,
 	// OKI1 cache stall >1ms, Z80 no opcode fetch for >10ms, Z80 held in
 	// its ROM wait-state for >10ms. Green = condition false.
-	parameter DBG_SND_PAINT  = 0
+	parameter DBG_SND_PAINT  = 0,
+	// HW_ROMS=0 sim array sizes only (video_macross2.sv): tdragon2/
+	// macross2 4 MB sprites / 2 MB BG; a powerins sim passes 8 MB / 0x280000.
+	parameter integer SPRITES_BYTES = 4194304,
+	parameter integer BGTILE_BYTES  = 2097152
 ) (
 	input clk_sys,        // 40 MHz (68000 bus clk_sys/4=10MHz; pixel/raster clk_sys/5=8MHz)
 	input reset,            // async, active high
@@ -145,6 +149,14 @@ module tdragon2_core #(
 	// leaves it floating at 0 (tdragon2 behavior), byte-for-byte
 	// unchanged from before this port existed.
 	input game_macross2,
+	// Runtime game select, 1 = Power Instinct (powerins, 2026-09-11):
+	// 12 MHz 68000 / 6 MHz Z80, powerins_map (palette 2048 entries at
+	// 0x120000, bgvram 8192 words at 0x140000, mainram at 0x180000, no
+	// soundlatch2 and no Z80 reset register), powerins_sound_map (flat
+	// 48 KB ROM, soundlatch at E000, no banking), its own .mra SDRAM
+	// layout (BASE_WORD_* below), its own V-PROM (nmk_irq table 1) and
+	// video_macross2.sv's game_powerins mode. Never both selects at once.
+	input game_powerins,
 
 	// ------------------------------------------------------------------
 	// Hardware-mode-only ports (HW_ROMS=1). Unused/unconnected at
@@ -512,18 +524,52 @@ module tdragon2_core #(
 	// Clock enables — identical to macross2_core.sv's own (see that
 	// file's own header).
 	// ------------------------------------------------------------------
+	// 68000: 10 MHz (clk_sys/4) for tdragon2/macross2. powerins runs it at
+	// XTAL(12 MHz): a 3/10 phase accumulator (40 MHz * 3/10), "wrap fires
+	// enPhi1, enPhi2 the very next cycle" as raphero_core.sv's 14 MHz —
+	// enPhi1 lands at ticks 4, 7, 10 (mod 10), never closer than 3 apart.
 	reg [1:0] cpu_div = 2'd0;
 	always @(posedge clk_sys) cpu_div <= cpu_div + 2'd1;
-	wire enPhi1 = (cpu_div == 2'd3);
-	wire enPhi2 = (cpu_div == 2'd1);
+	reg [3:0] cpu_acc = 4'd0;
+	reg       cpu_acc_phi1 = 1'b0, cpu_acc_phi2 = 1'b0, cpu_acc_half = 1'b0;
+	always @(posedge clk_sys) begin
+		cpu_acc_phi1 <= 1'b0;
+		cpu_acc_phi2 <= 1'b0;
+		if (cpu_acc + 4'd3 >= 4'd10) begin
+			cpu_acc      <= cpu_acc + 4'd3 - 4'd10;
+			cpu_acc_phi1 <= 1'b1;
+			cpu_acc_half <= 1'b1;
+		end else begin
+			cpu_acc <= cpu_acc + 4'd3;
+			if (cpu_acc_half) begin
+				cpu_acc_phi2 <= 1'b1;
+				cpu_acc_half <= 1'b0;
+			end
+		end
+	end
+	wire enPhi1 = game_powerins ? cpu_acc_phi1 : (cpu_div == 2'd3);
+	wire enPhi2 = game_powerins ? cpu_acc_phi2 : (cpu_div == 2'd1);
 
 	reg [2:0] pix_div = 3'd0;
 	wire ce_pix = (pix_div == 3'd4);
 	always @(posedge clk_sys) pix_div <= reset ? 3'd0 : (ce_pix ? 3'd0 : pix_div + 3'd1);
 
+	// Z80: 4 MHz (clk_sys/10); powerins XTAL(12 MHz)/2 = 6 MHz via a 3/20
+	// accumulator (T80s only needs a CEN pulse, not an even spacing).
 	reg [3:0] z80_div = 4'd0;
 	always @(posedge clk_sys) z80_div <= (z80_div == 4'd9) ? 4'd0 : z80_div + 4'd1;
-	wire z80_cen = (z80_div == 4'd9);
+	reg [4:0] z80_acc = 5'd0;
+	reg       z80_acc_cen = 1'b0;
+	always @(posedge clk_sys) begin
+		if (z80_acc + 5'd3 >= 5'd20) begin
+			z80_acc     <= z80_acc + 5'd3 - 5'd20;
+			z80_acc_cen <= 1'b1;
+		end else begin
+			z80_acc     <= z80_acc + 5'd3;
+			z80_acc_cen <= 1'b0;
+		end
+	end
+	wire z80_cen = game_powerins ? z80_acc_cen : (z80_div == 4'd9);
 
 	reg [6:0] ym_cen_cnt = 7'd0;
 	reg       ym_cen = 1'b0;
@@ -618,21 +664,25 @@ module tdragon2_core #(
 	// Address decode (68000 side) — identical addresses to macross2_map's
 	// own (see macross2_core.sv's header) except mainram, below.
 	// ------------------------------------------------------------------
-	wire sel_rom       = (byte_addr <= 24'h07FFFF);
+	// powerins_map differs (nmk16.cpp:1193): 1 MB ROM, palette 0x120000-
+	// 0x120FFF (2048 entries), bgvram 0x140000-0x143FFF, mainram 0x180000-
+	// 0x18FFFF, 0x100016 a plain nopw (no Z80 reset), no soundlatch2 read.
+	wire sel_rom       = game_powerins ? (byte_addr <= 24'h0FFFFF) : (byte_addr <= 24'h07FFFF);
 	wire sel_in0       = (byte_addr[23:1] == 23'h080000); // 100000/100001
 	wire sel_in1       = (byte_addr[23:1] == 23'h080001); // 100002/100003
 	wire sel_dsw1      = (byte_addr[23:1] == 23'h080004); // 100008/100009
 	wire sel_dsw2      = (byte_addr[23:1] == 23'h080005); // 10000A/10000B
-	wire sel_soundlatch2_r = (byte_addr[23:1] == 23'h080007); // 10000E/10000F word, byte reg at odd
+	wire sel_soundlatch2_r = ~game_powerins & (byte_addr[23:1] == 23'h080007); // 10000E/10000F word, byte reg at odd
 	wire sel_flip      = (byte_addr[23:1] == 23'h08000A); // 100014/100015, LDS=low byte
-	wire sel_sndreset  = (byte_addr[23:1] == 23'h08000B); // 100016/100017 word
+	wire sel_sndreset  = ~game_powerins & (byte_addr[23:1] == 23'h08000B); // 100016/100017 word
 	wire sel_tilebank  = (byte_addr[23:1] == 23'h08000C); // 100018/100019, LDS=low byte
 	wire sel_soundlatch_w = (byte_addr[23:1] == 23'h08000F); // 10001E/10001F word, byte reg at odd
-	wire sel_palette   = (byte_addr >= 24'h120000) && (byte_addr <= 24'h1207FF);
+	wire sel_palette   = (byte_addr >= 24'h120000) && (byte_addr <= (game_powerins ? 24'h120FFF : 24'h1207FF));
 	wire sel_scroll    = (byte_addr >= 24'h130000) && (byte_addr <= 24'h130007);
-	wire sel_bgvram    = (byte_addr >= 24'h140000) && (byte_addr <= 24'h14FFFF);
+	wire sel_bgvram    = (byte_addr >= 24'h140000) && (byte_addr <= (game_powerins ? 24'h143FFF : 24'h14FFFF));
 	wire sel_txvram    = (byte_addr >= 24'h170000) && (byte_addr <= 24'h171FFF);
-	wire sel_mainram   = (byte_addr >= 24'h1F0000) && (byte_addr <= 24'h1FFFFF);
+	wire sel_mainram   = game_powerins ? ((byte_addr >= 24'h180000) && (byte_addr <= 24'h18FFFF))
+	                                   : ((byte_addr >= 24'h1F0000) && (byte_addr <= 24'h1FFFFF));
 
 	// ------------------------------------------------------------------
 	// ROM (maincpu) — 0x80000 bytes = 262144 words. HW_ROMS=0: unchanged
@@ -669,9 +719,9 @@ module tdragon2_core #(
 	wire [24:1]   rom_word0_race_addr, rom_word1_race_addr, rom_word2_race_addr, rom_word3_race_addr;
 	generate
 	if (!HW_ROMS) begin : g_rom_sim
-		reg [15:0] rom [0:262143];
+		reg [15:0] rom [0:524287]; // 1 MB: powerins' two ROM_LOAD16_WORD_SWAP files; tdragon2/macross2 fill the low half
 		initial if (ROM_FILE != "") $readmemh(ROM_FILE, rom);
-		assign rom_dout  = rom[byte_addr[18:1]];
+		assign rom_dout  = rom[byte_addr[19:1]];
 		assign rom_ready = 1'b1;
 		assign sd0_addr = 24'd0; assign sd0_wrl = 1'b0; assign sd0_wrh = 1'b0;
 		assign sd0_din  = 16'd0; assign sd0_req = 1'b0;
@@ -727,12 +777,14 @@ module tdragon2_core #(
 		// start a speculative SDRAM read whose fill could overwrite the line
 		// between the 68000's DTACK sample and its data latch. Never seen at
 		// this core's 10 MHz, but the same race raphero hit at 14 MHz.
-		reg [18:1] rom_addr_held;
-		always @(posedge clk_sys) if (sel_rom) rom_addr_held <= byte_addr[18:1];
-		wire [18:1] rom_cache_addr = sel_rom ? byte_addr[18:1] : rom_addr_held;
+		reg [19:1] rom_addr_held;
+		always @(posedge clk_sys) if (sel_rom) rom_addr_held <= byte_addr[19:1];
+		wire [19:1] rom_cache_addr = sel_rom ? byte_addr[19:1] : rom_addr_held;
 		// 16 pairs + next-pair prefetch instead of rom_cache1's single
-		// pair: see rtl/rom_cache_n.sv (68000 slowdown vs MAME).
-		rom_cache_n #(.LINES(16), .PREFETCH(1), .LAST_PAIR(22'h01FFFF)) rom_cache_inst (
+		// pair: see rtl/rom_cache_n.sv (68000 slowdown vs MAME). LAST_PAIR
+		// covers powerins' 1 MB program; for the 512 KB games a prefetch
+		// past the end reads the audiocpu region into an unused line.
+		rom_cache_n #(.LINES(16), .PREFETCH(1), .LAST_PAIR(22'h03FFFF)) rom_cache_inst (
 			.clk(clk_sys), .reset(reset | ioctl_download),
 			.addr(rom_cache_addr), .data(rom_dout), .ready(rom_ready),
 			.sd_addr(cache_sd_addr), .sd_req(cache_sd_req),
@@ -1246,7 +1298,7 @@ module tdragon2_core #(
 	// extra M10K) and txvram (4). raphero_core.sv has the synthesis test.
 	reg [7:0] mainram_hi [0:32767];
 	reg [7:0] mainram_lo [0:32767];
-	wire [14:0] mainram_addr_cpu = game_macross2 ? byte_addr[15:1] :
+	wire [14:0] mainram_addr_cpu = (game_macross2 | game_powerins) ? byte_addr[15:1] :
 		{byte_addr[15:12], byte_addr[8], byte_addr[10:9], byte_addr[11], byte_addr[7:1]};
 	reg [15:0] mainram_dout;
 	reg        mainram_ready;
@@ -1305,8 +1357,13 @@ module tdragon2_core #(
 			if (we_lo) begin mainram_lo[mainram_addr_cpu] <= oEdb[7:0];  mainram_dout[7:0]  <= oEdb[7:0];  end
 			else       mainram_dout[7:0]  <= mainram_lo[mainram_addr_cpu];
 			mainram_addr_cpu_r <= mainram_addr_cpu;
-			mainram_ready      <= (mainram_addr_cpu_r == mainram_addr_cpu);
 		end
+		// Combinational on the registered address, not a registered flag:
+		// the registered form is stale-high for the first clk_sys after the
+		// address changes, which the 12 MHz powerins 68000 (enPhi2 one
+		// clk_sys after enPhi1) can sample as DTACK — raphero_core.sv's
+		// mainram_ready has the 14 MHz story. Same for bgvram/txvram below.
+		always @(*) mainram_ready = (mainram_addr_cpu_r == mainram_addr_cpu);
 	end
 	endgenerate
 
@@ -1318,8 +1375,8 @@ module tdragon2_core #(
 	// per read port — instead of 16K flip-flops behind three 1024:1
 	// asynchronous muxes (NMK-10; raphero_core.sv has the same block).
 	// CPU reads take one DTACK wait (palette_wait), the bgvram pattern.
-	reg [15:0] palette [0:1023];
-	wire [9:0] palette_addr = byte_addr[10:1];
+	reg [15:0] palette [0:2047]; // 2048 for powerins (gfx_powerins: BG 0x000, TX 0x200, sprites 0x400-0x7FF); the other games decode only 0x000-0x3FF
+	wire [10:0] palette_addr = byte_addr[11:1];
 	reg [15:0] palette_dout;
 	wire       palette_ready;
 	generate
@@ -1335,7 +1392,7 @@ module tdragon2_core #(
 	end else begin : g_palette_hw
 		// Combinational ready on the registered address (raphero_core.sv's
 		// mainram_ready explains why not a registered flag).
-		reg [9:0] palette_addr_r;
+		reg [10:0] palette_addr_r;
 		always @(posedge clk_sys) begin
 			if (sel_palette & cpu_write & ~UDSn) palette[palette_addr][15:8] <= oEdb[15:8];
 			if (sel_palette & cpu_write & ~LDSn) palette[palette_addr][7:0]  <= oEdb[7:0];
@@ -1382,8 +1439,8 @@ module tdragon2_core #(
 			if (we_lo) begin bgvram_lo[bgvram_addr] <= oEdb[7:0];  bgvram_dout_r[7:0]  <= oEdb[7:0];  end
 			else       bgvram_dout_r[7:0]  <= bgvram_lo[bgvram_addr];
 			bgvram_addr_r <= bgvram_addr;
-			bgvram_ready  <= (bgvram_addr_r == bgvram_addr);
 		end
+		always @(*) bgvram_ready = (bgvram_addr_r == bgvram_addr); // see mainram_ready
 		assign bgvram_dout = bgvram_dout_r;
 	end
 	endgenerate
@@ -1427,8 +1484,8 @@ module tdragon2_core #(
 			if (we_lo) begin txvram_lo[txvram_addr] <= oEdb[7:0];  txvram_dout_r[7:0]  <= oEdb[7:0];  end
 			else       txvram_dout_r[7:0]  <= txvram_lo[txvram_addr];
 			txvram_addr_r <= txvram_addr;
-			txvram_ready  <= (txvram_addr_r == txvram_addr);
 		end
+		always @(*) txvram_ready = (txvram_addr_r == txvram_addr); // see mainram_ready
 		assign txvram_dout = txvram_dout_r;
 	end
 	endgenerate
@@ -1443,9 +1500,9 @@ module tdragon2_core #(
 	wire [15:0] vid_bgvram_dout;
 	wire [10:0] vid_txvram_addr;
 	wire [15:0] vid_txvram_dout;
-	wire [9:0]  vid_palette_addr;
+	wire [10:0] vid_palette_addr;
 	wire [15:0] vid_palette_dout;
-	wire [9:0]  vid_spr_palette_addr;
+	wire [10:0] vid_spr_palette_addr;
 	wire [15:0] vid_spr_palette_dout;
 	generate
 	if (!HW_ROMS) begin : g_vidpal_sim
@@ -1552,7 +1609,7 @@ module tdragon2_core #(
 			if (sel_tilebank & ~LDSn) bgbank_reg      <= oEdb[7:0];
 			if (sel_scroll & ~LDSn) begin
 				scroll_reg[scroll_word_idx] <= oEdb[7:0];
-				if (sel_scroll_off0) tilerambank_reg <= oEdb[5:4];
+				if (sel_scroll_off0 & ~game_powerins) tilerambank_reg <= oEdb[5:4]; // powerins: plain scroll_w<0>, one 8192-word VRAM, no bank
 			end
 			if (sel_sndreset)         z80_reset_n_reg <= (oEdb != 16'h0000);
 		end
@@ -1581,7 +1638,7 @@ module tdragon2_core #(
 	wire        z80_int_n;
 
 	assign z80_int_n = ym_chip_irq_n;
-	wire z80_reset_n = ~reset & z80_reset_n_reg;
+	wire z80_reset_n = ~reset & (z80_reset_n_reg | game_powerins); // powerins: no 68000-driven Z80 reset (0x100016 is a nopw)
 
 	T80s z80_cpu (
 		.RESET_n(z80_reset_n),
@@ -1610,14 +1667,17 @@ module tdragon2_core #(
 	wire z80_io_we = ~z80_iorq_n & ~z80_wr_n;
 	wire z80_io_re = ~z80_iorq_n & ~z80_rd_n;
 
-	wire sel_z80_rom   = (z80_a < 16'h8000);
-	wire sel_z80_nopr  = (z80_a == 16'hA000);
-	wire sel_z80_bank  = (z80_a >= 16'h8000) && (z80_a < 16'hC000) && !sel_z80_nopr;
+	// powerins_sound_map (nmk16.cpp:1219): 0000-BFFF flat ROM (no bank
+	// register, no A000 hole), C000-DFFF RAM, E000 soundlatch read; no
+	// soundlatch2 and E001 is a nop (the driver writes it once).
+	wire sel_z80_rom   = game_powerins ? (z80_a < 16'hC000) : (z80_a < 16'h8000);
+	wire sel_z80_nopr  = ~game_powerins & (z80_a == 16'hA000);
+	wire sel_z80_bank  = ~game_powerins & (z80_a >= 16'h8000) && (z80_a < 16'hC000) && !sel_z80_nopr;
 	wire sel_z80_ram   = (z80_a >= 16'hC000) && (z80_a < 16'hE000);
-	wire sel_z80_soundlatch2_w = z80_mem_we & (z80_a == 16'hF000);
-	wire sel_z80_soundlatch_r  = (z80_a == 16'hF000);
+	wire sel_z80_soundlatch2_w = ~game_powerins & z80_mem_we & (z80_a == 16'hF000);
+	wire sel_z80_soundlatch_r  = (z80_a == (game_powerins ? 16'hE000 : 16'hF000));
 
-	wire sel_mem_audiobank_w = z80_mem_we & (z80_a == 16'hE001);
+	wire sel_mem_audiobank_w = ~game_powerins & z80_mem_we & (z80_a == 16'hE001);
 
 	wire sel_io_ym_addr = (z80_a[7:0] == 8'h00);
 	wire sel_io_ym_data = (z80_a[7:0] == 8'h01);
@@ -1633,18 +1693,22 @@ module tdragon2_core #(
 	// bit 23, which put OKI2 (0x8C0000) at 0x0C0000 — the BG tile region —
 	// so that chip decoded tile graphics as ADPCM in every build until
 	// 2026-09-08 (docs/hw-bringup.md, "Sound effects corrupted").
-	localparam [23:0] BASE_BYTE_AUDIOCPU = 24'h080000;
-	localparam [23:0] BASE_BYTE_FGTILE   = 24'h0A0000;
-	localparam [23:0] BASE_BYTE_BGTILE   = 24'h0C0000;
-	localparam [23:0] BASE_BYTE_SPRITES  = 24'h2C0000;
-	localparam [23:0] BASE_BYTE_OKI1     = 24'h6C0000;
-	localparam [23:0] BASE_BYTE_OKI2     = 24'h8C0000;
-	localparam [22:0] BASE_WORD_AUDIOCPU = BASE_BYTE_AUDIOCPU[23:1];
-	localparam [22:0] BASE_WORD_FGTILE   = BASE_BYTE_FGTILE[23:1];
-	localparam [22:0] BASE_WORD_BGTILE   = BASE_BYTE_BGTILE[23:1];
-	localparam [22:0] BASE_WORD_SPRITES  = BASE_BYTE_SPRITES[23:1];
-	localparam [22:0] BASE_WORD_OKI1     = BASE_BYTE_OKI1[23:1];
-	localparam [22:0] BASE_WORD_OKI2     = BASE_BYTE_OKI2[23:1];   // 0x460000
+	//
+	// Two layouts, selected at runtime (the caches take their base as an
+	// input since 2026-09-11):
+	//   tdragon2/macross2: maincpu 0x000000 (512 KB), audiocpu 0x080000,
+	//     fgtile 0x0A0000, bgtile 0x0C0000, sprites 0x2C0000 (4 MB),
+	//     oki1 0x6C0000, oki2 0x8C0000 (2 MB each) — end 0xAC0000.
+	//   powerins: maincpu 0x000000 (1 MB), audiocpu 0x100000 (128 KB),
+	//     fgtile 0x120000 (128 KB), bgtile 0x140000 (0x280000),
+	//     sprites 0x3C0000 (8 MB), oki1 0xBC0000, oki2 0xDC0000 (2 MB
+	//     each) — end 0xFC0000. The .mra <part> order must match.
+	wire [22:0] BASE_WORD_AUDIOCPU = game_powerins ? 23'h080000 : 23'h040000;
+	wire [22:0] BASE_WORD_FGTILE   = game_powerins ? 23'h090000 : 23'h050000;
+	wire [22:0] BASE_WORD_BGTILE   = game_powerins ? 23'h0A0000 : 23'h060000;
+	wire [22:0] BASE_WORD_SPRITES  = game_powerins ? 23'h1E0000 : 23'h160000;
+	wire [22:0] BASE_WORD_OKI1     = game_powerins ? 23'h5E0000 : 23'h360000;
+	wire [22:0] BASE_WORD_OKI2     = game_powerins ? 23'h6E0000 : 23'h460000;
 
 	wire [7:0] audiocpu_dout;
 	wire       audiocpu_ready;
@@ -1656,7 +1720,7 @@ module tdragon2_core #(
 	// reach it (RAM/latch accesses used to start speculative fetches of
 	// bank-window words that could land mid-fetch).
 	wire        z80_rom_sel = sel_z80_rom | sel_z80_bank;
-	wire [23:0] audiocpu_byte_addr_live = sel_z80_rom ? {9'd0, z80_a[14:0]} : {7'd0, z80_bank_phys[16:0]};
+	wire [23:0] audiocpu_byte_addr_live = sel_z80_rom ? {8'd0, z80_a[15:0]} : {7'd0, z80_bank_phys[16:0]}; // sel_z80_rom implies a[15]=0 except in the powerins mode (flat 48 KB)
 	reg  [23:0] audiocpu_byte_addr_held;
 	always @(posedge clk_sys) if (z80_rom_sel) audiocpu_byte_addr_held <= audiocpu_byte_addr_live;
 	wire [23:0] audiocpu_byte_addr = z80_rom_sel ? audiocpu_byte_addr_live : audiocpu_byte_addr_held;
@@ -1698,7 +1762,8 @@ module tdragon2_core #(
 			.sdram_addr(sd3_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
 			.sdram_dout(sd3_dout), .sdram_dout_pair(sd3_dout_pair), .sdram_req(sd3_req), .sdram_ack(sd3_ack)
 		);
-		rom_cache1_byte #(.BASE_WORD_OFFSET(BASE_WORD_AUDIOCPU)) audiocpu_cache_inst (
+		rom_cache1_byte audiocpu_cache_inst (
+			.base_word(BASE_WORD_AUDIOCPU),
 			.clk(clk_sys), .reset(reset),
 			.byte_addr(audiocpu_byte_addr), .data(audiocpu_dout), .ready(audiocpu_ready),
 			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1]), .sd_dout_pair(p1_dout_pair[1])
@@ -1835,12 +1900,14 @@ module tdragon2_core #(
 		// latches it (multi-line + sequential prefetch), and when it is
 		// not, `stall` freezes the chip's cen until it is — see
 		// rtl/oki_rom_cache.sv's header and docs/hw-bringup.md.
-		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI1)) oki0_cache_inst (
+		oki_rom_cache oki0_cache_inst (
+			.base_word(BASE_WORD_OKI1),
 			.clk(clk_sys), .reset(reset),
 			.byte_addr(oki0_rom_addr), .data(oki0_rom_data), .ready(oki0_rom_ok), .stall(oki0_stall),
 			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2]), .sd_dout_pair(p1_dout_pair[2])
 		);
-		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI2)) oki1_cache_inst (
+		oki_rom_cache oki1_cache_inst (
+			.base_word(BASE_WORD_OKI2),
 			.clk(clk_sys), .reset(reset),
 			.byte_addr(oki1_rom_addr), .data(oki1_rom_data), .ready(oki1_rom_ok), .stall(oki1_stall),
 			.sd_addr(p1_addr[3]), .sd_req(p1_req[3]), .sd_busy(p1_busy[3]), .sd_valid(p1_valid[3]), .sd_dout(p1_dout[3]), .sd_dout_pair(p1_dout_pair[3])
@@ -2071,6 +2138,7 @@ module tdragon2_core #(
 		.VTIMING_FILE(VTIMING_FILE)
 	) irq_gen (
 		.clk_sys(clk_sys),
+		.table_sel(game_powerins), // V-PROM table 1 = powerins' 21.u71 (Macross2.sv loads a 512-line file)
 		.reset(reset),
 		.line_start(vt_line_start),
 		.vcount(vt_vcount),
@@ -2090,13 +2158,14 @@ module tdragon2_core #(
 		.FGTILE_FILE(FGTILE_FILE),
 		.BGTILE_FILE(BGTILE_FILE),
 		.SPRITES_FILE(SPRITES_FILE),
+		.SPRITES_BYTES(SPRITES_BYTES),
+		.BGTILE_BYTES(BGTILE_BYTES),
 		.HW_ROMS(HW_ROMS),
-		.DBG_MISS_PAINT(DBG_MISS_PAINT),
-		.BASE_WORD_FGTILE(BASE_WORD_FGTILE),
-		.BASE_WORD_BGTILE(BASE_WORD_BGTILE),
-		.BASE_WORD_SPRITES(BASE_WORD_SPRITES)
+		.DBG_MISS_PAINT(DBG_MISS_PAINT)
 	) video (
 		.clk_sys(clk_sys), .reset(reset),
+		.game_powerins(game_powerins),
+		.base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE), .base_word_sprites(BASE_WORD_SPRITES),
 		.sprite_dma_trigger(sprite_dma_trigger), .sprite_dma_busy(sprite_dma_busy),
 		.bgvram_addr(vid_bgvram_addr), .bgvram_data(vid_bgvram_dout),
 		.txvram_addr(vid_txvram_addr), .txvram_data(vid_txvram_dout),

@@ -631,6 +631,7 @@ module macross_core #(
 		.VTIMING_FILE(VTIMING_FILE)
 	) irq_gen (
 		.clk_sys(clk_sys),
+		.table_sel(1'b0),
 		.reset(reset),
 		.line_start(vt_line_start),
 		.vcount(vt_vcount),

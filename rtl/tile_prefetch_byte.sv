@@ -53,13 +53,16 @@
 // issued once `pf_tag` has been stable for two cycles — by then
 // `pf_vram`/`pf_byte_addr` reflect it. A pixel lasts five clk_sys
 // cycles, so this never delays a fetch by more than it must.
+// base_word (2026-09-11): the region's SDRAM word offset is a runtime
+// input, not a parameter — see rom_cache_n_byte.sv.
 module tile_prefetch_byte #(
 	parameter TAG_W = 19,
-	parameter [22:0] BASE_WORD_OFFSET = 23'd0, // this ROM region's byte offset / 2 in the shared SDRAM
 	parameter ENTRIES = 4                      // power of two
 ) (
 	input             clk,
 	input             reset,
+
+	input  [22:0]     base_word,     // this ROM region's byte offset / 2 in the shared SDRAM
 
 	// lookahead (prefetch) stream
 	input  [TAG_W-1:0] pf_tag,
@@ -155,7 +158,7 @@ module tile_prefetch_byte #(
 				pending  <= 1'b1;
 				req_tag  <= pf_tag;
 				req_vram <= pf_vram;
-				req_word <= BASE_WORD_OFFSET + pf_byte_addr[23:1];
+				req_word <= base_word + pf_byte_addr[23:1];
 			end
 			if (pending && sd_valid) begin
 				e_tag[wr_ptr]   <= req_tag;

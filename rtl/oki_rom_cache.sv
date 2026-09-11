@@ -34,13 +34,15 @@
 // (sd_req held until sd_valid; the returned sd_dout_pair is the aligned
 // word pair containing the requested word), so it drops into the same
 // sdram_arb channel.
+// base_word (2026-09-11): the ROM's SDRAM word offset is a runtime input,
+// not a parameter — see rom_cache_n_byte.sv.
 module oki_rom_cache #(
-	parameter [22:0] BASE_WORD_OFFSET = 23'd0,
 	parameter        LINES = 16
 ) (
 	input         clk,
 	input         reset,
 
+	input  [22:0] base_word,   // this ROM's byte offset / 2 in the shared SDRAM
 	input  [21:0] byte_addr,   // after NMK112 remap, relative to this ROM
 	output [7:0]  data,
 	output        ready,       // level: data reflects byte_addr right now
@@ -89,7 +91,7 @@ module oki_rom_cache #(
 	reg          req_is_prefetch;
 	reg [LW-1:0] victim;
 	assign sd_req  = pending;
-	assign sd_addr = {1'b0, BASE_WORD_OFFSET + {2'd0, req_line, 1'b0}};
+	assign sd_addr = {1'b0, base_word + {2'd0, req_line, 1'b0}};
 
 	// NRU victim: first line, scanning from a rotating pointer, whose
 	// reference bit is clear; the line the chip is reading right now is

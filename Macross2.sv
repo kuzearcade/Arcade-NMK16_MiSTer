@@ -128,16 +128,19 @@ localparam CONF_STR = {
 	"DIP;",
 	"-;",
 	"R[0],Reset;",
-	// Fixed at synthesis time as tdragon2's own superset (3 buttons) —
-	// serves macross2 too, whose own .mra just declares fewer <buttons>
-	// names (see in0_i/in1_i's own comment below).
-	"J1,Button 1,Button 2,Button 3,Start,Coin;",
+	// Fixed at synthesis time as the superset of every game this RBF
+	// serves: Power Instinct has four buttons (P1_P2 bits 4-7), tdragon2
+	// three, macross2 two. MiSTer maps a gamepad POSITIONALLY against the
+	// loaded .mra's <buttons> list, so every Macross2.rbf .mra declares
+	// all six entries in this order (docs/hw-bringup.md, gamepad Coin).
+	"J1,Button 1,Button 2,Button 3,Button 4,Start,Coin;",
 	"V,v",`BUILD_DATE
 };
 
 wire        forced_scandoubler;
 wire        direct_video;
 wire        game_macross2; // runtime game select, assigned from the .mra <switches> byte below
+wire        game_powerins; // Power Instinct select, same byte bit 1 (see below)
 wire  [1:0] buttons;
 wire [127:0] status;
 wire  [10:0] ps2_key;
@@ -161,7 +164,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({direct_video, 1'b0, game_macross2 | direct_video}), // [2] hides Flip screen (direct video only), [1] unused, [0] hides Orientation (macross2/direct video)
+	.status_menumask({direct_video, 1'b0, game_macross2 | game_powerins | direct_video}), // [2] hides Flip screen (direct video only), [1] unused, [0] hides Orientation (macross2/powerins are horizontal; direct video)
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -244,6 +247,7 @@ wire reset = RESET | status[0] | buttons[1] | ioctl_download | ~pll_locked;
 //   (PORT_SERVICE_DIPLOC, active low) — see dsw1_i below.
 // ------------------------------------------------------------------
 reg [6:0] kb_p1 = 7'd0, kb_p2 = 7'd0;   // [0]=R [1]=L [2]=D [3]=U [4]=B1 [5]=B2 [6]=B3, joystick bit order
+reg kb_p1_b4 = 1'b0, kb_p2_b4 = 1'b0;   // button 4 (powerins): Left Shift / W, MAME's defaults
 reg kb_start1 = 1'b0, kb_start2 = 1'b0, kb_coin1 = 1'b0, kb_coin2 = 1'b0, kb_service = 1'b0;
 reg kb_test_mode = 1'b0;   // toggled by each F2 press
 reg kb_f2_held = 1'b0;
@@ -259,6 +263,7 @@ always @(posedge clk_sys) begin
 			9'h014: kb_p1[4] <= ps2_key[9];   // Left Ctrl  = P1 button 1
 			9'h011: kb_p1[5] <= ps2_key[9];   // Left Alt   = P1 button 2
 			9'h029: kb_p1[6] <= ps2_key[9];   // Space      = P1 button 3
+			9'h012: kb_p1_b4 <= ps2_key[9];   // Left Shift = P1 button 4
 			9'h02D: kb_p2[3] <= ps2_key[9];   // R = P2 up
 			9'h02B: kb_p2[2] <= ps2_key[9];   // F = P2 down
 			9'h023: kb_p2[1] <= ps2_key[9];   // D = P2 left
@@ -266,6 +271,7 @@ always @(posedge clk_sys) begin
 			9'h01C: kb_p2[4] <= ps2_key[9];   // A = P2 button 1
 			9'h01B: kb_p2[5] <= ps2_key[9];   // S = P2 button 2
 			9'h015: kb_p2[6] <= ps2_key[9];   // Q = P2 button 3
+			9'h01D: kb_p2_b4 <= ps2_key[9];   // W = P2 button 4
 			9'h016: kb_start1  <= ps2_key[9]; // 1
 			9'h01E: kb_start2  <= ps2_key[9]; // 2
 			9'h02E: kb_coin1   <= ps2_key[9]; // 5
@@ -280,7 +286,10 @@ always @(posedge clk_sys) begin
 	end
 end
 
-wire [15:0] in0_i = ~{11'd0, joystick_1[7] | kb_start2, joystick_0[7] | kb_start1, kb_service, joystick_1[8] | kb_coin2, joystick_0[8] | kb_coin1};
+// joystick bits follow the J1 list: [3:0] directions, [4] B1, [5] B2,
+// [6] B3, [7] B4, [8] Start, [9] Coin. SYSTEM port bits 0-4 (coin1,
+// coin2, service, start1, start2) are the same on all three games.
+wire [15:0] in0_i = ~{11'd0, joystick_1[8] | kb_start2, joystick_0[8] | kb_start1, kb_service, joystick_1[9] | kb_coin2, joystick_0[9] | kb_coin1};
 
 // ------------------------------------------------------------------
 // Autofire (status[12:10] P1, status[15:13] P2; 0 = off). The pattern
@@ -290,8 +299,8 @@ wire [15:0] in0_i = ~{11'd0, joystick_1[7] | kb_start2, joystick_0[7] | kb_start
 // enabled — its ordinary input is not sent to the game in that mode.
 // ------------------------------------------------------------------
 wire        hblank_core, vblank_core;   // from the core, also used by the video output below
-wire [6:0] p1_raw = joystick_0[6:0] | kb_p1;
-wire [6:0] p2_raw = joystick_1[6:0] | kb_p2;
+wire [7:0] p1_raw = joystick_0[7:0] | {kb_p1_b4, kb_p1};
+wire [7:0] p2_raw = joystick_1[7:0] | {kb_p2_b4, kb_p2};
 reg  vbl_d = 1'b0;
 wire frame_tick = vblank_core & ~vbl_d;
 always @(posedge clk_sys) vbl_d <= vblank_core;
@@ -321,10 +330,14 @@ wire p1_b1 = af1_en ? ((p1_raw[4] & (af1_phase < af_on(af1_mode))) | p1_raw[6]) 
 wire p2_b1 = af2_en ? ((p2_raw[4] & (af2_phase < af_on(af2_mode))) | p2_raw[6]) : p2_raw[4];
 wire p1_b3 = af1_en ? 1'b0 : p1_raw[6];
 wire p2_b3 = af2_en ? 1'b0 : p2_raw[6];
-wire [6:0] p1_btn = {p1_b3, p1_raw[5], p1_b1, p1_raw[3:0]};
-wire [6:0] p2_btn = {p2_b3, p2_raw[5], p2_b1, p2_raw[3:0]};
+// Bit 7 of each player byte is BUTTON4 on Power Instinct (nmk16.cpp
+// INPUT_PORTS_START(powerins)); tdragon2/macross2 leave it unused (the
+// port is active low, so an undriven bit reads 1 = released), which is
+// why it is only driven in the powerins mode.
+wire [7:0] p1_btn = {game_powerins & p1_raw[7], p1_b3, p1_raw[5], p1_b1, p1_raw[3:0]};
+wire [7:0] p2_btn = {game_powerins & p2_raw[7], p2_b3, p2_raw[5], p2_b1, p2_raw[3:0]};
 
-wire [15:0] in1_i = ~{1'b0, p2_btn, 1'b0, p1_btn};
+wire [15:0] in1_i = ~{p2_btn, p1_btn};
 // DIP switches — the MiSTer .mra loader auto-generates its own "DIP
 // Switches" OSD submenu directly from each loaded .mra's own
 // <switches>/<dip bits="N" .../> declarations (no CONF_STR "O" entry
@@ -454,6 +467,10 @@ assign dsw2_i = {8'hFF, dip_sw[1]};
 // does mirror <switches> into status[] as well; either path alone selects
 // macross2 only for macross2.mra (tdragon2.mra's byte 2 is 00).
 assign game_macross2 = dip_sw[2][0] | status[16];
+// Byte 2 bit 1 (or hidden status[28]) selects Power Instinct — its .mra
+// carries <switches default="FF,FB,02">. See tdragon2_core.sv's
+// game_powerins port for everything the mode changes.
+assign game_powerins = dip_sw[2][1] | status[28];
 wire        ce_pix_core;
 wire [9:0]  hcount_core, vcount_core;
 // hblank_core/vblank_core are declared above the autofire block (frame tick).
@@ -466,8 +483,15 @@ wire signed [15:0] audio_l, audio_r;
 // subtraction underflowing to a value >=384/>=224 during blanking
 // (verified arithmetically, not just assumed) so rd_in_range correctly
 // reads "not visible" without extra clamping logic.
-assign rd_x_screen = hcount_core[8:0] - 9'd28;
+// Power Instinct's 320-px picture (set_screen_midres: visible 60..379 of
+// a 448-px line at 7 MHz — the same 64 us line as this 512 x 8 MHz
+// raster) is placed at hcount 60..379: the 32 px inward from tdragon2's
+// 28..411 window on each side, i.e. centred on the same sync positions
+// (H Shift still applies). The core's blanking window follows.
+wire  [8:0] active_x0 = game_powerins ? 9'd60 : 9'd28;
+assign rd_x_screen = hcount_core[8:0] - active_x0;
 assign rd_y_screen = vcount_core[7:0] - 8'd16;
+wire        hblank_eff = game_powerins ? ((hcount_core < 10'd60) | (hcount_core >= 10'd380)) : hblank_core;
 
 // VTIMING_FILE: nmk_irq.sv's own V-PROM (tdragon2's own "10.bpr",
 // ROM_START(tdragon2), nmk16.cpp:8357-8358) has no HW_ROMS gating at
@@ -489,7 +513,11 @@ assign rd_y_screen = vcount_core[7:0] - 8'd16;
 // IOCTL_BUCKET_REF_FILE: NOT copyrighted ROM dump data (a small table of
 // checksums derived from it), safe to commit directly — see
 // tdragon2_core.sv's own IOCTL_BUCKET_REF_FILE parameter comment.
-tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex"),
+// roms/tdragon2_powerins_vtiming.hex (512 lines) = tdragon2's 10.bpr
+// followed by powerins' 21.u71 (nmk_irq table 1, selected by
+// game_powerins); rebuild with `cat roms/tdragon2_vtiming.hex
+// roms/powerins_vtiming.hex` after mkgfxrom --mode concat on each PROM.
+tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_powerins_vtiming.hex"),
 	.IOCTL_BUCKET_REF_FILE("rtl/tdragon2/tdragon2_ioctl_bucket_ref.hex"),
 	.ROM_FETCH_BUCKET_REF_FILE("rtl/tdragon2/tdragon2_fetch_bucket_ref.hex"),
 	.ROM_FETCH_BUCKET_TOUCHED_FILE("rtl/tdragon2/tdragon2_fetch_bucket_touched.hex"),
@@ -498,7 +526,7 @@ tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex"),
 	.ROM_FETCH_WORD_REF_FILE("rtl/tdragon2/tdragon2_fetch_word_ref.hex"),
 	.ROM_FETCH_WORD_TOUCHED_FILE("rtl/tdragon2/tdragon2_fetch_word_touched.hex")) core
 (
-	.clk_sys(clk_sys), .reset(reset), .game_macross2(game_macross2),
+	.clk_sys(clk_sys), .reset(reset), .game_macross2(game_macross2), .game_powerins(game_powerins),
 	.extra_por_hold(~pll_locked),
 
 	.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr),
@@ -591,7 +619,7 @@ wire vsync = (vrel >= vs_rel) && (vrel < vs_rel + 10'd3);
 assign CLK_VIDEO = clk_sys;
 assign CE_PIXEL  = ce_pix_core;
 
-assign VGA_DE = ~(hblank_core | vblank_core);
+assign VGA_DE = ~(hblank_eff | vblank_core);
 assign VGA_HS = hsync;
 assign VGA_VS = vsync;
 // ------------------------------------------------------------------
@@ -835,7 +863,7 @@ assign VGA_B  = final_rgb[7:0];
 wire  [1:0] orientation = status[9:8];
 wire        flip_screen = status[17];
 wire        video_rotated;
-wire        no_rotate = (orientation == 2'd0) | game_macross2 | direct_video;
+wire        no_rotate = (orientation == 2'd0) | game_macross2 | game_powerins | direct_video;
 wire        rotate_ccw = orientation != 2'd2;
 wire        flip = flip_screen & ~direct_video;
 screen_rotate screen_rotate (

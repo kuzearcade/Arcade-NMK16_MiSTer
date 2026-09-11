@@ -2166,6 +2166,163 @@ the palette). The three reference sims build. On the board all three
 new RBFs boot, play (attract audio recorded) and show correct colours
 in native screenshots.
 
+## Power Instinct on the Macross2 rbf (2026-09-11)
+
+Power Instinct (Atlus 1993, `powerins`) is a Family C board — 68000 +
+Z80 with YM2203 and two NMK112-banked OKIs, the same parts as tdragon2
+— but on a "midres" video configuration and with its own memory map,
+so it was added to the shared `Macross2.rbf` as a third runtime-selected
+game rather than a fourth RBF: `tdragon2_core.sv` and `video_macross2.sv`
+take a `game_powerins` input (from the `.mra` `<switches>` third byte,
+bit 1, or hidden `status[28]`), exactly as `game_macross2` already
+selected macross2. `rtl/powerins/` (the earlier zero-latency reference
+port, with its documented "black after frame ~345" open item) stays as
+it was; nothing in the shipped path uses it.
+
+What the mode changes, all read straight from `nmk16.cpp` /
+`nmk16_v.cpp` / `nmk16spr.cpp`:
+
+- **Clocks.** 68000 at XTAL(12 MHz): a 3/10 phase accumulator on the
+  40 MHz clk_sys (enPhi1 at ticks 4, 7, 10 mod 10, enPhi2 the next
+  clock) beside the existing /4 for 10 MHz; Z80 at 6 MHz (3/20
+  accumulator) beside the /10. The registered `*_ready` DTACK flags of
+  mainram/bgvram/txvram became combinational compares on the registered
+  address (raphero's 14 MHz form): the registered flag is stale-high for
+  one clk_sys after an address change, which a CPU whose enPhi2 follows
+  enPhi1 by one clock can sample.
+- **68000 map** (`powerins_map`): 1 MB program ROM (the cache's
+  `LAST_PAIR` and the sim array grew), palette 0x120000-0x120FFF (2048
+  entries — the wrapper's palette array is 2048 for every game now,
+  the others decode only the low 1024), bgvram 0x140000-0x143FFF (8192
+  words, no `tilerambank`: the scroll-register side effect is gated
+  off), mainram at 0x180000 with no address swap, 0x100016 a plain
+  `nopw` (the Z80 is never reset by the 68000: `z80_reset_n` is forced
+  released in this mode), no soundlatch2 read.
+- **Z80 map** (`powerins_sound_map`): flat 0000-BFFF ROM (no bank
+  register, no A000 hole — `sel_z80_nopr`/`sel_z80_bank`/`E001` bank
+  writes are gated off), soundlatch read at E000 instead of F000.
+- **SDRAM layout.** The regions are laid out contiguously as the `.mra`
+  streams them (maincpu 0, audiocpu 0x100000, fgtile 0x120000, bgtile
+  0x140000, sprites 0x3C0000 (8 MB), oki1 0xBC0000, oki2 0xDC0000, end
+  0xFC0000), which differs from tdragon2's, so the ROM caches'
+  `BASE_WORD_OFFSET` parameters became `base_word` input ports
+  (`rom_cache_n_byte`, `rom_cache1_byte`, `oki_rom_cache`,
+  `tile_prefetch_byte`) and the core muxes the six bases per game.
+  `rom_cache_n_byte` lost its per-region prefetch limit (a prefetch
+  past a region's end fills a line nobody addresses).
+- **V-PROM.** powerins' `21.u71` differs from tdragon2's `10.bpr`, so
+  `nmk_irq` holds two 256-entry tables (a 512-line `VTIMING_FILE`,
+  `roms/tdragon2_powerins_vtiming.hex`) and a `table_sel` input;
+  every other instantiation ties it 0.
+- **Video** (`set_screen_midres`, `gfx_powerins`,
+  `powerins_get_bg_tile_info`, `get_colour_6bit`,
+  `get_flip_extcode_powerins`), all under `game_powerins` in
+  `video_macross2.sv`:
+  - 320 x 224 visible at bitmap origin (60, 16). The raster is
+    unchanged — 448 px at 7 MHz is the same 64 us line as 512 at 8 MHz
+    — and `Macross2.sv` places the window at hcount 60..379 (32 px in
+    from tdragon2's 28..411 on each side, so the sync trims still apply)
+    with its own blanking. `VIDEOSHIFT` is 92 in both (60+32 = 28+64),
+    so tilemap and sprite x math only changed through `bitmap_x0`.
+    The sprite plane keeps its 384 stride; only the visible width and
+    the plot clip change.
+  - Sprite coordinates are 10-bit (`set_mask(0x3ff, 0x3ff)`) with wrap
+    modulus 1024 instead of 0x1ff/512 (nmk16spr.cpp `sx -= xpos_max`);
+    `max_sprite_clock` 448*263.
+  - 6-bit sprite colour at palette base 0x400, TX at 0x200, BG at 0
+    with 32 rows: BG colour = {code[11], code[15:12]}, BG tile =
+    code[10:0] | bgbank << 11 (15-bit index, 22-bit ROM byte address).
+    The sprite plane entry became {colour[5:0], pix[3:0]} with "pix ==
+    15" as the empty state (pen 15 is never plotted), which fits the
+    extra colour bit in the same 10-bit M10K width without a valid
+    flag; the other games' entries are the old contents minus a
+    redundant bit, verified frame-identical below.
+  - Sprite code bit 15 comes from attribute word bit 8 and flipx from
+    attribute bit 12: units are placed right to left (`s_w - s_tx`)
+    while the code walk stays ascending, and each unit's source columns
+    are mirrored (`15 - s_px` feeds the ROM byte address and nibble
+    select; the destination column is not mirrored) — nmk16spr.cpp's
+    `sx += delta*w`, negated `xinc`, and `flipx_global` through
+    `gfx->transpen`. 16-bit codes never wrap (`spr_units` 65536).
+- **Inputs.** Four buttons per player (P1_P2 bits 4-7): the CONF_STR
+  became `J1,Button 1,Button 2,Button 3,Button 4,Start,Coin` and every
+  Macross2.rbf `.mra` now declares that six-entry `<buttons>` list
+  (positional gamepad mapping, see the gamepad Coin note); bit 7 is
+  only driven in this mode. Keyboard: Left Shift / W for the fourth
+  buttons. SYSTEM bits 0-4 are the same as the other two games.
+
+**Verification (reference path, `sim/rtl/powerins_tc` — tdragon2_core at
+HW_ROMS=0 with game_powerins=1 and the powerins ROM images):** every
+frame compared byte for byte with MAME snapshots taken at exact frame
+numbers (the Lua `frame_done` recipe from NMK-1, frames 1-620, then
+621-1760). Frames 57-421 (self-test screen, the 93.10.20 date screen,
+the FBI "Winners Don't Use Drugs" screen with its 5-bit-colour BG
+tilemap and TX text) are pixel-identical at a fixed offset (sim S =
+MAME S-8 through the self test, S-10 afterwards: the boot lands two
+frames further on than MAME after the ROM check, the same class of
+software-timed offset as NMK-3/NMK-16); the only differing frames are
+the screen-switch transitions (229/230/350, a partially drawn frame
+either side of a swap). The self test itself reports every check OK,
+including PROGRAM ROM (the 1 MB image) and SOUND. The old
+`rtl/powerins` "black after frame ~345" symptom does not occur: frame
+351 onward is the FBI screen, 69,257 non-black pixels, matching MAME.
+A 1.25 G-cycle run (1,757 frames) covers the title intro (the large
+character silhouettes — the sprites that exercise the 6-bit colour,
+10-bit coordinates and flip), the scrolling story text and the attract
+fight: frames 690-1757 are pixel-identical to MAME on 997 of 1,004
+frames within a ±6-frame window, with the sequence running at S = M-1
+there (the title sequence's own timer starts 9 frames earlier relative
+to the boot-phase alignment, NMK-16's class). The seven exceptions are
+all switch frames: a story-text page shown one frame longer (847, 990),
+a CREDIT text update (1414: 263 px in the bottom-right corner), a
+whole-screen step one frame apart with exact matches either side
+(1725, 1756) and the two frames of a scene switch (1718/1719) in which
+the raster shows the BG VRAM being refilled row by row while MAME,
+rendering at VBOUT, shows the finished fill — the mid-frame state a
+progressive raster (and the PCB) has and a frame-granular snapshot
+cannot.
+The four existing hardware sims were re-run on the final RTL against a
+worktree of the previous commit (`TB_DUMP_PPM=1 TB_RAM_PER2=5`, 300 M
+cycles, every frame compared byte for byte, instruction and sound-write
+counts identical), plus the `oki_rom_cache_test` unit test:
+
+| sim | frames identical |
+|---|---|
+| tdragon2_hw | 422 / 422 |
+| macross2_hw | 422 / 422 |
+| gunnail_hw | 422 / 422 |
+| raphero_hw | 422 / 422 |
+
+**Hardware path (`sim/rtl/powerins_hw`, the tdragon2_hw harness with
+game_powerins=1 and the powerins ioctl stream):** 390 of 392 frames
+(30-421) identical to MAME at S = M-12 (two more frames of download
+time than the reference path), the same two switch frames excepted;
+OKI golden-byte audit 727,272 sample latches, 0 wrong on either chip;
+68000 18,030,970 instructions against the reference's 18,037,890 (the
+ROM-cache wait states).
+
+**Synthesis.** The first build came back at −54.8 ns setup slack on
+`clk_sys`: the sprite coordinate wrap had been written as `x %
+spr_wrap` with a *runtime* modulus (512 or 1024), which Quartus
+faithfully built as a general divider in the pixel path. Replaced by
+`& spr_wrap_mask` (both moduli are powers of two, every operand is
+non-negative): 15,720 ALMs (38 %), 21,550 registers, 445 M10K (80 %),
+setup slack +0.695 ns — the same footprint as before the port within a
+few hundred ALMs, since every powerins path is a mux on the existing
+logic.
+
+**Board.** `Macross2.rbf` with `Power Instinct (USA).mra` boots on the
+DE10-Nano: the self test, the FBI screen, the title intro and the
+attract fight render correctly at 320 px (native `screenshot`
+captures), coin/start from the keyboard path starts a game and the
+four buttons act; audio over the first 60 s of the attract correlates
+0.988 band-by-band with MAME's `-wavwrite` (`tools/audio_compare.py
+--offset-search 30`, +2.2 dB mean level, the same class as tdragon2's
+0.987). The previous RBF is kept on the box as
+`Macross2.rbf.pre_powerins`. Known limitations: NMK-18 (8 MHz pixel
+clock: the picture is 12.5 % narrower than the PCB's on a CRT, exact
+on HDMI) and NMK-19 (no `.mra` for the two prototype sets yet).
+
 ## Status
 
 Three RBFs run on the DE10-Nano and are tracked in `releases/`:

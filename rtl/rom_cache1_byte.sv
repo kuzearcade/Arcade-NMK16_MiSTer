@@ -5,12 +5,13 @@
 // region at its own fixed absolute offset in the shared 32MB SDRAM
 // address space (see docs/hw-bringup.md's per-game byte-offset table —
 // pass BASE_WORD_OFFSET = that region's byte offset / 2).
-module rom_cache1_byte #(
-	parameter [22:0] BASE_WORD_OFFSET = 23'd0
-) (
+// base_word (2026-09-11): the region's word offset is a runtime input,
+// not a parameter — see rom_cache_n_byte.sv.
+module rom_cache1_byte (
 	input         clk,
 	input         reset,
 
+	input  [22:0] base_word,  // this region's byte offset / 2 in the shared SDRAM
 	input  [23:0] byte_addr,  // relative to this region's own base
 	output [7:0]  data,
 	output [15:0] word,       // the whole cached word the byte came from (NMK214 word-mode descramble needs it)
@@ -24,7 +25,7 @@ module rom_cache1_byte #(
 	input  [31:0] sd_dout_pair
 );
 
-	wire [22:0] word_addr = BASE_WORD_OFFSET + byte_addr[23:1];
+	wire [22:0] word_addr = base_word + byte_addr[23:1];
 	wire [15:0] word_data;
 
 	rom_cache1 cache_inst (
