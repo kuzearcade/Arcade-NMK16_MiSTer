@@ -1705,6 +1705,52 @@ frame (offset 2 gives 2,932 px = 96.6%); the tilemaps "matching" at
 that offset was a scene that barely scrolls. Moving sprites are on the
 right frame. No line-buffer renderer is needed.
 
+## NMK-16: the HUD marquee is two frames out of phase with gameplay (2026-09-10)
+
+The one residual NMK-1's frame comparison left: with gameplay aligned
+(sim *S* = MAME *S-3*), 2 of every 4 frames differ by 126-141 px in a
+14-px strip at x 353-366 — the vertical HUD text column of this
+sideways-drawn game. The first guess, a TX-VRAM write landing between
+the strip's scanout and VBOUT, was wrong, and the way it was disproved
+is the reusable part.
+
+- Which cells: output x maps to TX x through `tx_sum = rd_x + 28 +
+  512 - 92`, i.e. TX x = x - 64, and rows are offset by `BITMAP_Y0` =
+  16, so the strip is TX columns 36-39, rows 2-29 (`index = col*32 +
+  row`). The game writes them through the 0x1719xx *mirror*
+  (`txvram_addr = byte_addr[11:1]` ignores bit 12; MAME maps
+  0x170000-0x170FFF with `.mirror(0x1000)`) — a first `TB_LOG_M68K`
+  filter on 0x1709xx saw nothing for that reason.
+- When: all 84 cells are rewritten every frame at vpos 249-263 (in
+  vblank; `frame_done` in the core pulses at vcount 0 and the raster
+  numbering matches MAME's `vpos`, active 16..239), and 12 of them step
+  through tile codes 321E → 3220 → 3222 → 3224 every 4 frames — a
+  16-frame marquee. A vblank write shows on the next frame on both
+  sides, so display timing cannot produce the difference.
+- MAME's side, from VRAM not pixels: a Lua `frame_done` hook reading
+  the `:txvideoram` share shows the same 4-frame stepping. `frame_done`
+  fires at VBOUT — `time_until_vblank_start()` returns exactly one
+  frame period (17,792 µs) and `time_until_vblank_end()` 3,456 µs (54
+  lines) there — so a VRAM read at `frame_done` *f* predates frame f's
+  own vblank writes. (`screen:vpos()` is not exposed to Lua in this
+  build; the two `time_until_*` calls are the substitute.)
+- The model-free answer: a strip-only diff matrix, sim frames
+  1148-1166 against MAME snapshots 1150-1165, restricted to the 12
+  marquee cells. The marquee aligns at sim *S* = MAME *S-1* (0-6 px on
+  that diagonal, 63-105 px everywhere else), while scroll, sprites and
+  the other 72 HUD cells align at *S-3*. Two frames of relative phase
+  on a 4-frame step is exactly "2 of 4 frames differ".
+
+Both counters are 68000 software started during boot: the RTL's boot
+lands gameplay 3 frames later than MAME but the marquee counter only 1
+frame later, so they sit 2 frames apart relative to each other. That
+is the same boot-handshake timing class as NMK-3 (the NMK004 ran 3
+ticks behind for the same reason); the likeliest 68000-side source is
+its wait on the Z80/YM2203 initialisation busy-loops, whose duration
+depends on FM-chip status timing that MAME and jt03 model differently.
+Real hardware has its own arbitrary phase here. Both video paths are
+exact on their own diagonals; nothing to fix.
+
 ## Rapid Hero / Arcadia (the "Raphero" rbf)
 
 `rtl/raphero/raphero_core.sv` is the second hardware core, built on
