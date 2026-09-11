@@ -270,22 +270,29 @@ but not proven), `infra` (build/test/doc health).
   cache's timing, which is why the diagnostic was needed).
 
 ### NMK-16 · tdragon2 HUD text column differs from MAME on alternating frames (~130 px)
-- **Cores:** Macross2 (tdragon2 measured; likely all) · **Severity:** limitation (0.15% of the frame) · **Status:** open
-- **Ref:** NMK-1's frame comparison
-- With the sim and MAME frame-aligned (sim *S* = MAME *S-3*), half the
-  frames are pixel-identical and the other half differ by 126-141 px,
-  always in the same 14-px-wide strip (x 353-366, rows 17-205 in
-  groups) — the vertical HUD text column on this sideways-drawn game.
-  A strictly alternating pattern in a text strip is a blinking element
-  whose phase is one frame off: MAME renders the TX layer from VRAM as
-  of VBOUT (line 240), the core scans TX VRAM live, so a text write
-  landing between VBOUT and that row's scanout shows a frame earlier
-  in the core (or later, depending on where in the frame it lands).
-  Inaudible/near-invisible, but it is the one remaining known
-  frame-comparison residual, so it is worth pinning down which write
-  it is (a `TB_LOG_M68K` filter on TX VRAM writes in that column
-  around VBOUT would say) before deciding whether the core or MAME is
-  the one that matches the board.
+- **Cores:** Macross2 (tdragon2 measured) · **Severity:** limitation (0.15% of the frame) · **Status:** closed — boot-phase software timing, not the video path (2026-09-10)
+- **Ref:** "NMK-16: the HUD marquee is two frames out of phase with gameplay"
+- With the sim and MAME frame-aligned on gameplay (sim *S* = MAME
+  *S-3*), 2 of every 4 frames differ by 126-141 px in one 14-px strip
+  (x 353-366) — the vertical HUD text column. The first guess (a TX
+  write landing between the strip's scanout and VBOUT) was wrong:
+  `TB_LOG_M68K` shows the strip is TX columns 36-39 (written through
+  the 0x1719xx mirror — `txvram_addr = byte_addr[11:1]`, and MAME maps
+  0x170000-0x170FFF with `.mirror(0x1000)`, so both fold it the same
+  way), rewritten *every* frame in vblank (vpos 249-263), with 12 of
+  its 84 cells stepping through tile codes 321E → 3220 → 3222 → 3224
+  every 4 frames — a 16-frame marquee. A vblank write is visible on
+  the next frame on both sides, so display timing cannot separate
+  them. A strip-only diff matrix (sim frames 1148-1166 × MAME
+  1150-1165) then shows the marquee cells aligning at sim *S* = MAME
+  *S-1* (0-6 px on that diagonal, 63-105 px off it) while everything
+  else aligns at *S-3*: the marquee runs 2 frames out of phase with
+  gameplay, exactly the 2-of-4 pattern. Both are 68000 software
+  counters started during boot; the RTL's boot lands gameplay 3 frames
+  later than MAME but the marquee counter only 1 frame later — the
+  same boot-handshake timing class as NMK-3 (most plausibly the
+  68000's wait on the Z80/YM2203 init busy-loops). Both video paths
+  are exact on their own diagonals; nothing to fix.
 
 ## Not shipped (for completeness)
 
