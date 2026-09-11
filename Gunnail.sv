@@ -285,7 +285,7 @@ end
 // mustang and tharrier read ONE 16-bit DSW port at 0x080004 (SW2 in the
 // low byte, SW1 in the high byte), so their second switch byte rides in
 // dsw1's high half; every other board reads two byte-wide ports.
-wire        game_mustang = (game_sel == 5'd3) | (game_sel == 5'd12) | (game_sel == 5'd20);
+wire        game_mustang = (game_sel == 5'd3) | (game_sel == 5'd12) | (game_sel == 5'd20) | (game_sel == 5'd22); // mustang, mustangs, tharrier, mustangb3: one 16-bit DSW port
 wire [15:0] dsw1_i = {game_mustang ? dip_sw[1] : 8'hFF, dip_sw[0]};
 wire [15:0] dsw2_i = {8'hFF, dip_sw[1]};
 // Game select: the <switches> third byte (gunnail_core.sv's game table:

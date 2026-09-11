@@ -170,6 +170,10 @@ module video_macross2 #(
 	// changes is listed at the geometry block below; every existing
 	// instantiation ties it 0 and is bit-for-bit unchanged.
 	input game_powerins,
+	// 1 = every tile byte's nibbles are swapped (MAME's *_packed_lsb
+	// layouts: gfx_powerinsc). Applied to the BG, TX and sprite pixel
+	// extraction alike; every other instantiation ties it 0.
+	input tile_lsb,
 	// HW_ROMS=1: the three ROM regions' SDRAM word offsets (byte offset /
 	// 2), runtime so a shared RBF can serve .mra layouts that differ per
 	// game (tdragon2_core.sv muxes them on game_powerins). Unused at
@@ -591,7 +595,7 @@ module video_macross2 #(
 	wire [7:0]  bgtile_byte;
 
 	function automatic [3:0] bg_tile_pixel_nib(input [7:0] byte_val, input integer col_local);
-		bg_tile_pixel_nib = tile_nibble(byte_val, col_local[0]);
+		bg_tile_pixel_nib = tile_nibble(byte_val, col_local[0] ^ tile_lsb);
 	endfunction
 
 	// ------------------------------------------------------------------
@@ -767,7 +771,7 @@ module video_macross2 #(
 	wire [23:0] tx_use_rel  = tx_rel_addr(tx_vram_use, tx_py, tx_px[2:1]);
 	wire        tx_use_bank = tx_bg_mode & tx_vram_use[11];
 
-	wire [3:0] tx_pix_nib = tile_nibble(tx_byte_eff, tx_px[0]);
+	wire [3:0] tx_pix_nib = tile_nibble(tx_byte_eff, tx_px[0] ^ tile_lsb);
 	wire       tx_opaque = tx_bg_mode | (tx_pix_nib != 4'hF); // tx_bg_mode: the layer is opaque (bg_update draws it with no transparent pen)
 	wire       tx_top    = tx_opaque & ~tx_bg_mode;            // ... but the sprites go over it there (priority 1 vs the sprites' pri_mask 2)
 	wire [10:0] tx_pal_addr = tx_pal_base + {3'd0, tx_vram_use[15:12], tx_pix_nib};
@@ -1327,7 +1331,7 @@ module video_macross2 #(
 							// skip the whole tile: behave as if its last pixel was just done
 							px_eff = 15; py_eff = 15; advance = 1'b1;
 						end else if (sprites_ready) begin
-							s_pix_nib = tile_nibble(sprites_byte, s_px_src[0]); // source column (mirrored when flipped)
+							s_pix_nib = tile_nibble(sprites_byte, s_px_src[0] ^ tile_lsb); // source column (mirrored when flipped)
 							sx = (s_pixel_x_base + s_px) & spr_wrap_mask; // wrap per pixel: a sprite straddling the
 							sy = (s_pixel_y_base + s_py) & spr_wrap_mask; // top/left edge shows its visible part
 							plot_addr = sy * SCREEN_W + sx;

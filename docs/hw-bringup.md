@@ -2717,6 +2717,131 @@ show the same scene), and `.mra` file names must not carry MAME's
 silently never copied and the harness recorded the previous core's
 audio. bjtwina and sabotenba (ROM-only clones) were not loaded.
 
+## Five bootleg / clone sets on the two shared rbfs (2026-09-12)
+
+The last five sets that need no new hardware family: one on the Gunnail
+rbf, four on the Macross2 rbf. Each is a small delta on its parent's
+runtime mode; every delta below is transcribed from nmk16.cpp.
+
+### mustangb3 (Gunnail rbf, game id 22)
+
+The Lettering bootleg of US AAF Mustang: mustang's map, scroll register
+and video (`g_mustang` covers all three mustang ids), an 8 MHz 68000
+("verified on PCB"), the fixed-scanline interrupts, and Task Force
+Harrier's Z80 + YM2203 sound board instead of the NMK004
+(`mustangb3_sound_map` = `tharrier_sound_map` with the OKI bank writes
+at 0xF600/0xF700 unmapped: 0x20000 unbanked sample ROMs, the Z80 at
+14.31818/4 = 3.58 MHz). The core's Z80 board is now selected by
+`g_z80snd = g_tharrier | g_mustangb3`; the tharrier-only pieces (MCU
+simulation, its input quirks, the F600/F700 banks) stay on `g_tharrier`.
+The program ROM goes in the NMK004-program slot as for tharrier; the GFX
+ROMs are not dumped on this board and the .mra takes mustang's (MAME
+uses them as BAD_DUMP).
+
+Its one protection-ish quirk is MAME's `lr16` lambda at 0x080006:
+"return 0x9000 if pc()==0x416, 0x548D if pc()==0x64E, else 0". The
+disassembly makes the hack legible: `move.w $80006,D0` at 0x410 loops
+(`cmp.w $640.w,D0 / beq / bra $410`) until the word equals ROM $640 =
+0x9000, and the same at 0x648 against ROM $3E7C = 0x548D; a third loop
+at 0x666 wants 0. MAME's `pc()` in a read handler is the address after
+the six-byte instruction, so the core keys on its last instruction-
+fetch address being inside [0x410,0x416) / [0x648,0x64E) (the same
+`last_fetch_pc` register tharrier's MCU windows use).
+
+### tdragon3h (Macross2 rbf, switches byte 04)
+
+Conny's Thunder Dragon 3 is tdragon2 (the 1st Oct. 1993 program, per
+MAME) on a 12 MHz 68000 with DSW2 and the Z80's reply latch swapped
+(0x10000E / 0x10000B), no YM2203 and only one OKI (the chip on port
+0x80 is not fitted). MAME runs it with no sound at all ("needs
+emulation of the mechanism used to simulate the missing YM2203's
+IRQs"); the sound program is byte-identical to tdragon2's, and the PCB
+"can make use of" a YM2203 fitted in its empty socket, so this core
+keeps the YM2203 and plays tdragon2's full soundtrack — the one place
+it deliberately does more than MAME. The absent chip's writes are
+dropped and its output muted; its data (MAME's "oki2") sits in the
+oki1 SDRAM slot, so the .mra needs no 2 MB filler. The GFX ROMs are
+tdragon2's data split into more files: a ROM_LOAD16_BYTE sprite pair
+followed by a WORD_SWAP file, two BG files, two OKI files.
+
+### powerinsa, powerinsb, powerinsc (Macross2 rbf, switches bytes 1A / 0A / 2A)
+
+The three Power Instinct bootlegs share `game_pi_bootleg`: no interrupt
+PROM — `screen_vblank_powerins_bootleg` raises IRQ4 (HOLD_LINE, i.e.
+pending until acknowledged) and performs the two-stage sprite buffer
+copy at vblank, which the core does at raster line 240 (the first line
+after the 224 visible ones; MAME's 456x262 bootleg raster runs at
+59.9 Hz where the parent's and this core's 278-line frame is 56 Hz, so
+the bootlegs run at the parent's speed here).
+
+- **powerinsa** (`game_pi_nosnd`): no Z80. The 68000 drives one
+  OKIM6295 at 0x10003F (990 kHz, pin 7 low) with a bank byte at
+  0x100031 (`powerinsa_okibank_w`: 0x30000-0x3FFFF of the chip's space
+  is page n of the 0x80000 ROM from +0x30000). The Z80 is held in reset,
+  the NMK112 bypassed; a 99/4000 accumulator makes the 990 kHz cen.
+- **powerinsb**: the prototype boards' ROM data (identical CRCs) with a
+  bootleg program and a Z80 without the YM2203:
+  `powerins_bootleg_audio_io_map` reads 1 on port 0 (the "YM status"),
+  drops the YM writes, and `set_periodic_int(irq0_line_hold, 120 Hz)`
+  replaces the chip's IRQ — a 333333-cycle counter sets the Z80's INT,
+  cleared by its acknowledge cycle. The FM contribution is muted.
+- **powerinsc** (`game_pi_gfxlsb`, on top of powerinsb's board):
+  `gfx_powerinsc` decodes every tile with the `*_packed_lsb` layouts, so
+  video_macross2.sv gained `tile_lsb` (the nibble select inverted on the
+  BG, TX and sprite paths), and the 8x8 layer's tiles are at +0x280000
+  of the BG region (three ROM_LOAD16_BYTE pairs, 0x300000). Checked on
+  the dumps: the pair-interleaved, nibble-swapped BG region IS
+  powerinsb's BG data, and its +0x280000 slice IS the parent's 8x8 ROM,
+  so tiles are right. The sprite ROMs are something else: MAME marks
+  the set not working ("different sprites' format not implemented"),
+  and a search of its sprite data for powerinsb's tiles under the
+  plausible re-encodings (nibble swap, byte swap, 1bpp/2bpp planar,
+  row and 8x8-block orders) found nothing, so this core loads them as
+  MAME does and draws the same wrong sprites. Its SDRAM layout puts the
+  3 MB BG region last (sprites 0x120000, oki1 0x920000, oki2 0xB20000,
+  bgtile 0xD20000) so that only the region's blank final 0x60000
+  spills past 16 MB; the 23-bit region bases stay as they are.
+
+.mra conventions the three needed: program and sprite byte pairs put
+the ODD chip on even stream addresses (`map="01"`), plain tile pairs
+the EVEN chip; split clone zips omit files identical to the parent's,
+so those parts carry the parent's file name (the .mra searches
+`<set>.zip|<parent>.zip`).
+
+### Verification
+
+Reference sims (`sim/rtl/gunnail_mg` for mustangb3, the new
+`sim/rtl/fc_mg` — `make GAME=<set> roms run`, TB_GAME_BYTE = the
+switches byte — for the Macross2 sets) against MAME exact-frame
+snapshots, `$SP/mg_cmp.py`:
+
+| set | frames compared | identical | the rest |
+|---|---|---|---|
+| mustangb3 | 20-168, 150-449 | 149 + 300 | (the first build spun at 0x410: the PC windows must include the prefetched next opcode word) |
+| tdragon3h | 20-168, 150-449 | 142 + 300 | 21-27: MAME's pre-init garbage frames, the sim is black |
+| powerinsa | 20-168, 150-449 | 149 + 276 | 353-356 (a screen change) and a 4-frame re-sync after it: MAME's bootleg raster is 59.9 Hz, this core's 56 Hz, so a wait timed by the OKI's sample playback lasts 8 frames less here |
+| powerinsb | 20-168, 150-449 | 149 + 276 | the same four frames, 357-360 |
+| powerinsc | 20-168, 150-449 | 148 + 299 | 23 (93 px) and 290 (866 px): single frames at screen changes; the intro text and title tiles match MAME, and the sprites match MAME's own wrong decode |
+
+Hardware-path sim (`sim/rtl/gunnail_mg_hw`, the .mra's own ioctl
+stream): mustangb3 132 of 132 drawn frames identical to the reference
+sim, ROM golden-word audit 4,146,847 words / 0 wrong, OKI golden-byte
+audit 0 wrong on both chips.
+
+Builds: Gunnail build 8, 25,352 ALMs (60 %), +1.7 ns on clk_sys;
+Macross2, 15,963 ALMs (38 %), +2.3 ns on clk_sys.
+
+Board (2026-09-12, `$SP/mg_hwtest.sh`, nine native screenshots and 60 s
+of audio per set): mustangb3 (Gunnail build 8; mustang and tharrier
+re-checked on the same build), tdragon3h, powerinsa, powerinsb and
+powerinsc (the Macross2 build) all load through their .mra, draw their
+attract sequences and play sound — tdragon3h with tdragon2's FM music,
+powerinsa through its 68000-driven OKI. powerinsc shows its intro text,
+title and stages with the fighters missing, as expected from its
+undeciphered sprite ROMs. One harness lesson: MiSTer takes ~15 s to
+bring a new core up, so anything that reads /tmp/CORENAME or takes a
+screenshot earlier sees the previous set.
+
 ## Status
 
 Three RBFs run on the DE10-Nano and are tracked in `releases/`:

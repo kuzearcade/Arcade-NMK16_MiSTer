@@ -471,6 +471,13 @@ assign game_macross2 = dip_sw[2][0] | status[16];
 // carries <switches default="FF,FB,02">. See tdragon2_core.sv's
 // game_powerins port for everything the mode changes.
 assign game_powerins = dip_sw[2][1] | status[28];
+// Byte 2 bits 2-5 (2026-09-12): the clone modes, see tdragon2_core.sv's
+// game_tdragon3h/game_pi_* ports. tdragon3h = 04; powerinsb = 0A,
+// powerinsa = 1A, powerinsc = 2A (all three with the powerins bit).
+wire game_tdragon3h  = dip_sw[2][2];
+wire game_pi_bootleg = dip_sw[2][3];
+wire game_pi_nosnd   = dip_sw[2][4];
+wire game_pi_gfxlsb  = dip_sw[2][5];
 wire        ce_pix_core;
 wire [9:0]  hcount_core, vcount_core;
 // hblank_core/vblank_core are declared above the autofire block (frame tick).
@@ -528,6 +535,7 @@ tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_powerins_vtiming.hex")
 	.ROM_FETCH_WORD_TOUCHED_FILE("rtl/tdragon2/tdragon2_fetch_word_touched.hex")) core
 (
 	.clk_sys(clk_sys), .reset(reset), .game_macross2(game_macross2), .game_powerins(game_powerins),
+	.game_tdragon3h(game_tdragon3h), .game_pi_bootleg(game_pi_bootleg), .game_pi_nosnd(game_pi_nosnd), .game_pi_gfxlsb(game_pi_gfxlsb),
 	.extra_por_hold(~pll_locked),
 
 	.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr),

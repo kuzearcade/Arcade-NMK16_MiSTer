@@ -58,6 +58,7 @@ SEL_cactus   := 18
 SEL_nouryokup := 19
 SEL_tharrier := 20
 SEL_vandykeb := 21
+SEL_mustangb3 := 22
 SEL := $(SEL_$(GAME))
 # ROM hex directory: sim/rtl/<game>/roms, except bjtwin and cactus (sim/rtl/bjtwin/roms)
 ifneq ($(filter $(GAME),bjtwin cactus),)
@@ -70,11 +71,11 @@ endif
 ifeq ($(GAME),hachamfb)
 EXT := ../tlcs90/roms/hachamf_ext.hex
 endif
-ifneq ($(filter $(GAME),bjtwin bjtwinp sabotenb nouryoku cactus nouryokup tharrier vandykeb),)
+ifneq ($(filter $(GAME),bjtwin bjtwinp sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3),)
 EXT :=
 endif
 AUDIOCPU :=
-ifeq ($(GAME),tharrier)
+ifneq ($(filter $(GAME),tharrier mustangb3),)
 AUDIOCPU := $(R)_audiocpu.hex
 endif
 OKI2 := $(R)_oki2.hex
