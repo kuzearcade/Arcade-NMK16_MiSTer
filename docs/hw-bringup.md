@@ -2088,6 +2088,84 @@ consumed), which is why the per-unit cost is flat across the run. The
 frame (0.55 % / 0.69 %), 32,104 instructions per frame. Re-run this
 audit after any change to the ROM caches or SDRAM port assignment.
 
+## Utilization: the palette and the duplicated VRAMs (2026-09-10, NMK-10)
+
+Raphero was "at the edge": 82 % ALM, 94 % M10K, `SEED` churning
+7 → 19 → 23 → 43, one seed at −0.065 ns. The fitter's entity report
+(`Raphero.fit.rpt`, "Fitter Resource Utilization by Entity", the
+parenthesised *own* column) said the weight was not in the video
+pipeline, the CPUs or the caches but in `raphero_core` itself: 14,776
+ALMs and 23,855 registers of flat logic, more than half the core, next
+to 3,264 for the whole video module. Two causes, both in how the
+wrapper cores coded their RAMs.
+
+**1. The palette was flip-flops.** `reg [15:0] palette [0:1023]` with
+three asynchronous readers (CPU, tile tap, sprite tap) cannot be block
+RAM, so Quartus built 16,384 registers and three 1024:1 x 16 read muxes
+— the same thing tdragon2_core (12,343 own ALMs) and, partly, gunnail
+had. Fix: every read is registered. The CPU port gets a one-cycle
+`palette_wait` in DTACKn (the bgvram pattern; gunnail already had it),
+and the two video taps are registered reads in the wrapper, with the
+`HW_ROMS=1` composite stage in `video_macross2.sv` restructured to two
+register stages (the sprite palette address only exists one clock
+after `rd_x`, so its word arrives at stage 2; `rd_rgb` is now two
+clk_sys behind `rd_x`, still inside the 5-clk_sys pixel period whose
+end is where the framework and the `*_hw` testbenches sample it).
+`HW_ROMS=0` is untouched. Quartus then keeps one M10K pair per read
+port (three copies, 6 M10K) — see `altsyncram:palette[0][15]__12/18/20`
+in the RAM summary.
+
+**2. Every dual-read VRAM was two full copies.** `mainram`, `bgvram`
+and `txvram` were 16-bit arrays with byte-lane writes and the CPU's
+registered read in the same always block. That read is old-data on a
+same-address write, and Quartus 17 can only honour that as a
+simple-dual-port M10K set (write on A, read on B,
+`READ_DURING_WRITE_MODE_MIXED_PORTS = OLD_DATA`) — so the video read
+port got a *second full copy* (`altsyncram:bgvram[0][15]__12` and
+`__18`, 32K x 8 each lane, in every wrapper's RAM summary): 64 spare
+M10K for bgvram, 16 for mainram, 4 for txvram, per core. An isolated
+four-variant `quartus_map` test (4096 deep so a failed inference cannot
+explode — the first 32K-deep attempt wedged at 4 GB) settled the coding
+shape:
+
+| variant | CPU port | result |
+|---|---|---|
+| v1 (as shipped) | 16-bit array, lane writes, `q <= mem[a]` | 2 copies, DUAL_PORT |
+| v2 | 16-bit array, lane writes, new-data read per lane | **65K flip-flops** (no RAM at all) |
+| v3 | two 8-bit lane arrays, `if (we_hi) begin hi[a] <= d; q[15:8] <= d; end else q[15:8] <= hi[a];` | **one BIDIR_DUAL_PORT set**, mixed-port RDW still OLD_DATA |
+| v4 | lane arrays, read only when not writing | 2 copies, DUAL_PORT |
+
+v3 is now the shape of all three VRAMs in all three cores (the 68000
+never consumes the read of a write cycle, so the new-data read on port
+A is free; gunnail's MCU-shared port uses the same template with its
+grant/`prot_w` mux feeding `we_hi/we_lo` and `wd_hi/wd_lo`). The sim
+branches spell the same arrays as `{hi[a], lo[a]}`.
+
+Results (same seeds as before, no retries; the worst setup path in every
+build is the framework's `pll_hdmi` scaler clock, `clk_sys` has more
+than 1.9 ns):
+
+| core | ALMs | registers | M10K | setup slack |
+|---|---|---|---|---|
+| Raphero | 34,179 (82 %) → 20,451 (palette) → 20,365 (49 %) | 46,135 → 28,694 | 520 (94 %) → 526 → 442 (80 %) | +0.296 → +0.471 → +0.533 ns |
+| Macross2 | 29,548 (71 %) → 15,699 → 15,793 (38 %) | 39,114 → 21,504 | 517 (93 %) → 523 → 439 (79 %) | +0.135 → +0.468 → +0.320 ns |
+| Gunnail | 27,023 (64 %) → 21,525 → 21,244 (51 %) | 36,924 → 25,485 | 407 (74 %) → 411 → 375 (68 %) | +0.403 → +0.403 → +0.535 ns |
+
+`raphero_core`'s own logic went from 14,776 to 3,119 ALMs,
+`tdragon2_core`'s from 12,343 to 258. What is left in M10K is the
+sprite plane (218 blocks in the video module) and the VRAMs themselves.
+
+Verification, each step separately: the three `*_hw` sims were run
+from a `git worktree` of the previous commit and from the working tree
+with `TB_DUMP_PPM=1 TB_RAM_PER2=5` for 300 M cycles and every frame
+compared byte for byte — 422/422 identical for tdragon2, gunnail and
+raphero after the palette change and again after the VRAM change,
+with identical 68000/Z80/TLCS-90 instruction and sound-write counts
+(the palette wait state never moved the timeline: the games only write
+the palette). The three reference sims build. On the board all three
+new RBFs boot, play (attract audio recorded) and show correct colours
+in native screenshots.
+
 ## Status
 
 Three RBFs run on the DE10-Nano and are tracked in `releases/`:
@@ -2119,6 +2197,7 @@ notice is the untuned HSync/VSync placement (NMK-2) — the supposed
 one-frame sprite latency (NMK-1) turned out on measurement to be an
 off-by-one in the old frame comparison; the core's sprite pipeline
 matches MAME's two-buffer PCB behaviour exactly, and the sole frame
-residual is a 14-px blinking HUD strip (NMK-16). The rest are
-verification gaps and build-margin notes (Raphero is at the edge of
-the device, NMK-10).
+residual is a 14-px blinking HUD strip (NMK-16). The build margin
+that used to force Raphero seed retries (NMK-10) is gone: the palette
+and VRAM recoding took every core to about half the ALMs and Raphero/
+Macross2 from 94-95 % to 79-80 % M10K.

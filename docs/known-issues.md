@@ -220,13 +220,36 @@ but not proven), `infra` (build/test/doc health).
 ## Raphero
 
 ### NMK-10 · Raphero build is at the edge of timing/utilization
-- **Severity:** infra · **Status:** open
+- **Severity:** infra · **Status:** fixed (2026-09-10) — see "Utilization: the palette and the duplicated VRAMs" in hw-bringup
 - **Ref:** "Rapid Hero / Arcadia", "OKI still…", "Flip screen option"
-- ~82% ALM / 94% M10K. `SEED` has churned 7 → 19 → 23 across recent
-  commits; the Flip-screen change alone pushed SEED 19 to −0.065 ns
-  setup slack. Expect seed retries on any Raphero change and verify
-  `Worst-case setup slack` is positive (a "successful" fitter alone is
-  not a pass). Also the practical blocker for NMK-1.
+- Was ~82% ALM / 94% M10K with `SEED` churning 7 → 19 → 23 → 43 and
+  the Flip-screen change alone pushing one seed to −0.065 ns.
+- Two causes, both in how the wrapper cores coded their RAMs, neither
+  in the video logic: (1) the 1024 x 16 palette lived in flip-flops
+  behind three asynchronous 1024:1 read muxes (raphero_core's own
+  logic: 14,776 ALMs / 23,855 registers, i.e. more than half the core);
+  (2) every dual-read VRAM (mainram, bgvram, txvram) was a 16-bit array
+  with lane writes whose old-data read-during-write Quartus can only
+  meet with a simple-dual-port M10K set PLUS a second full copy for the
+  video read (bgvram alone: 64 spare M10K).
+- Fix: palette taps registered (block RAM, one M10K pair per read port;
+  the video composite gained a stage), and the three VRAMs recoded as
+  two 8-bit lane arrays with the CPU port in Quartus's true-dual-port
+  template, which infers one BIDIR_DUAL_PORT set. Same seeds, no
+  retries:
+
+  | core | ALMs before → after | registers | M10K | setup slack |
+  |---|---|---|---|---|
+  | Raphero | 34,179 (82 %) → 20,365 (49 %) | 46,135 → 28,694 | 520 (94 %) → 442 (80 %) | +0.296 → +0.533 ns |
+  | Macross2 | 29,548 (71 %) → 15,793 (38 %) | 39,114 → 21,504 | 517 (93 %) → 439 (79 %) | +0.135 → +0.320 ns |
+  | Gunnail | 27,023 (64 %) → 21,244 (51 %) | 36,924 → 25,485 | 407 (74 %) → 375 (68 %) | +0.403 → +0.535 ns |
+
+- Verified: the three hardware sims are frame-identical (422/422) and
+  instruction-count-identical before and after each step; the three
+  reference sims build; the new RBFs boot, play sound and show correct
+  colours on the board. The worst setup path in every build is the
+  framework's `pll_hdmi` scaler clock, not core logic (`clk_sys` has
+  > 1.9 ns). NMK-1's "practical blocker" no longer applies.
 
 ## Verification gaps (works, not proven)
 
