@@ -2065,6 +2065,29 @@ The OKI cen-stall and unserved-sample audits are unchanged by the TX
 move (gunnail 24.755% before and after), and the reference sims are
 bit-identical (the change is inside the `HW_ROMS=1` branches).
 
+**Headroom (2026-09-10, NMK-9).** The 1214-unit column above was an
+extrapolation from a MAME Lua count of the sprite *table*; the hardware
+never draws that many. MAME's `nmk16spr.cpp` charges 16 sprite clocks
+per scanned entry plus 128 per 16x16 unit and stops at
+`set_max_sprite_clock`, which is 512*263 = 134,656 for every hi-res
+game (gunnail, macross2, tdragon2, raphero all use `set_screen_hires`)
+— the same `MAX_SPRITE_CLOCK` that `video_macross2.sv` applies in
+`S_SPR_HEAD_DECIDE`. So a frame hands the renderer at most ~1,051
+units (one large sprite) or 935 (single-unit sprites). Re-measured on
+the current RTL with the same `TB_AUTOPLAY=1 TB_RAM_PER2=5` 400 M-cycle
+run (347 gameplay frames): pass = 44.7 k + 351 clk x units (fit, max
+residual +5.4 k); per-unit cost 303/308/309 clk median/p99/max, of
+which 77-81 clk is SDRAM stall; median frame 344 k, worst 354 k
+(49.8 % of the frame); no late plane swap after frame 0. At the
+1,051-unit bound the fit gives 414-420 k, 58-59 % of a frame — about
+41 % headroom in the worst frame the game can construct. The stall
+term is structural rather than scene-dependent (a unit's 128 bytes are
+contiguous, the next pair is prefetched while the current one is
+consumed), which is why the per-unit cost is flat across the run. The
+68000 on the same run: 3.9 k clk median / 4.9 k max of ROM wait per
+frame (0.55 % / 0.69 %), 32,104 instructions per frame. Re-run this
+audit after any change to the ROM caches or SDRAM port assignment.
+
 ## Status
 
 Three RBFs run on the DE10-Nano and are tracked in `releases/`:
