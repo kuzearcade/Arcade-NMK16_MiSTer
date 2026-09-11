@@ -1375,6 +1375,12 @@ the commit).
 
 ## H Shift / V Shift options (sync-position trims for CRT users, NMK-2)
 
+*Closure (2026-09-11): the nominal placement below, as shipped with the
+widened ±20-line V range (vsync row 264) and the ±16-px H range, was
+reported ideal on CRT equipment — NMK-2 is closed with the constants
+unchanged; the trims stay for individual monitors. The 7 MHz powerins
+output (NMK-18) keeps the same relative positions.*
+
 The sync placement (`hsync` at hcount 440..471, `vsync` at vcount
 244..246 of the 512x278 raster, active x 28..411 / y 16..239) was
 always a documented placeholder — this board's real CRT sync timing
@@ -2319,9 +2325,14 @@ four buttons act; audio over the first 60 s of the attract correlates
 0.988 band-by-band with MAME's `-wavwrite` (`tools/audio_compare.py
 --offset-search 30`, +2.2 dB mean level, the same class as tdragon2's
 0.987). The previous RBF is kept on the box as
-`Macross2.rbf.pre_powerins`. Known limitation: NMK-19 (no `.mra` for the two prototype sets yet).
-NMK-18 (the 8 MHz pixel clock, 12.5 % narrower than the PCB on a CRT)
-was closed the same day by the video retimer, next section.
+`Macross2.rbf.pre_powerins`. NMK-18 (the 8 MHz pixel clock, 12.5 % narrower than the PCB on a CRT)
+was closed the same day by the video retimer, next section. NMK-19
+(the prototype sets `powerinspu`/`powerinspj`, whose sprites are
+`ROM_LOAD16_BYTE` pairs) was closed with generated `.mra` files whose
+sprite pairs are `<interleave output="16">` blocks, odd-offset chip on
+even stream addresses (`map="01"`, GunNail's maincpu convention) so
+the SDRAM image equals the parent's raw word-swapped file order;
+both sets boot and play on the board with intact sprites.
 
 ## Video output at the board's pixel clock (2026-09-11, NMK-18)
 
@@ -2404,8 +2415,9 @@ the tree runs clean in simulation on the current core.
 
 What is still open is tracked, one entry per item with a stable ID and
 status, in `docs/known-issues.md` — that file, not this paragraph, is
-the authoritative list. As of 2026-09-10 the only item a player could
-notice is the untuned HSync/VSync placement (NMK-2) — the supposed
+the authoritative list. As of 2026-09-11 no open item is one a player
+could notice: the HSync/VSync placement (NMK-2) was confirmed ideal on
+CRT equipment with the shipped nominal values — the supposed
 one-frame sprite latency (NMK-1) turned out on measurement to be an
 off-by-one in the old frame comparison; the core's sprite pipeline
 matches MAME's two-buffer PCB behaviour exactly, and the sole frame

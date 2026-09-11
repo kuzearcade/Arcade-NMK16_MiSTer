@@ -113,6 +113,51 @@ POWERINS = dict(
     ],
 )
 
+# The two prototype sets use a different board layout (OS93089 SUB
+# daughterboard): the same regions and sizes, but the BG tiles in five
+# 0x80000 files, each OKI in four, and the sprites as eight
+# ROM_LOAD16_BYTE pairs (fo = odd MAME offsets, fe = even). The core's
+# SDRAM image is the parent's raw ROM_LOAD16_WORD_SWAP file order (it
+# rebuilds words by byte parity and reads sprite bytes with the address
+# bit 0 inverted), which for a byte pair means the odd-offset chip on
+# even stream addresses: the same <interleave> convention releases/
+# GunNail (28th May. 1992).mra uses for its maincpu pair, verified on
+# hardware there. Entries of the form ("interleave", [(crc, name, map),
+# ...], comment) emit an <interleave output="16"> block.
+POWERINSP = dict(
+    manufacturer="Atlus", rotation=None, switches="FF,FB,02", category="Fighting",
+    zip_parent="powerins",
+    maincpu_comment="maincpu, 0x100000 @ 0x000000 (2 files, ROM_LOAD16_WORD_SWAP)",
+    dips=[d if d[0] != '8' else ('8', "Unknown (SW2:8)", "On,Off") for d in POWERINS["dips"]],
+    buttons=POWERINS["buttons"],
+    shared=[
+        ("9c0f23cf", "4.p000.v3.8.u117.27c4096", None),
+        ("4b123cc6", "2.sound 9.20.u74.27c1001", "audiocpu, 0x020000 @ 0x100000"),
+        ("6a579ee0", "1.text 1080.u16.27c010", "fgtile, 0x020000 @ 0x120000"),
+        ("1975b4b8", "ba0.s0.27c040", "bgtile, 0x280000 @ 0x140000 (5 files)"),
+        ("376e4919", "ba1.s1.27c040", None),
+        ("0d5ff532", "ba2.s2.27c040", None),
+        ("99b25791", "ba3.s3.27c040", None),
+        ("2dd76149", "ba4.s4.27c040", None),
+        ("interleave", [("8b9b89c9", "fo0.mo0.27c040", "01"), ("4d127bdf", "fe0.me0.27c040", "10")], "sprites, 0x800000 @ 0x3C0000 (8 ROM_LOAD16_BYTE pairs: fo = odd MAME offsets on even stream addresses, fe on odd)"),
+        ("interleave", [("298eb50e", "fo1.mo1.27c040", "01"), ("57e6d283", "fe1.me1.27c040", "10")], None),
+        ("interleave", [("fb184167", "fo2.mo2.27c040", "01"), ("1b752a4d", "fe2.me2.27c040", "10")], None),
+        ("interleave", [("2f26ba7b", "fo3.mo3.27c040", "01"), ("0263d89b", "fe3.me3.27c040", "10")], None),
+        ("interleave", [("c4633294", "fo4.mo4.27c040", "01"), ("5e4b5655", "fe4.me4.27c040", "10")], None),
+        ("interleave", [("4d4b0e4e", "fo5.mo5.27c040", "01"), ("7e9f2d2b", "fe5.me5.27c040", "10")], None),
+        ("interleave", [("0e7671f2", "fo6.mo6.27c040", "01"), ("ee59b1ec", "fe6.me6.27c040", "10")], None),
+        ("interleave", [("9ab1998c", "fo7.mo7.27c040", "01"), ("1ab0c88a", "fe7.me7.27c040", "10")], None),
+        ("8cd6824e", "ao0.ad00.27c040", "oki1, 0x200000 @ 0xBC0000 (4 files)"),
+        ("e31ae04d", "ao1.ad01.27c040", None),
+        ("c4c9f599", "ao2.ad02.27c040", None),
+        ("f0a9f0e1", "ao3.ad03.27c040", None),
+        ("62557502", "ad10.ad10.27c040", "oki2, 0x200000 @ 0xDC0000 (4 files)"),
+        ("dbc86bd7", "ad11.ad11.27c040", None),
+        ("5839a2bd", "ad12.ad12.27c040", None),
+        ("446f9dc3", "ad13.ad13.27c040", None),
+    ],
+)
+
 # setname, parent, description, GAME() line, ROM_START line range, maincpu part, overrides of shared parts[, dip overrides]
 CLONES = [
     ("macross2g", "macross2", "Super Spacefortress Macross II / Chou-Jikuu Yousai Macross II (Gamest review build)",
@@ -132,9 +177,16 @@ CLONES = [
     ("powerinsj", "powerins", "Gouketsuji Ichizoku (Japan)",
      10765, ("3050a3fb", "93095-3j.u108"), {},
      {'8': ("Unknown (SW2:8)", "On,Off")}),
+    # Prototypes (INPUT_PORTS powerinj): the second maincpu file has the same
+    # CRC in both sets under different names.
+    ("powerinspu", "powerinsp", "Power Instinct (USA, prototype)",
+     10766, ("d1dd5a3f", "3.p000.v4.0a.u116.27c240"), {}),
+    ("powerinspj", "powerinsp", "Gouketsuji Ichizoku (Japan, prototype)",
+     10767, ("4ea18490", "3.p000.pc_j_12-1_155e.u116"),
+     {"4.p000.v3.8.u117.27c4096": ("9c0f23cf", "4.p000.f_p4.u117")}),
 ]
 
-PARENTS = {"tdragon2": TDRAGON2, "macross2": MACROSS2, "powerins": POWERINS}
+PARENTS = {"tdragon2": TDRAGON2, "macross2": MACROSS2, "powerins": POWERINS, "powerinsp": POWERINSP}
 
 
 def mra(setname, parent, desc, game_line, maincpu, overrides, dip_overrides=None):
@@ -148,7 +200,7 @@ def mra(setname, parent, desc, game_line, maincpu, overrides, dip_overrides=None
   Machine config, DIP switches and buttons are the parent's (see the
   hand-authored parent .mra for the full derivation); only the ROM
   parts differ. Files shared with the parent are looked up in the
-  parent's zip as well (zip="{setname}.zip|{parent}.zip").
+  parent's zip as well (zip="{setname}.zip|{p.get("zip_parent", parent)}.zip").
 -->
 <misterromdescription>
   <name>{desc}</name>
@@ -173,14 +225,20 @@ def mra(setname, parent, desc, game_line, maincpu, overrides, dip_overrides=None
     out.append("  </switches>\n\n")
     names, default = p["buttons"]
     out.append(f'  <buttons names="{names}" default="{default}"/>\n\n')
-    out.append(f'  <rom index="0" zip="{setname}.zip|{parent}.zip" md5="none">\n')
+    out.append(f'  <rom index="0" zip="{setname}.zip|{p.get("zip_parent", parent)}.zip" md5="none">\n')
     out.append(f"    <!-- {p.get('maincpu_comment', 'maincpu, 0x080000 @ 0x000000')} -->\n")
     out.append(f'    <part crc="{maincpu[0]}" name="{maincpu[1]}"/>\n')
     for crc, name, comment in p["shared"]:
-        if name in overrides:
-            crc, name = overrides[name]
         if comment:
             out.append(f"    <!-- {comment} -->\n")
+        if crc == "interleave":
+            out.append('    <interleave output="16">\n')
+            for icrc, iname, imap in name:
+                out.append(f'      <part crc="{icrc}" name="{iname}" map="{imap}"/>\n')
+            out.append('    </interleave>\n')
+            continue
+        if name in overrides:
+            crc, name = overrides[name]
         out.append(f'    <part crc="{crc}" name="{name}"/>\n')
     out.append("  </rom>\n</misterromdescription>\n")
     return "".join(out)
