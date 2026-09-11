@@ -185,14 +185,37 @@ but not proven), `infra` (build/test/doc health).
   unused when autofire is off. Documented as such in `Macross2.sv` and
   the Autofire section rather than as a dead slot.
 
-### NMK-9 · tdragon2 heavy-sprite slowdown fixed with thin margin
-- **Severity:** limitation · **Status:** open (monitor)
+### NMK-9 · tdragon2 heavy-sprite slowdown: how much margin is left?
+- **Severity:** limitation · **Status:** closed — headroom measured, not thin (2026-09-10)
 - **Ref:** "Slowdown in play: 68000 wait states and the sprite pass"
-- Board now holds 56.2 plane-swaps/s in all 45 measured windows (was
-  44-50 in busy play), but MAME's own CPU is already near the frame
-  budget in explosion-heavy scenes, so this is "keeps up", not
-  headroom. Any added ROM-bus latency would reappear as slowdown here
-  first.
+  (see its dated "Headroom" addendum)
+- Board holds 56.2 plane-swaps/s in all 45 measured windows (was
+  44-50 in busy play). The original worry was that the margin was
+  unknown: the old table extrapolated to a 1,214-unit frame from a
+  MAME Lua count of the sprite *table*, not of what the hardware draws.
+- The hardware itself bounds the pass. MAME's sprite-clock budget
+  (`nmk16spr.cpp`: 16 clocks per scanned sprite + 128 per 16x16 unit,
+  cut off at 512*263 = 134,656 for every hi-res game — gunnail,
+  macross2, tdragon2 and raphero all call `set_screen_hires`) is the
+  same constant `MAX_SPRITE_CLOCK` in `video_macross2.sv`, so no frame
+  can ever hand the renderer more than ~1,051 units (1,051 with one
+  large sprite, 935 with single-unit sprites).
+- Re-measured on the current RTL (`sim/rtl/tdragon2_hw`, `TB_AUTOPLAY=1
+  TB_RAM_PER2=5`, 400 M cycles, 347 gameplay frames): pass = 44.7 k +
+  351 clk x units (r.m.s. fit, max residual +5.4 k), per-unit cost
+  303/308/309 clk median/p99/max with 77-81 clk of it SDRAM stall,
+  median frame 344 k, worst observed 354 k (49.8 % of the 711,744-clk
+  frame), 0 late plane swaps after boot. At the 1,051-unit hardware
+  bound the fit gives 414-420 k = 58-59 % of a frame, i.e. ~41 %
+  headroom in the worst frame the game can construct. The stall
+  component is structural, not scene-dependent: a unit's 128 bytes
+  are contiguous and the next pair is prefetched while the current one
+  is consumed, so the per-unit stall is the first-fetch latency only.
+- 68000 ROM wait states on the same run: 3.9 k clk median / 4.9 k max
+  per frame (0.55 % / 0.69 %), 32,104 instructions per frame. The
+  "any added ROM-bus latency reappears here first" caveat still holds
+  for future SDRAM changes; re-run the audit after any change to the
+  ROM caches or port assignment.
 
 ## Raphero
 
