@@ -45,7 +45,7 @@ derive_clock_uncertainty
 # toggle. Every matching PLL output gets its own group below, so this
 # stays correct whatever Quartus names the second counter.
 set core_pll_groups {}
-foreach_in_collection c [get_clocks {emu|pll|altpll_component|*PLL_OUTPUT_COUNTER|divclk}] {
+foreach_in_collection c [get_clocks {emu|pll*|altpll_component|*PLL_OUTPUT_COUNTER|divclk}] {
 	lappend core_pll_groups -group [get_clock_info -name $c]
 }
 set_clock_groups -exclusive \

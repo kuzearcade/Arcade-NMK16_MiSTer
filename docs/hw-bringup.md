@@ -2319,9 +2319,64 @@ four buttons act; audio over the first 60 s of the attract correlates
 0.988 band-by-band with MAME's `-wavwrite` (`tools/audio_compare.py
 --offset-search 30`, +2.2 dB mean level, the same class as tdragon2's
 0.987). The previous RBF is kept on the box as
-`Macross2.rbf.pre_powerins`. Known limitations: NMK-18 (8 MHz pixel
-clock: the picture is 12.5 % narrower than the PCB's on a CRT, exact
-on HDMI) and NMK-19 (no `.mra` for the two prototype sets yet).
+`Macross2.rbf.pre_powerins`. Known limitation: NMK-19 (no `.mra` for the two prototype sets yet).
+NMK-18 (the 8 MHz pixel clock, 12.5 % narrower than the PCB on a CRT)
+was closed the same day by the video retimer, next section.
+
+## Video output at the board's pixel clock (2026-09-11, NMK-18)
+
+Power Instinct's PCB clocks its 448-pixel line at 7 MHz; the shared
+core draws a 512-pixel line at 8 MHz. Both are 64 us, so nothing about
+the game's timing was wrong, but the 320 visible pixels came out 40 us
+wide instead of 45.7 us — right on HDMI (the scaler fits the picture to
+4:3 regardless), 12.5 % too narrow on an analog monitor. There is no
+integer 7 MHz enable from 40 MHz, and a fractional one (40/7) would
+alternate 125 ns and 150 ns pixels on the analog output.
+
+`rtl/video_retime.sv` decouples the output from the core's clock. The
+core's pixels are written, as drawn, into a two-line buffer (1024 x 24,
+dual-clock M10K); a new 56 MHz PLL (`rtl/pll_video.v`, 50 x 28/25 —
+40, 96 and 56 MHz have no common VCO, so it cannot be an output of
+`rtl/pll.v`) reads them back one line later at an exact pixel rate:
+56/7 = 8 MHz over 512 pixels for tdragon2/macross2, 56/8 = 7 MHz over
+448 for powerins, 3584 clocks = 64 us per line either way. HS/VS/DE
+and the H/V Shift trims are regenerated in the board's pixel units
+(the 8 MHz mode reproduces the former placement exactly: hsync 440,
+width 32, vsync row 264 nominal; the 7 MHz mode keeps the same 3.5 us
+front porch and 4 us pulse: hsync 404, width 28). `CLK_VIDEO` is now
+the 56 MHz clock and `CE_PIXEL` its 1-of-7 / 1-of-8 enable. Buffer
+parity is the line number's LSB on both sides (VTOTAL 278 is even):
+line L is written into `buf[L&1]` during write line L and read during
+write line L+1. The read side free-runs — both PLLs lock to the same
+50 MHz, and one write frame is exactly 996,352 read clocks — and is
+placed once by the first synchronised write frame start; later frame
+starts are only compared against the expected read position (a 32-
+clock window either side of the line-276/277 wrap) and reload it on a
+gross error, so the sync outputs never take a per-frame jitter step.
+The `Macross2.sdc` PLL clock-group pattern was widened to `emu|pll*`
+so the new domain gets its own exclusive group (the buffer and the
+frame-toggle synchroniser are the only crossings).
+
+Verification: `sim/rtl/video_retime_test` drives the module with a
+40 MHz/8 MHz synthetic raster and a 56 MHz read clock (5:7 tick ratio)
+and checks, in both modes with and without shift trims, that every DE
+pixel equals f(x, y, frame) — 344,064 (8 MHz) / 286,720 (7 MHz) pixels
+per run, 0 mismatches — that lines are 512 / 448 ticks between HS
+rises, DE is 384 / 320 wide and 224 lines per frame, HS is 32 / 28
+wide and VS 3 lines. Two bugs the test caught before hardware: the
+buffer was declared 768 deep but indexed as parity x 512 + x, and the
+per-frame phase check expected the read side one clock later than the
+free-running counters actually sit at the frame edge, which reloaded
+them every frame and shortened one line by a pixel.
+
+Build: 15,767 ALMs (38 %), 447 M10K (81 %), 4 of 6 PLLs, setup slack
++0.547 ns (the `pll_hdmi` path as always; the new video clock is not
+among the three tightest domains). Board: tdragon2, macross2 and
+powerins all lock on the HDMI scaler and render complete, correctly
+proportioned pictures (640x480 captures of attract scenes), and the
+native `screenshot` command returns 384 x 224 / 320 x 224 images
+matching the scenes on screen. The previous RBF is kept on the box as
+`Macross2.rbf.pre_retime`.
 
 ## Status
 

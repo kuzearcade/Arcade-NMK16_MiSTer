@@ -171,17 +171,25 @@ but not proven), `infra` (build/test/doc health).
 ## Macross2 (tdragon2 / macross2 / powerins)
 
 ### NMK-18 · powerins is drawn with an 8 MHz pixel clock, not the board's 7 MHz
-- **Cores:** Macross2 (powerins only) · **Severity:** limitation · **Status:** open
+- **Cores:** Macross2 (powerins only) · **Severity:** limitation · **Status:** fixed (2026-09-11) — see "Video output at the board's pixel clock" in hw-bringup
 - **Ref:** "Power Instinct on the Macross2 rbf"
 - The shared raster is 512 px at 8 MHz; the real board is 448 px at
   7 MHz (`set_screen_midres`). The line period is identical (64 us), so
-  timing, interrupts and the frame rate are exact, but the 320 visible
-  pixels span 40 us instead of 45.7 us: on HDMI the scaler stretches the
-  picture to 4:3 and nothing is visible; on direct/analog video the
-  picture is 12.5 % narrower than the PCB's until the monitor's H-size
-  is adjusted. A 7 MHz CE from 40 MHz is fractional (40/7); a proper
-  fix is a second PLL output or a 56 MHz clk_sys (8 x 7), which would
-  touch every clock ratio in the shared core.
+  timing, interrupts and the frame rate were already exact, but the 320
+  visible pixels spanned 40 us instead of 45.7 us — invisible on HDMI
+  (the scaler stretches to 4:3), 12.5 % narrower than the PCB on an
+  analog monitor. A 7 MHz enable from 40 MHz is fractional (40/7).
+- Fix: `rtl/video_retime.sv` re-clocks the core's raster through a
+  two-line buffer onto a new 56 MHz video PLL (`rtl/pll_video.v`,
+  50 x 28/25), reading it out at an exact 8 MHz (56/7, tdragon2 and
+  macross2, 512 px) or 7 MHz (56/8, powerins, 448 px) — 3584 clocks =
+  64 us per line either way — one line behind, and regenerates HS/VS/DE
+  with the H/V Shift trims in the board's own pixel units. CLK_VIDEO is
+  now 56 MHz. Verified by a two-clock Verilator unit test
+  (`sim/rtl/video_retime_test`: pixel-exact readback, HTOTAL 512/448,
+  DE 384/320 x 224 lines, sync widths, with and without trims) and on
+  the board (native screenshots unchanged, HDMI stable on all three
+  games).
 
 ### NMK-19 · Power Instinct prototype sets have no .mra yet
 - **Cores:** Macross2 · **Severity:** gap · **Status:** open
