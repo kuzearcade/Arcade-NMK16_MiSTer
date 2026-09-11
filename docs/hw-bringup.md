@@ -2454,6 +2454,21 @@ wires and `case` blocks at the top of the core:
   address bit 0 inverted now (the SDRAM word holds the low-byte chip in
   its low half; the old wiring returned every byte pair swapped, unused
   by the NMK-215 but real for the NMK-110/113).
+- Sprite ROM byte order: the sprite byte cache inverts address bit 0
+  because the ROM_LOAD16_WORD_SWAP regions (and the odd-chip-first byte
+  pairs) stream in the opposite byte order to MAME's decoder; bioship,
+  strahl and acrobatm have PLAIN ROM_LOAD sprite ROMs, already in
+  MAME's order, so the inversion swapped every 2-pixel column pair of
+  their sprites on hardware — "corrupted sprites, lines through them",
+  reported after the first release build. The reference sim reads its
+  byte array directly and never showed it, and the two hardware sims
+  that were run (bioship's title fade, strahl's story text) had no
+  sprites yet. `spr_swap` on the video module now selects the order per
+  game (`spr_plain` in the game table); the bioship hardware sim, run on
+  to its title (frame 136), matches the reference sim on every drawn
+  frame, and the board screenshots of all three games show clean
+  sprites again (tdragon/mustang, the word-swapped and byte-pair cases,
+  unchanged).
   The GunNail protection trace with the superset sizes is identical to
   the previous build's over 85 frames, so the NMK-215 never touches
   the addresses the larger internal ROM/RAM now hide.

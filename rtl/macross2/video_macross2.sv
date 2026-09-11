@@ -126,6 +126,13 @@ module video_macross2 #(
 	input [17:0] spr_units_i,      // sprite ROM bytes / 128
 	input [14:0] sprdma_word_base, // m_sprdma_base / 2: 0x4000, strahl 0x7800
 	input        nmk214_en,        // NMK214=1 builds: 0 = descramblers bypassed (no protection MCU on this board)
+	// HW_ROMS=1: 1 = the sprite region streams in ROM_LOAD16_WORD_SWAP (or
+	// odd-chip-first byte-pair) order, so the byte cache inverts address
+	// bit 0 (see the sprite cache comment); 0 = a plain ROM_LOAD byte ROM
+	// in MAME's own order (bioship, strahl, acrobatm) — without this every
+	// 2-pixel column pair of their sprites came out swapped on hardware
+	// (2026-09-11: "corrupted sprites, lines through them").
+	input        spr_swap,
 	// Layer B (BG2_LAYER=1)
 	input        bg2_en,
 	input        bga_rom2,         // HW_ROMS=0: layer A reads the bg2tile array (bioship's ROM tilemap draws gfx3)
@@ -527,7 +534,7 @@ module video_macross2 #(
 `endif
 			.base_word(base_word_sprites),
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({1'd0, spr_byte_addr ^ 23'd1}), .data(sprites_rom_byte), .word(sprites_rom_word), .ready(sprites_ready),
+			.byte_addr({1'd0, spr_swap ? (spr_byte_addr ^ 23'd1) : spr_byte_addr}), .data(sprites_rom_byte), .word(sprites_rom_word), .ready(sprites_ready),
 			.sd_addr(arb_addr[1]), .sd_req(arb_req[1]), .sd_busy(arb_busy[1]), .sd_valid(arb_valid[1]), .sd_dout(arb_dout[1]), .sd_dout_pair(arb_dout_pair[1])
 		);
 	end
