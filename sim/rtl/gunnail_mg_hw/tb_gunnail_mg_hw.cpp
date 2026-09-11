@@ -214,7 +214,8 @@ int main(int argc, char **argv) {
 			m68k_instrs++;
 			m68k_last_pc = (uint32_t)top.dbg_eab << 1;
 			if (clk_sys_ticks >= last_quarter_start) recent_pcs.insert(m68k_last_pc);
-			if (m68k_trace && m68k_instrs <= 2000000) fprintf(m68k_trace, "%06X\n", m68k_last_pc);
+			static long trace_max = std::getenv("TB_TRACE_MAX") ? atol(std::getenv("TB_TRACE_MAX")) : 2000000;
+			if (m68k_trace && m68k_instrs <= trace_max) fprintf(m68k_trace, "%06X\n", m68k_last_pc);
 		}
 		prev_as_n = as_n_now;
 

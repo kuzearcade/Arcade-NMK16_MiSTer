@@ -304,6 +304,7 @@ module gunnail_core #(
 	wire mainram_strange = g_macross | g_blkheart | g_mustang | g_bioship | g_vandyke; // macross_map/mustang_map/bioship_map/vandyke_map mainram_strange_w
 	wire bg2             = g_bioship | g_strahl;                         // screen_update_strahl: two BG layers
 	wire irq_hacky       = g_strahl;                                     // set_hacky_interrupt_timing (no V-PROM)
+	wire spr_plain       = g_bioship | g_strahl | g_acrobatm;            // sprite ROMs are plain ROM_LOAD byte files (the rest: WORD_SWAP / odd-first byte pairs), see video_macross2 spr_swap
 	wire [2:0] vprom_sel = (g_blkheart | g_bioship | g_vandyke) ? 3'd1 : // 98ed1c97
 	                       (g_tdragon | g_tdragon1)             ? 3'd2 : // e6ead349
 	                       g_mustangs                           ? 3'd3 : // de156d99
@@ -1872,7 +1873,7 @@ module gunnail_core #(
 		.lowres(lowres), .raster_scroll(g_gunnail), .cfg_rt(1'b1),
 		.bga_pal_base_i(cfg_bga_pal), .bgb_pal_base_i(cfg_bgb_pal), .spr_pal_base_i(cfg_spr_pal), .tx_pal_base_i(cfg_tx_pal),
 		.bga_code_mask_i(cfg_bga_mask), .bgb_code_mask_i(cfg_bgb_mask), .spr_units_i(cfg_spr_units),
-		.sprdma_word_base(cfg_sprdma_word), .nmk214_en(has_214),
+		.sprdma_word_base(cfg_sprdma_word), .nmk214_en(has_214), .spr_swap(~spr_plain),
 		.bg2_en(bg2), .bga_rom2(g_bioship), .bgb_rom2(g_strahl), .base_word_bgtile_b(BASE_WORD_BGTILE_B),
 		.bgvram_b_addr(vid_bgvram_b_addr), .bgvram_b_data(vid_bgvram_b_dout),
 		.bgb_xscroll(bgb_xscroll), .bgb_yscroll(bgb_yscroll),
