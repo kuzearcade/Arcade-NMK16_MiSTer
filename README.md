@@ -56,7 +56,9 @@ traces but has not yet been built for hardware. Their RTL lives under
   bjtwin
 - Family E (Seibu-style Z80 + YM3812 bootlegs): mustangb, tdragonb,
   acrobatmbl, strahljbl, gunnailb
-- Family C (Z80 direct sound): powerins
+- Family C (Z80 direct sound): powerins (its own zero-latency reference
+  port; the game ships on the Macross2 rbf through the shared
+  tdragon2_core's `game_powerins` mode — see docs/hw-bringup.md)
 - Family A (no sound CPU): cactus / bjtwin prototypes
 
 The hardware path (SDRAM ROM caches, clock-domain crossing, wait

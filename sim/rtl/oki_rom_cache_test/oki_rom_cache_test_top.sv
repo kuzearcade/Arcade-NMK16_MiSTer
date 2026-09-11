@@ -84,19 +84,22 @@ module oki_rom_cache_test_top
 	);
 
 	// Channel 0: Z80-like byte reader over the same 32KB image.
-	rom_cache1_byte #(.BASE_WORD_OFFSET(23'd0)) z_cache_inst (
+	rom_cache1_byte z_cache_inst (
+		.base_word(23'd0),
 		.clk(clk), .reset(reset),
 		.byte_addr({7'd0, z_addr}), .data(z_data), .ready(z_ready),
 		.sd_addr(a_addr[0]), .sd_req(a_req[0]), .sd_busy(a_busy[0]), .sd_valid(a_valid[0]), .sd_dout(a_dout[0]), .sd_dout_pair(a_dout_pair[0])
 	);
 
 	assign c_req = a_req[1];
-	oki_rom_cache #(.BASE_WORD_OFFSET(23'd0)) cache_inst (
+	oki_rom_cache cache_inst (
+		.base_word(23'd0),
 		.clk(clk), .reset(reset),
 		.byte_addr(c_addr), .data(c_data), .ready(c_ready), .stall(c_stall),
 		.sd_addr(a_addr[1]), .sd_req(a_req[1]), .sd_busy(a_busy[1]), .sd_valid(a_valid[1]), .sd_dout(a_dout[1]), .sd_dout_pair(a_dout_pair[1])
 	);
-	oki_rom_cache #(.BASE_WORD_OFFSET(23'd0)) cache2_inst (
+	oki_rom_cache cache2_inst (
+		.base_word(23'd0),
 		.clk(clk), .reset(reset),
 		.byte_addr(c_addr), .data(c2_data), .ready(c2_ready), .stall(c2_stall),
 		.sd_addr(a_addr[2]), .sd_req(a_req[2]), .sd_busy(a_busy[2]), .sd_valid(a_valid[2]), .sd_dout(a_dout[2]), .sd_dout_pair(a_dout_pair[2])

@@ -773,14 +773,14 @@ module gunnail_core #(
 	wire [15:0] vid_bgvram_dout;
 	wire [10:0] vid_txvram_addr;
 	wire [15:0] vid_txvram_dout;
-	wire [9:0]  vid_palette_addr;
+	wire [10:0] vid_palette_addr;     // 11 bits: video_macross2.sv's port; bit 10 is only set in its powerins mode
 	wire [15:0] vid_palette_dout;
-	wire [9:0]  vid_spr_palette_addr;
+	wire [10:0] vid_spr_palette_addr;
 	wire [15:0] vid_spr_palette_dout;
 	generate
 	if (!HW_ROMS) begin : g_vidpal_sim
-		assign vid_palette_dout     = palette[vid_palette_addr];
-		assign vid_spr_palette_dout = palette[vid_spr_palette_addr];
+		assign vid_palette_dout     = palette[vid_palette_addr[9:0]];
+		assign vid_spr_palette_dout = palette[vid_spr_palette_addr[9:0]];
 	end else begin : g_vidpal_hw
 		// Registered reads — video_macross2.sv's HW_ROMS=1 palette-tap
 		// contract (one clock behind the address), so the palette infers
@@ -788,8 +788,8 @@ module gunnail_core #(
 		// already was).
 		reg [15:0] vid_palette_dout_r, vid_spr_palette_dout_r;
 		always @(posedge clk_sys) begin
-			vid_palette_dout_r     <= palette[vid_palette_addr];
-			vid_spr_palette_dout_r <= palette[vid_spr_palette_addr];
+			vid_palette_dout_r     <= palette[vid_palette_addr[9:0]];
+			vid_spr_palette_dout_r <= palette[vid_spr_palette_addr[9:0]];
 		end
 		assign vid_palette_dout     = vid_palette_dout_r;
 		assign vid_spr_palette_dout = vid_spr_palette_dout_r;
@@ -962,14 +962,16 @@ module gunnail_core #(
 			.sdram_addr(sd3_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
 			.sdram_dout(sd3_dout), .sdram_dout_pair(sd3_dout_pair), .sdram_req(sd3_req), .sdram_ack(sd3_ack)
 		);
-		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_NMK004)) nmk004_cache_inst (
+		oki_rom_cache nmk004_cache_inst (
+			.base_word(BASE_WORD_NMK004),
 			.clk(clk_sys), .reset(reset),
 			.byte_addr(nmk004_cache_addr), .data(nmk004_rom_din), .ready(nmk004_rom_ready), .stall(),
 			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1]), .sd_dout_pair(p1_dout_pair[1])
 		);
 		// Protection MCU reads of the 68000 ROM (none in this game's
 		// firmware, wired for completeness): its own 1-line byte cache.
-		rom_cache1_byte #(.BASE_WORD_OFFSET(23'd0)) prot_rom_cache_inst (
+		rom_cache1_byte prot_rom_cache_inst (
+			.base_word(23'd0),
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({5'd0, prot_addr[18:0]}), .data(prot_rom_din), .word(), .ready(prot_rom_ready),
 			.sd_addr(p1_addr[4]), .sd_req(p1_req[4]), .sd_busy(p1_busy[4]), .sd_valid(p1_valid[4]), .sd_dout(p1_dout[4]), .sd_dout_pair(p1_dout_pair[4])
@@ -1056,12 +1058,14 @@ module gunnail_core #(
 		assign dbg_oki1_adpcm_total = 32'd0; assign dbg_oki1_adpcm_unserved = 32'd0;
 		assign dbg_oki_cen_total = 32'd0; assign dbg_oki0_stall_cen = 32'd0; assign dbg_oki1_stall_cen = 32'd0;
 	end else begin : g_oki_hw
-		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI1)) oki1_cache_inst (
+		oki_rom_cache oki1_cache_inst (
+			.base_word(BASE_WORD_OKI1),
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({3'd0, oki1_phys}), .data(oki1_rom_data), .ready(oki1_rom_ok), .stall(oki1_stall),
 			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2]), .sd_dout_pair(p1_dout_pair[2])
 		);
-		oki_rom_cache #(.BASE_WORD_OFFSET(BASE_WORD_OKI2)) oki2_cache_inst (
+		oki_rom_cache oki2_cache_inst (
+			.base_word(BASE_WORD_OKI2),
 			.clk(clk_sys), .reset(reset),
 			.byte_addr({3'd0, oki2_phys}), .data(oki2_rom_data), .ready(oki2_rom_ok), .stall(oki2_stall),
 			.sd_addr(p1_addr[3]), .sd_req(p1_req[3]), .sd_busy(p1_busy[3]), .sd_valid(p1_valid[3]), .sd_dout(p1_dout[3]), .sd_dout_pair(p1_dout_pair[3])
@@ -1286,6 +1290,7 @@ module gunnail_core #(
 		.VTIMING_FILE(VTIMING_FILE)
 	) irq_gen (
 		.clk_sys(clk_sys),
+		.table_sel(1'b0),
 		.reset(reset),
 		.line_start(vt_line_start),
 		.vcount(vt_vcount),
@@ -1306,9 +1311,6 @@ module gunnail_core #(
 		.SPRITES_FILE(SPRITES_FILE),
 		.HW_ROMS(HW_ROMS),
 		.DBG_MISS_PAINT(DBG_MISS_PAINT),
-		.BASE_WORD_FGTILE(BASE_WORD_FGTILE),
-		.BASE_WORD_BGTILE(BASE_WORD_BGTILE),
-		.BASE_WORD_SPRITES(BASE_WORD_SPRITES),
 		.RASTER_SCROLL(1),
 		.SPRITES_BYTES(2097152),
 		.SPR_COLOUR_BITS(4),
@@ -1329,6 +1331,7 @@ module gunnail_core #(
 		.scrollram_row(vid_scrollram_row), .scrollramy_row(vid_scrollramy_row),
 		.nmk214_cfg_we(nmk214_cfg_we), .nmk214_cfg_data(nmk214_cfg_data),
 		.bg_bank(bgbank_reg),
+		.game_powerins(1'b0), .base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE), .base_word_sprites(BASE_WORD_SPRITES),
 		.tilerambank(2'd0),
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),

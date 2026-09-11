@@ -47,6 +47,13 @@ module nmk_irq #(
 	input        clk_sys,
 	input        reset,
 
+	// Second V-PROM table (2026-09-11): a shared RBF that serves boards
+	// with different PROMs (Macross2.rbf: tdragon2/macross2 vs powerins)
+	// loads a 512-line VTIMING_FILE — table 0 in lines 0-255, table 1 in
+	// 256-511 — and selects with this input. A 256-line file (every
+	// single-game build and sim) leaves table 1 unused; tie 0.
+	input        table_sel,
+
 	input        line_start,   // pulse at hcount==0, from video_timing
 	input  [9:0] vcount,       // 0..277, from video_timing
 
@@ -63,7 +70,7 @@ module nmk_irq #(
 	localparam [8:0] VPHASE     = 9'd66;  // see header's "Phase calibration"
 	localparam [8:0] VTOTAL     = 9'd278;
 
-	reg [7:0] vtiming_prom [0:255];
+	reg [7:0] vtiming_prom [0:511]; // two 256-entry tables, see table_sel
 	initial if (VTIMING_FILE != "") $readmemh(VTIMING_FILE, vtiming_prom);
 
 	// y_arg = (vcount + VPHASE) mod VTOTAL — see header. vcount+VPHASE
@@ -84,7 +91,7 @@ module nmk_irq #(
 	wire [8:0] term = (a >= PROM_SPAN) ? (a - PROM_SPAN) : a;
 	wire [7:0] addr = term[7:0] + PROM_START[7:0]; // 117..255, fits in 8 bits
 
-	wire [7:0] rom_val = vtiming_prom[addr];
+	wire [7:0] rom_val = vtiming_prom[{table_sel, addr}];
 	wire [2:0] rom_lvl = {rom_val[6], rom_val[5], rom_val[4]};
 
 	reg [7:0] prev_val = 8'hFF; // matches m_vtiming_val's own reset value
