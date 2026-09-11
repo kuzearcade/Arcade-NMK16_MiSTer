@@ -22,6 +22,9 @@ MODEL_DIR := ../../models
 OBJ_DIR := obj_dir_$(GAME)
 TOP := gunnail_mg_hw_top
 R := ../$(GAME)/roms/$(GAME)
+ifneq ($(filter $(GAME),bjtwin cactus),)
+R := ../bjtwin/roms/$(GAME)
+endif
 
 SEL_gunnail  := 0
 SEL_macross  := 1
@@ -34,6 +37,15 @@ SEL_strahl   := 7
 SEL_tdragon  := 8
 SEL_hachamf  := 9
 SEL_tdragon1 := 10
+SEL_hachamfb := 13
+SEL_bjtwin   := 14
+SEL_bjtwinp  := 15
+SEL_sabotenb := 17
+SEL_nouryoku := 17
+SEL_cactus   := 18
+SEL_nouryokup := 19
+SEL_tharrier := 20
+SEL_vandykeb := 21
 SEL := $(SEL_$(GAME))
 
 SOURCES := $(TOP).sv $(CORE_DIR)/gunnail_core.sv $(MACROSS2_DIR)/video_macross2.sv \
@@ -41,7 +53,7 @@ SOURCES := $(TOP).sv $(CORE_DIR)/gunnail_core.sv $(MACROSS2_DIR)/video_macross2.
            $(NMK112_DIR)/nmk112.sv $(BJTWIN_DIR)/video_timing.sv $(BJTWIN_DIR)/nmk_irq_hacky.sv $(NMK_IRQ_DIR)/nmk_irq.sv \
            $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
            $(RTL_DIR)/sdram.sv $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv \
-           $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv $(RTL_DIR)/rom_cache1_byte.sv $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(MODEL_DIR)/sdram_model.sv
+           $(RTL_DIR)/third_party_gen/t80/T80s.v $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv $(RTL_DIR)/rom_cache1_byte.sv $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(MODEL_DIR)/sdram_model.sv
 
 .PHONY: all roms run clean
 

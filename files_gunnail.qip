@@ -23,6 +23,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/tlcs90/tlcs90.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tlcs90/nmk004_periph.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/macross2/video_macross2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/nmk112/nmk112.sv
+set_global_assignment -name VERILOG_FILE rtl/third_party_gen/t80/T80s.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/bjtwin/video_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/nmk_irq/nmk_irq.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/bjtwin/nmk_irq_hacky.sv

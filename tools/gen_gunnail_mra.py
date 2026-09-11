@@ -11,7 +11,9 @@ Conventions (see docs/hw-bringup.md):
   - The <switches> block is DSW1, DSW2, then the GAME ID byte (game_sel):
     0 gunnail, 1 macross, 2 blkheart, 3 mustang, 4 bioship, 5 vandyke,
     6 acrobatm, 7 strahl, 8 tdragon, 9 hachamf, 10 tdragon1, 11 hachamfp,
-    12 mustangs. ids are listed in bit-value order (value 0 first).
+    12 mustangs, 13 hachamfb, 14 bjtwin, 15 bjtwinp, 16 bjtwinpa,
+    17 sabotenb/nouryoku, 18 cactus, 19 nouryokup, 20 tharrier, 21 vandykeb.
+    ids are listed in bit-value order (value 0 first).
   - ROM part order = the core's per-game SDRAM layout (BASE_BYTE_* in
     gunnail_core.sv): maincpu, NMK004 program, NMK004 boot ROM
     (nmk004.zip), [protection MCU ROM], fgtile, bgtile, [bg2tile],
@@ -316,6 +318,147 @@ HACHAMFP = dict(
 
 MUSTANGS = dict(MUSTANG, id=12, manufacturer="UPL (Seoul Trading license)")
 
+HACHAMFB = dict(HACHAMFP, id=13, switches="FD,FF", dips=HACHAMF_DIPS, manufacturer="bootleg",
+    regions=[
+        ("maincpu, 0x040000", [pair(("8.bin", "14845b65"), ("7.bin", "069ca579"))]),
+        ("NMK004 external program, 0x010000", [("1.70", "9e6f48fc")]),
+        ("NMK004 internal boot ROM, 0x002000 (nmk004.zip)", [NMK004_BOOT]),
+        ("fgtile, 0x020000", [("5.95", "29fb04a2")]),
+        ("bgtile, 0x100000", [("91076-4.101", "df9653a4")]),
+        ("sprites, 0x100000 (ROM_LOAD16_WORD_SWAP)", [("91076-8.57", "7fd0f556")]),
+        ("oki1, 0x080000", [("91076-2.46", "3f1e67f2")]),
+        ("oki2, 0x080000", [("91076-3.45", "b25ed93b")]),
+    ])
+
+# Bombjack Twin family: no sound CPU (68000-driven OKIs with NMK112), one
+# 8x8 tile layer with two ROMs (fgtile then bgtile, contiguous), NMK-215
+# on the protected sets. Coin tables are the 8-entry Free_Play ones.
+BJTWIN_DIPS = [
+    ('0', "Flip Screen", "On,Off"),
+    ('1,3', "Starting level", "China,Hong_Kong,Thailand,Korea,Germany,England,Nevada,Japan"),
+    ('4,5', "Difficulty", "Hardest,Hard,Easy,Normal"), ('6,7', "Lives", "1,2,4,3"),
+    ('8', "Unknown (SW2:8)", "On,Off"), ('9', "Demo Sounds", "Off,On"),
+    ('10,12', "Coin B", COIN8_FREE), ('13,15', "Coin A", COIN8_FREE),
+]
+BJTWIN = dict(
+    id=14, year=1993, manufacturer="NMK", rot=True, switches="FF,FF", dips=BJTWIN_DIPS,
+    regions=[
+        ("maincpu, 0x040000", [pair(("93087-1.bin", "93c84e2d"), ("93087-2.bin", "30ff678a"))]),
+        ("NMK-215 protection MCU ROM, 0x002000 (read into the MCU from SDRAM after reset)", [("nmk-215.bin", "d355a06f")]),
+        ("fgtile, 0x010000 (8x8, the tile layer's bank-0 ROM)", [("93087-3.bin", "aa13df7c")]),
+        ("bgtile, 0x100000 (8x8, bank 1, NMK214-scrambled)", [("93087-4.bin", "8a4f26d0")]),
+        ("sprites, 0x100000 (ROM_LOAD16_WORD_SWAP, NMK214-scrambled)", [("93087-5.bin", "bb06245d")]),
+        ("oki1, 0x100000 (NMK112-banked)", [("93087-6.bin", "372d46dd")]),
+        ("oki2, 0x100000 (NMK112-banked)", [("93087-7.bin", "8da67808")]),
+    ])
+BJTWINP = dict(
+    id=15, year=1993, manufacturer="NMK", rot=True, switches="FF,FF", dips=BJTWIN_DIPS,
+    regions=[
+        ("maincpu, 0x040000", [pair(("ic76", "c2847f0d"), ("ic75", "dd8fdfce"))]),
+        ("fgtile, 0x010000", [("ic35", "45d67683")]),
+        ("bgtile, 0x180000 (3 files, plain)", [("u1.ic32", "b4960ba0"), ("u2.ic32", "99ee571d"), ("u3.ic32", "25720ffb")]),
+        ("sprites, 0x100000 (ROM_LOAD16_BYTE pair, plain)", [pair(("u4.ic100", "6501b1fb"), ("u5.ic100", "8394e2ba"))]),
+        ("oki1, 0x100000 (2 files)", [("bottom.ic30", "b5ef197f"), ("top.ic30", "ab50531d")]),
+        ("oki2, 0x100000 (2 files)", [("top.ic27", "adb2f256"), ("bottom.ic27", "6ebeb9e4")]),
+    ])
+BJTWINPA = dict(
+    id=16, year=1993, manufacturer="NMK", rot=True, switches="FF,FF", dips=BJTWIN_DIPS,
+    regions=[
+        ("maincpu, 0x040000", [pair(("ic76.bin", "81106d1e"), ("ic75.bin", "7c99b97f"))]),
+        ("NMK-215 protection MCU ROM, 0x002000 (read into the MCU from SDRAM after reset)", [("nmk-215.bin", "d355a06f")]),
+        ("fgtile, 0x010000", [("ic35.bin", "aa13df7c")]),
+        ("bgtile, 0x180000 (3 files, NMK214-scrambled)", [("ic32_1.bin", "e2d2b331"), ("ic32_2.bin", "28a3a845"), ("ic32_3.bin", "ecce80c9")]),
+        ("sprites, 0x100000 (ROM_LOAD16_BYTE pair, NMK214-scrambled)", [pair(("ic100_1.bin", "2ea7e460"), ("ic100_2.bin", "ec85e1b7"))]),
+        ("oki1, 0x100000 (2 files)", [("bottom.ic30", "b5ef197f"), ("top.ic30", "ab50531d")]),
+        ("oki2, 0x100000 (2 files)", [("top.ic27", "adb2f256"), ("bottom.ic27", "6ebeb9e4")]),
+    ])
+SABOTENB_DIPS = [
+    ('0', "Flip Screen", "On,Off"), ('1', "Language", "English,Japanese"),
+    ('2,3', "Difficulty", "Hardest,Hard,Easy,Normal"), ('4', "Unused (SW1:4)", "On,Off"), ('5', "Unused (SW1:3)", "On,Off"),
+    ('6,7', "Lives", "1,2,4,3"),
+    ('8', "Unused (SW2:8)", "On,Off"), ('9', "Demo Sounds", "Off,On"),
+    ('10,12', "Coin B", COIN8_FREE), ('13,15', "Coin A", COIN8_FREE),
+]
+SABOTENB = dict(
+    id=17, year=1992, manufacturer="NMK / Tecmo", rot=False, switches="FF,FF", dips=SABOTENB_DIPS,
+    regions=[
+        ("maincpu, 0x080000", [pair(("ic76.sb1", "b2b0b2cf"), ("ic75.sb2", "367e87b7"))]),
+        ("NMK-215 protection MCU ROM, 0x002000 (read into the MCU from SDRAM after reset)", [("nmk-215.bin", "d355a06f")]),
+        ("fgtile, 0x010000 (8x8, bank 0)", [("ic35.sb3", "eb7bc99d")]),
+        ("bgtile, 0x200000 (8x8, bank 1, NMK214-scrambled)", [("ic32.sb4", "24c62205")]),
+        ("sprites, 0x200000 (ROM_LOAD16_WORD_SWAP, NMK214-scrambled)", [("ic100.sb5", "b20f166e")]),
+        ("oki1, 0x100000 (NMK112-banked)", [("ic30.sb6", "288407af")]),
+        ("oki2, 0x100000 (NMK112-banked)", [("ic27.sb7", "43e33a7e")]),
+    ])
+CACTUS = dict(
+    id=18, year=1992, manufacturer="bootleg", rot=False, switches="FF,FF", dips=SABOTENB_DIPS,
+    regions=[
+        ("maincpu, 0x080000", [pair(("02.bin", "15b2ff2f"), ("01.bin", "5b8ba46a"))]),
+        ("fgtile, 0x010000 (sabotenb's ic35.sb3 — cactus.zip has no separate copy)", [("ic35.sb3", "eb7bc99d")]),
+        ("bgtile, 0x200000 (2 files; sabotenb's data, descrambled with the NMK-215's fixed configs)", [("s-05.bin", "fce962b9"), ("s-06.bin", "16768fbc")]),
+        ("sprites, 0x200000 (ROM_LOAD16_BYTE pair)", [pair(("s-04.bin", "f823885e"), ("s-03.bin", "bc1781b8"))]),
+        ("oki1, 0x100000 (sabotenb's ic30.sb6, same data as the driver's s-01.bin)", [("ic30.sb6", "288407af")]),
+        ("oki2, 0x100000 (sabotenb's ic27.sb7)", [("ic27.sb7", "43e33a7e")]),
+    ])
+NOURYOKU_DIPS = [
+    ('0,1', "Life Decrease Speed", "Very Fast,Fast,Slow,Normal"), ('2,3', "Difficulty", "Hardest,Hard,Easy,Normal"),
+    ('4', "Free Play", "On,Off"), ('5,7', "Coinage", "2C_3C,4C_1C,1C_3C,2C_1C,1C_4C,3C_1C,1C_2C,1C_1C"),
+    ('8', "Unused (SW2:8)", "On,Off"), ('9', "Unused (SW2:7)", "On,Off"), ('10', "Unused (SW2:6)", "On,Off"),
+    ('11', "Unused (SW2:5)", "On,Off"), ('12', "Unused (SW2:4)", "On,Off"), ('13', "Flip Screen", "On,Off"),
+    ('14', "Demo Sounds", "Off,On"), ('15', "Service Mode", "On,Off"),
+]
+NOURYOKU = dict(
+    id=17, year=1995, manufacturer="Tecmo", rot=False, switches="FF,FF", dips=NOURYOKU_DIPS,
+    regions=[
+        ("maincpu, 0x080000", [pair(("ic76.1", "26075988"), ("ic75.2", "75ab82cd"))]),
+        ("NMK-215 protection MCU ROM, 0x002000 (read into the MCU from SDRAM after reset)", [("nmk-215.bin", "d355a06f")]),
+        ("fgtile, 0x010000 (8x8, bank 0)", [("ic35.3", "03d0c3b1")]),
+        ("bgtile, 0x200000 (8x8, bank 1, NMK214-scrambled)", [("ic32.4", "88d454fd")]),
+        ("sprites, 0x200000 (ROM_LOAD16_WORD_SWAP, NMK214-scrambled)", [("ic100.5", "24d3e24e")]),
+        ("oki1, 0x100000 (NMK112-banked)", [("ic30.6", "feea34f4")]),
+        ("oki2, 0x100000 (NMK112-banked)", [("ic27.7", "8a69fded")]),
+    ])
+NOURYOKUP = dict(
+    id=19, year=1995, manufacturer="Tecmo", rot=False, switches="FF,FF", dips=NOURYOKU_DIPS,
+    regions=[
+        ("maincpu, 0x080000", [pair(("ic76.1", "26075988"), ("ic75.2", "75ab82cd"))]),
+        ("fgtile, 0x010000", [("ic35.3", "03d0c3b1")]),
+        ("bgtile, 0x200000 (4 files, plain)", [("bg0.u1.ic32", "1fec8e14"), ("bg1.u2.ic32", "7b8ea3f0"), ("bg2.u3.ic32", "6f4eb408"), ("bg3.u4.ic32", "dea8c120")]),
+        ("sprites, 0x200000 (two ROM_LOAD16_BYTE pairs, plain)", [pair(("obj0even.u7.ic100", "7966ce07"), ("obj0odd.u6.ic100", "d4913a08")),
+                                                                    pair(("obj1even.u9.ic100", "e01567e8"), ("obj1odd.u8.ic100", "4a383085"))]),
+        ("oki1, 0x100000 (2 files)", [("soundpcm0.bottom.ic30", "34ded136"), ("soundpcm1.top.ic30", "a8d2abf7")]),
+        ("oki2, 0x100000 (2 files)", [("soundpcm2.top.ic27", "29d0a15d"), ("soundpcm3.bottom.ic27", "c764e749")]),
+    ])
+THARRIER = dict(
+    id=20, year=1989, manufacturer="UPL", rot=True, switches="FF,FF",
+    # One 16-bit DSW port: SW2 in the low byte (switch byte 0), SW1 in the high byte (byte 1).
+    dips=[
+        ('0', "Unknown (SW2:8)", "On,Off"), ('1', "Demo Sounds", "Off,On"),
+        ('2,4', "Coin B", COIN8_FREE), ('5,7', "Coin A", COIN8_FREE),
+        ('8', "Cabinet", "Cocktail,Upright"), ('9', "Unknown (SW1:7)", "On,Off"),
+        ('10,11', "Difficulty", "Hardest,Easy,Hard,Normal"),
+        ('12,13', "Bonus Life", "200k 500k & 1 2 3 5 Mil,None,200k and 1 Mil,200k"),
+        ('14,15', "Lives", "5,2,4,3"),
+    ],
+    regions=[
+        ("maincpu, 0x040000", [pair(("2.18b", "f3887a44"), ("3.21b", "65c247f6"))]),
+        ("Z80 sound program, 0x010000", [("12.4l", "b959f837")]),
+        ("fgtile, 0x010000", [("1.13b", "005c26c3")]),
+        ("bgtile, 0x080000", [("89050-4.16f", "64d7d687")]),
+        ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("89050-13.16d", "24db3fa4"), ("89050-17.16e", "7f715421"))]),
+        ("oki1, 0x080000", [("89050-8.4j", "11ee4c39")]),
+        ("oki2, 0x080000", [("89050-10.14j", "893552ab")]),
+    ])
+VANDYKEB = dict(VANDYKE, id=21, manufacturer="bootleg",
+    regions=[
+        ("maincpu, 0x040000", [pair(("2.bin", "9c269702"), ("1.bin", "dd6303a1"))]),
+        ("fgtile, 0x010000 (vandyke's vdk-3.222)", [("vdk-3.222", "5a547c1b")]),
+        ("bgtile, 0x080000 (2 files)", [("4.bin", "4ba4138d"), ("5.bin", "9a1ac697")]),
+        ("sprites, 0x180000 (four ROM_LOAD16_BYTE pairs)", [pair(("13.bin", "bb561871"), ("17.bin", "346e3b66")), pair(("12.bin", "cdef9b17"), ("16.bin", "beda678c")),
+                                                            pair(("11.bin", "823185d9"), ("15.bin", "149f3247")), pair(("10.bin", "388b1abc"), ("14.bin", "32eeba37"))]),
+        ("oki1, 0x080000 (4 files; never played — the board has no sound CPU)", [("9.bin", "56bf774f"), ("8.bin", "89851fcf"), ("7.bin", "d7bf0f6a"), ("6.bin", "a7fcf709")]),
+    ])
+
 # setname, description, GAME() line, parent spec, parent setname (for the zip
 # search list) and region overrides: {old part name: (new name, crc)}.
 SETS = [
@@ -349,6 +492,22 @@ SETS = [
     ("hachamfa",    "Hacha Mecha Fighter (19th Sep. 1991, protected, set 2)",      10726, HACHAMF,  "hachamf",
      {"7.93": ("7.ic93", "f437e52b"), "6.94": ("6.ic94", "60d340d0"), "5.95": ("5.ic95", "a2c1e25d")}),
     ("hachamfp",    "Hacha Mecha Fighter (Location Test Prototype, 19th Sep. 1991)", 10728, HACHAMFP, "hachamf", {}),
+    ("hachamfb",    "Hacha Mecha Fighter (19th Sep. 1991, unprotected, bootleg Thunder Dragon conversion)", 10727, HACHAMFB, "hachamf", {}),
+    ("bjtwin",      "Bombjack Twin (set 1)",                                       10755, BJTWIN,   None, {}),
+    ("bjtwina",     "Bombjack Twin (set 2)",                                       10756, BJTWIN,   "bjtwin",
+     {"93087-1.bin": ("93087.1", "c82b3d8e"), "93087-2.bin": ("93087.2", "9be1ec47")}),
+    ("bjtwinp",     "Bombjack Twin (prototype? with adult pictures, set 1)",       10757, BJTWINP,  "bjtwin", {}),
+    ("bjtwinpa",    "Bombjack Twin (prototype? with adult pictures, set 2)",       10758, BJTWINPA, "bjtwin", {}),
+    ("sabotenb",    "Saboten Bombers (set 1)",                                     10751, SABOTENB, None, {}),
+    ("sabotenba",   "Saboten Bombers (set 2)",                                     10752, SABOTENB, "sabotenb",
+     {"ic76.sb1": ("sb1.76", "df6f65e2"), "ic75.sb2": ("sb2.75", "0d2c1ab8")}),
+    ("cactus",      "Cactus (bootleg of Saboten Bombers)",                         10753, CACTUS,   "sabotenb", {}),
+    ("nouryoku",    "Nouryoku Koujou Iinkai",                                      10760, NOURYOKU, None, {}),
+    ("nouryokup",   "Nouryoku Koujou Iinkai (prototype)",                          10761, NOURYOKUP, "nouryoku", {}),
+    ("tharrier",    "Task Force Harrier",                                          10699, THARRIER, None, {}),
+    ("tharrieru",   "Task Force Harrier (US)",                                     10700, THARRIER, "tharrier",
+     {"2.18b": ("u_2.18b", "78923aaa"), "3.21b": ("u_3.21b", "99cea259"), "1.13b": ("1.13b", "c7402e4a")}),
+    ("vandykeb",    "Vandyke (bootleg with PIC16c57)",                             10711, VANDYKEB, "vandyke", {}),
 ]
 
 
@@ -466,7 +625,9 @@ def main():
         print(ioctl_args(sys.argv[2]))
         return
     for setname, desc, line, spec, parent, overrides in SETS:
-        fname = desc.replace(" / ", " - ").replace("/", "-") + ".mra"
+        # exFAT/FAT (the MiSTer SD card) reject '?' and '/' in file names — the
+        # bjtwinp/bjtwinpa .mra files silently failed to copy with MAME's title.
+        fname = desc.replace(" / ", " - ").replace("/", "-").replace("?", "") + ".mra"
         path = os.path.join(RELEASES, fname)
         with open(path, "w") as f:
             f.write(mra(setname, desc, line, spec, parent, overrides))

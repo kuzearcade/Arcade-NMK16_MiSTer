@@ -9,6 +9,7 @@
 #   make GAME=bioship CYCLES=60000000 run
 #   TB_DUMP_PPM=1 make GAME=strahl run
 # Games: macross blkheart mustang bioship vandyke acrobatm strahl tdragon hachamf tdragon1 gunnail
+#        hachamfb bjtwin bjtwinp sabotenb nouryoku cactus nouryokup tharrier vandykeb
 
 GAME   ?= blkheart
 CYCLES ?= 300000000
@@ -32,7 +33,8 @@ SOURCES := $(CORE_DIR)/$(TOP).sv $(MACROSS2_DIR)/video_macross2.sv $(NMK214_DIR)
            $(BJTWIN_DIR)/video_timing.sv $(BJTWIN_DIR)/nmk_irq_hacky.sv $(NMK_IRQ_DIR)/nmk_irq.sv \
            $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
            $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache1_byte.sv \
-           $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv
+           $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv \
+           $(RTL_DIR)/nmk112/nmk112.sv $(RTL_DIR)/third_party_gen/t80/T80s.v
 
 # Per-game table: game id (gunnail_core.sv G_*), NMK004 external program,
 # protection ROM, second tile ROM, bioship's tilemap ROM.
@@ -47,13 +49,40 @@ SEL_strahl   := 7
 SEL_tdragon  := 8
 SEL_hachamf  := 9
 SEL_tdragon1 := 10
+SEL_hachamfb := 13
+SEL_bjtwin   := 14
+SEL_bjtwinp  := 15
+SEL_sabotenb := 17
+SEL_nouryoku := 17
+SEL_cactus   := 18
+SEL_nouryokup := 19
+SEL_tharrier := 20
+SEL_vandykeb := 21
 SEL := $(SEL_$(GAME))
+# ROM hex directory: sim/rtl/<game>/roms, except bjtwin and cactus (sim/rtl/bjtwin/roms)
+ifneq ($(filter $(GAME),bjtwin cactus),)
+R := ../bjtwin/roms/$(GAME)
+endif
 EXT := ../tlcs90/roms/$(GAME)_ext.hex
 ifeq ($(GAME),tdragon1)
 EXT := ../tlcs90/roms/tdragon_ext.hex
 endif
+ifeq ($(GAME),hachamfb)
+EXT := ../tlcs90/roms/hachamf_ext.hex
+endif
+ifneq ($(filter $(GAME),bjtwin bjtwinp sabotenb nouryoku cactus nouryokup tharrier vandykeb),)
+EXT :=
+endif
+AUDIOCPU :=
+ifeq ($(GAME),tharrier)
+AUDIOCPU := $(R)_audiocpu.hex
+endif
+OKI2 := $(R)_oki2.hex
+ifeq ($(GAME),vandykeb)
+OKI2 :=
+endif
 PROT :=
-ifneq ($(filter $(GAME),gunnail macross hachamf tdragon1),)
+ifneq ($(filter $(GAME),gunnail macross hachamf tdragon1 bjtwin sabotenb nouryoku),)
 PROT := $(R)_prot.hex
 endif
 BG2 :=
@@ -79,7 +108,8 @@ $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gc.cpp $(FX68K_DIR)/fx68k.sv
 		-GNMK004_EXT_FILE=\"$(EXT)\" \
 		-GPROT_BOOT_FILE=\"$(PROT)\" \
 		-GOKI1_ROM_FILE=\"$(R)_oki1.hex\" \
-		-GOKI2_ROM_FILE=\"$(R)_oki2.hex\" \
+		-GOKI2_ROM_FILE=\"$(OKI2)\" \
+		-GAUDIOCPU_FILE=\"$(AUDIOCPU)\" \
 		-GVTIMING_FILE=\"$(VTIMING)\" \
 		-GFGTILE_FILE=\"$(R)_fgtile.hex\" \
 		-GBGTILE_FILE=\"$(R)_bgtile.hex\" \
