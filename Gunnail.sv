@@ -104,11 +104,13 @@ localparam CONF_STR = {
 wire        forced_scandoubler;
 wire        direct_video;
 wire  [1:0] buttons;
-wire  [3:0] game_sel;      // runtime game select, from the .mra <switches> third byte (below)
+wire  [4:0] game_sel;      // runtime game select, from the .mra <switches> third byte (below)
 wire        lowres;        // from the core: the 256-px lowres window (every game but gunnail)
 // The vertical (ROT270) games: gunnail, macross, vandyke, acrobatm,
-// tdragon/tdragon1. The others are ROT0 and never rotated.
-wire        game_vertical = (game_sel == 4'd0) | (game_sel == 4'd1) | (game_sel == 4'd5) | (game_sel == 4'd6) | (game_sel == 4'd8) | (game_sel == 4'd10);
+// tdragon/tdragon1, the Bombjack Twin sets (14-16), tharrier, vandykeb.
+// The others are ROT0 and never rotated.
+wire        game_vertical = (game_sel == 5'd0) | (game_sel == 5'd1) | (game_sel == 5'd5) | (game_sel == 5'd6) | (game_sel == 5'd8) | (game_sel == 5'd10) |
+                            (game_sel == 5'd14) | (game_sel == 5'd15) | (game_sel == 5'd16) | (game_sel == 5'd20) | (game_sel == 5'd21);
 wire [127:0] status;
 wire  [10:0] ps2_key;
 wire [31:0] joystick_0, joystick_1;
@@ -280,18 +282,20 @@ always @(posedge clk_sys) begin
 end
 // gunnail has no service-mode DIP (DSW1 bit 0 is Flip Screen); MAME's
 // F2 maps to nothing here, so the DIP bytes pass straight through.
-// mustang reads ONE 16-bit DSW port at 0x080004 (SW2 in the low byte,
-// SW1 in the high byte), so its second switch byte rides in dsw1's high
-// half; every other board reads two byte-wide ports.
-wire        game_mustang = (game_sel == 4'd3) | (game_sel == 4'd12);
+// mustang and tharrier read ONE 16-bit DSW port at 0x080004 (SW2 in the
+// low byte, SW1 in the high byte), so their second switch byte rides in
+// dsw1's high half; every other board reads two byte-wide ports.
+wire        game_mustang = (game_sel == 5'd3) | (game_sel == 5'd12) | (game_sel == 5'd20);
 wire [15:0] dsw1_i = {game_mustang ? dip_sw[1] : 8'hFF, dip_sw[0]};
 wire [15:0] dsw2_i = {8'hFF, dip_sw[1]};
 // Game select: the <switches> third byte (gunnail_core.sv's game table:
 // 0 gunnail, 1 macross, 2 blkheart, 3 mustang, 4 bioship, 5 vandyke,
 // 6 acrobatm, 7 strahl, 8 tdragon, 9 hachamf, 10 tdragon1, 11 hachamfp,
-// 12 mustangs). An .mra with only two switch bytes leaves it at the idle
+// 12 mustangs, 13 hachamfb, 14 bjtwin, 15 bjtwinp, 16 bjtwinpa,
+// 17 sabotenb/nouryoku, 18 cactus, 19 nouryokup, 20 tharrier,
+// 21 vandykeb). An .mra with only two switch bytes leaves it at the idle
 // 0xFF, which is gunnail.
-assign game_sel = (dip_sw[2] == 8'hFF) ? 4'd0 : dip_sw[2][3:0];
+assign game_sel = (dip_sw[2] == 8'hFF) ? 5'd0 : dip_sw[2][4:0];
 
 // ------------------------------------------------------------------
 // SDRAM — single physical rtl/sdram.sv instance, 4 ports. The

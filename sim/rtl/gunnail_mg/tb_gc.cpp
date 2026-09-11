@@ -162,6 +162,12 @@ int main(int argc, char **argv) {
 			if (pb && !prev_pb) { n_pb++; if (log_pb) std::fprintf(stderr, "F%03u c=%llu PROT %s %05x\n", frame_count, (unsigned long long)clk_sys_ticks, top.dbg_prot_bus_wr ? "W" : "R", (unsigned)top.dbg_prot_addr); }
 			prev_pb = pb;
 		}
+		{	// NMK214 config writes (the NMK-215's port 3/7 strobe), under TB_LOG_HOST
+			static bool prev_cw = false;
+			bool cw = top.dbg_nmk214_cfg_we;
+			if (cw && !prev_cw && log_host) std::fprintf(stderr, "F%03u NMK214 cfg %02x\n", frame_count, (unsigned)top.dbg_nmk214_cfg_data);
+			prev_cw = cw;
+		}
 		bool halt_now = top.dbg_halt_68k;
 		if (halt_now && !halt_prev) {
 			halt_asserts++;

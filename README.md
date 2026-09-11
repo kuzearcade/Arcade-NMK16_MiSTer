@@ -33,20 +33,20 @@ the built core.
 ## Status
 
 Three cores run on real hardware and match MAME frame by frame in the
-scenes that can be compared. 35 game sets ship as `releases/*.mra`
+scenes that can be compared. 48 game sets ship as `releases/*.mra`
 files, one per MAME set:
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
 | `Macross2` | 68000 + Z80 sound, YM2203, 2x OKIM6295 with NMK112 banking; hi-res and Power Instinct's 320-px board as runtime modes | Thunder Dragon 2 (tdragon2, tdragon2a), Big Bang (bigbang, bigbanga), Super Spacefortress Macross II (macross2, macross2g, macross2k), Power Instinct / Gouketsuji Ichizoku (powerins, powerinsj, powerinspu, powerinspj) |
 | `Raphero` | Bare TLCS-90 sound CPU, 14 MHz 68000 | Rapid Hero (raphero, rapheroa), Arcadia (arcadian) |
-| `Gunnail` | NMK004 sound MCU, YM2203, 2x OKIM6295; NMK-215/113/110 protection MCUs with dual NMK214; hi-res per-line scroll (GunNail) and the nine lowres NMK004 boards as runtime game modes (two BG layers, Bio-ship's ROM tilemap) | GunNail (gunnail, gunnailp), Super Spacefortress Macross (macross), Black Heart (blkheart, blkheartj), US AAF Mustang (mustang, mustangs), Bio-ship Paladin / Space Battle Ship Gomorrah (bioship, sbsgomo), Vandyke (vandyke, vandykejal, vandykejal2), Acrobat Mission (acrobatm), Koutetsu Yousai Strahl (strahl, strahlj, strahlja), Thunder Dragon (tdragon, tdragon1), Hacha Mecha Fighter (hachamf, hachamfa, hachamfp) |
+| `Gunnail` | NMK004 sound MCU, YM2203, 2x OKIM6295; NMK-215/113/110 protection MCUs with dual NMK214; hi-res per-line scroll (GunNail), the nine lowres NMK004 boards, the Bombjack Twin boards (no sound CPU, 68000-driven OKIs with NMK112, one 8x8 two-ROM tile layer) and Task Force Harrier's Z80 + YM2203 sound board with its MCU simulation, all as runtime game modes | GunNail (gunnail, gunnailp), Super Spacefortress Macross (macross), Black Heart (blkheart, blkheartj), US AAF Mustang (mustang, mustangs), Bio-ship Paladin / Space Battle Ship Gomorrah (bioship, sbsgomo), Vandyke (vandyke, vandykejal, vandykejal2, vandykeb), Acrobat Mission (acrobatm), Koutetsu Yousai Strahl (strahl, strahlj, strahlja), Thunder Dragon (tdragon, tdragon1), Hacha Mecha Fighter (hachamf, hachamfa, hachamfp, hachamfb), Bombjack Twin (bjtwin, bjtwina, bjtwinp, bjtwinpa), Saboten Bombers / Cactus (sabotenb, sabotenba, cactus), Nouryoku Koujou Iinkai (nouryoku, nouryokup), Task Force Harrier (tharrier, tharrieru) |
 
 Every parent set has been loaded on a DE10-Nano through its `.mra`,
 drawn its title and attract sequence in native screenshots and played
 sound; the clones share their parent's hardware and differ only in ROM
-contents (hachamfa, strahlja and vandykejal2 have not been run on the
-board yet). Each core is pixel-identical to MAME in simulation for the
+contents (hachamfa, strahlja, vandykejal2, bjtwina and sabotenba have
+not been run on the board yet). Each core is pixel-identical to MAME in simulation for the
 whole attract sequence that timing allows, and pixel-identical in
 hardware screenshots of static scenes (`docs/hw-bringup.md` has the
 per-game results). Audio is compared band by band against MAME
@@ -56,18 +56,19 @@ A further set of games is ported and verified in Verilator against MAME
 traces but has not yet been built for hardware. Their RTL lives under
 `rtl/<game>/` with a matching testbench under `sim/rtl/<game>/`:
 
-- Family D (NMK-215 protection, no NMK004): hachamfb, bjtwin
 - Family E (Seibu-style Z80 + YM3812 bootlegs): mustangb, tdragonb,
   acrobatmbl, strahljbl, gunnailb
 - Family C (Z80 direct sound): powerins (its own zero-latency reference
   port; the game ships on the Macross2 rbf through the shared
   tdragon2_core's `game_powerins` mode — see docs/hw-bringup.md)
-- Family A (no sound CPU): cactus / bjtwin prototypes
 
 Family B (the lowres NMK004 boards) and the NMK004 half of Family D
-went to hardware on 2026-09-11 as runtime game modes of the Gunnail
-rbf (`rtl/gunnail/gunnail_core.sv`'s game table; their original
-single-game sims under `rtl/<game>/` remain as register references).
+went to hardware on 2026-09-11, Family A (Bombjack Twin) and Family G
+(Task Force Harrier, the Vandyke bootleg) on 2026-09-12, all as runtime
+game modes of the Gunnail rbf (`rtl/gunnail/gunnail_core.sv`'s game
+table; their original single-game sims under `rtl/<game>/` remain as
+register references). tharrierb (Lettering bootleg) needs an M68705
+core and is not included.
 The hardware path (SDRAM ROM caches, clock-domain crossing, wait
 states, OKI fetch stalls, the `.mra` loader layout) is shared, so
 bringing the remaining games to hardware is mostly wiring and

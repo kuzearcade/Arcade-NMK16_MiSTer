@@ -133,6 +133,27 @@ module video_macross2 #(
 	// 2-pixel column pair of their sprites came out swapped on hardware
 	// (2026-09-11: "corrupted sprites, lines through them").
 	input        spr_swap,
+	// Bombjack Twin family (2026-09-11): the 8x8, 64x32 "TX" tilemap is
+	// the game's only BG layer (VIDEO_START bjtwin) — opaque, y-scrolled
+	// (bjtwin_scroll_w: scrolly = -data), and tile code bit 11 selects a
+	// second 8x8 tile ROM (the "bgtile" region, tile index | bg_bank << 11,
+	// bjtwin_get_bg_tile_info) which the NMK214 descrambles; the 16x16
+	// layer is not drawn and the sprites go OVER this layer. tx_bank_off:
+	// the bgtile region's byte offset from the fgtile region's base in
+	// SDRAM (HW_ROMS=1); at HW_ROMS=0 bank-1 tiles read the bgtile array.
+	input        tx_bg_mode,
+	input [7:0]  tx_yscroll,
+	input [23:0] tx_bank_off,
+	// get_sprite_flip (tharrier): flipx = attr bit 8, flipy = attr bit 9.
+	input        spr_flip_en,
+	// Single-buffered sprite table (screen_update_bjtwin draws
+	// m_spriteram_old, one DMA behind instead of two): a finished plane is
+	// swapped in at the next visible-area start (vis_start: hcount 0 of
+	// line 16) instead of the next DMA trigger, so the table copied at
+	// DMA j is on screen during frame j+1 whenever the pass finishes in
+	// the 52 lines between them (and one frame later otherwise).
+	input        spr_lag1,
+	input        vis_start,
 	// Layer B (BG2_LAYER=1)
 	input        bg2_en,
 	input        bga_rom2,         // HW_ROMS=0: layer A reads the bg2tile array (bioship's ROM tilemap draws gfx3)
@@ -356,7 +377,7 @@ module video_macross2 #(
 		initial if (FGTILE_FILE  != "") $readmemh(FGTILE_FILE,  fgtile_rom);
 		initial if (BGTILE_FILE  != "") $readmemh(BGTILE_FILE,  bgtile_rom);
 		initial if (SPRITES_FILE != "") $readmemh(SPRITES_FILE, sprites_rom);
-		assign fgtile_rom_byte  = fgtile_rom[fg_byte_addr_sim[16:0]];
+		assign fgtile_rom_byte  = (tx_bg_mode & txvram_data[11]) ? bgtile_rom[tx_rel_addr(txvram_data, tx_py, tx_px[2:1])] : fgtile_rom[fg_byte_addr_sim[16:0]];
 		assign sprites_rom_byte = sprites_rom[spr_byte_addr];
 		assign sprites_rom_word = {sprites_rom[{spr_byte_addr[22:1], 1'b0}], sprites_rom[{spr_byte_addr[22:1], 1'b1}]}; // get_u16be
 		assign sprites_ready = 1'b1;
@@ -499,7 +520,7 @@ module video_macross2 #(
 		tile_prefetch_byte #(.TAG_W(19), .ENTRIES(8)) fgtile_cache_inst (
 			.base_word(base_word_fgtile),
 			.clk(clk_sys), .reset(reset),
-			.pf_tag(tx_look_tag), .pf_byte_addr({7'd0, fgl_byte_addr}), .pf_vram(txvram_data),
+			.pf_tag(tx_look_tag), .pf_byte_addr(fgl_byte_addr), .pf_vram(txvram_data),
 			.use_tag(tx_use_tag), .use_sel(tx_px[2:1]), .data(fgtile_rom_byte), .vram(tx_vram_use), .hit(tx_hit),
 			.sd_addr(arb_addr[0]), .sd_req(arb_req[0]), .sd_busy(arb_busy[0]), .sd_valid(arb_valid[0]), .sd_dout(arb_dout[0]), .sd_dout_pair(arb_dout_pair[0])
 		);
@@ -549,6 +570,17 @@ module video_macross2 #(
 	// g_video_rom_sim/g_video_rom_hw above for the actual byte lookup
 	// (fgtile_rom_byte) this address feeds.
 	wire [16:0] fg_byte_addr_sim = {txvram_data[11:0], 5'd0} + {12'd0, tx_py, 2'd0} + {15'd0, tx_px[2:1]};
+	// tx_bg_mode: byte address within the selected ROM region — bank 1
+	// tiles ({bg_bank[4:0], code[10:0]}, 65536 tiles, the 2 MB "bgtile"
+	// ROMs) or bank 0 (code[10:0] of the 64 KB fgtile ROM).
+	function automatic [23:0] tx_rel_addr(input [15:0] word, input [2:0] py, input [1:0] px2);
+		reg [15:0] idx;
+		begin
+			idx = word[11] ? {bg_bank[4:0], word[10:0]} : {5'd0, word[10:0]};
+			tx_rel_addr = {3'd0, idx, 5'd0} + {19'd0, py, 2'd0} + {22'd0, px2};
+		end
+	endfunction
+	wire [7:0] tx_byte_eff; // the TX pixel's byte after the (optional) NMK214 — assigned in the descrambler blocks below
 
 	// ------------------------------------------------------------------
 	// BG tile-fetch address — gfx_8x8x4_col_2x2_group_packed_msb layout:
@@ -710,7 +742,7 @@ module video_macross2 #(
 	// the logical x is taken modulo 256 and the column has 5 bits.
 	wire [9:0] tx_sum = bm_x + 10'd512 - VIDEOSHIFT[9:0];
 	wire [8:0] tx_line_x = lowres ? {1'b0, tx_sum[7:0]} : tx_sum[8:0]; // mod 512 (logical width), truncation is the modulo
-	wire [7:0] tx_line_y = bm_y[7:0];   // 256 logical height, no scroll — bitmap y directly
+	wire [7:0] tx_line_y = bm_y[7:0] + tx_yscroll;   // 256 logical height; tx_yscroll only in tx_bg_mode (bjtwin), else 0 — bitmap y directly
 	wire [5:0] tx_col = tx_line_x[8:3]; // 6 bits — 64 columns
 	wire [2:0] tx_px  = tx_line_x[2:0];
 	wire [4:0] tx_row = tx_line_y[7:3];
@@ -728,10 +760,16 @@ module video_macross2 #(
 	wire [10:0] tx_vram_addr_look = {txl_col, 5'd0} + {6'd0, tx_row};
 	wire [18:0] tx_use_tag  = {5'd0, tx_line_y, tx_line_x[8:3]};
 	wire [18:0] tx_look_tag = {5'd0, tx_line_y, txl_line_x[8:3]};
-	wire [16:0] fgl_byte_addr = {txvram_data[11:0], 5'd0} + {12'd0, tx_py, 2'd0} + {15'd0, txl_px[2:1]};
+	wire [23:0] fgl_byte_addr = tx_bg_mode ? (txvram_data[11] ? tx_bank_off + tx_rel_addr(txvram_data, tx_py, txl_px[2:1]) : tx_rel_addr(txvram_data, tx_py, txl_px[2:1]))
+	                                       : {7'd0, txvram_data[11:0], 5'd0} + {12'd0, tx_py, 2'd0} + {15'd0, txl_px[2:1]};
+	// Use pixel's address within the bgtile region (the NMK214's key) and
+	// its bank, from the VRAM word travelling with the cached byte.
+	wire [23:0] tx_use_rel  = tx_rel_addr(tx_vram_use, tx_py, tx_px[2:1]);
+	wire        tx_use_bank = tx_bg_mode & tx_vram_use[11];
 
-	wire [3:0] tx_pix_nib = tile_nibble(fgtile_rom_byte, tx_px[0]);
-	wire       tx_opaque = (tx_pix_nib != 4'hF);
+	wire [3:0] tx_pix_nib = tile_nibble(tx_byte_eff, tx_px[0]);
+	wire       tx_opaque = tx_bg_mode | (tx_pix_nib != 4'hF); // tx_bg_mode: the layer is opaque (bg_update draws it with no transparent pen)
+	wire       tx_top    = tx_opaque & ~tx_bg_mode;            // ... but the sprites go over it there (priority 1 vs the sprites' pri_mask 2)
 	wire [10:0] tx_pal_addr = tx_pal_base + {3'd0, tx_vram_use[15:12], tx_pix_nib};
 
 	// ------------------------------------------------------------------
@@ -878,7 +916,7 @@ module video_macross2 #(
 	if (!HW_ROMS) begin : g_composite_sim
 		wire [9:0] spr_entry_raw = sprite_plane[rd_addr + (disp_buf ? PLANE_PX : 0)];
 		assign spr_entry      = !rd_in_range ? PLANE_EMPTY : spr_entry_raw;
-		assign tx_opaque_al   = tx_opaque;
+		assign tx_opaque_al   = tx_top;
 		assign tile_rgb_al    = tile_rgb;
 		assign rd_in_range_al = rd_in_range;
 		assign spr_valid_al   = (spr_entry[3:0] != 4'hF);
@@ -892,7 +930,7 @@ module video_macross2 #(
 		reg        rd_in_range_r;
 		reg        bg_hit_r, tx_hit_r;
 		always @(posedge clk_sys) begin
-			tx_opaque_r   <= tx_opaque;
+			tx_opaque_r   <= tx_top;
 			rd_in_range_r <= rd_in_range;
 			bg_hit_r      <= bg_hit;
 			tx_hit_r      <= tx_hit;
@@ -979,9 +1017,11 @@ module video_macross2 #(
 	// with flipx through gfx->transpen) and the units are placed right to
 	// left (sx += delta*w, xinc negated) while the code walk order stays
 	// ascending. Destination columns are not mirrored.
-	reg     s_flipx;
+	reg     s_flipx, s_flipy;
 	integer s_px_src;  // source column of the pixel being examined
+	integer s_py_src;  // source row (mirrored when flipy — spr_flip_en, get_sprite_flip)
 	always @(*) s_px_src = s_flipx ? (15 - s_px) : s_px;
+	always @(*) s_py_src = s_flipy ? (15 - s_py) : s_py;
 	// Sprite ROM byte address, COMBINATIONAL from the pixel counters so
 	// the cache's `ready` (which follows its address input) is valid in
 	// the same cycle the pixel is examined: one cycle per cached pixel in
@@ -998,7 +1038,7 @@ module video_macross2 #(
 	always @(*) spr_units = game_powerins ? 65536 : cfg_rt ? int'(spr_units_i) : SPR_UNITS;
 	wire [31:0] s_unit_wrapped = (s_unit_code >= 2*spr_units) ? s_unit_code - 2*spr_units :
 	                             (s_unit_code >= spr_units)   ? s_unit_code - spr_units : s_unit_code;
-	wire [31:0] spr_byte_addr_full = s_unit_wrapped * 128 + ((s_px_src >= 8) ? 64 : 0) + s_py * 4 + ((s_px_src & 7) >> 1);
+	wire [31:0] spr_byte_addr_full = s_unit_wrapped * 128 + ((s_px_src >= 8) ? 64 : 0) + s_py_src * 4 + ((s_px_src & 7) >> 1);
 	assign spr_byte_addr = spr_byte_addr_full[22:0];
 
 	// ------------------------------------------------------------------
@@ -1020,8 +1060,8 @@ module video_macross2 #(
 		) nmk214_bg (
 			.clk(clk_sys), .reset(reset),
 			.cfg_we(nmk214_cfg_we), .cfg_data(nmk214_cfg_data), .initialized(),
-			.addr(bg_use_byte_addr[20:0]), .din(16'h0), .dout_word(),
-			.din8(bgtile_rom_byte), .dout_byte(bgtile_dec)
+			.addr(tx_bg_mode ? tx_use_rel[20:0] : bg_use_byte_addr[20:0]), .din(16'h0), .dout_word(),
+			.din8(tx_bg_mode ? fgtile_rom_byte : bgtile_rom_byte), .dout_byte(bgtile_dec)
 		);
 		nmk214 #(
 			.MODE(1'b0), .ADDR_WIDTH(21),
@@ -1038,7 +1078,10 @@ module video_macross2 #(
 		wire [7:0] sprites_dec = spr_byte_addr[0] ? spr_dec_word[7:0] : spr_dec_word[15:8];
 		assign bgtile_byte  = nmk214_en ? bgtile_dec  : bgtile_rom_byte;
 		assign sprites_byte = nmk214_en ? sprites_dec : sprites_rom_byte;
+		// tx_bg_mode: only the bank-1 (bgtile ROM) tiles are scrambled
+		assign tx_byte_eff  = (nmk214_en & tx_use_bank) ? bgtile_dec : fgtile_rom_byte;
 	end else begin : g_no_nmk214
+		assign tx_byte_eff  = fgtile_rom_byte;
 		assign bgtile_byte  = bgtile_rom_byte;
 		assign sprites_byte = sprites_rom_byte;
 	end
@@ -1084,6 +1127,7 @@ module video_macross2 #(
 	// may be about to start on). A pass never starts while a copy is in
 	// flight, so a copy's target can never be the buffer being read.
 	wire pass_active = (state != S_IDLE);
+	wire swap_now    = spr_lag1 ? vis_start : sprite_dma_trigger; // see spr_lag1
 	always @(posedge clk_sys) begin
 		if (reset) begin
 			snap_active   <= 1'b0;
@@ -1239,7 +1283,8 @@ module video_macross2 #(
 							s_code   <= game_powerins ? {head_w1[8], head_w3[14:0]} : head_w3;
 							s_colour <= game_powerins ? head_w7[5:0] :
 							            (SPR_COLOUR_BITS == 5) ? head_w7[4:0] : {1'b0, head_w7[3:0]}; // get_colour_5bit / get_colour_4bit
-							s_flipx  <= game_powerins & head_w1[12];
+							s_flipx  <= game_powerins ? head_w1[12] : (spr_flip_en & head_w1[8]);
+							s_flipy  <= spr_flip_en & head_w1[9];
 							// bitmap X+92 / Y, converted to screen coordinates (see
 							// bitmap_x0); coordinate mask and wrap modulus per mode.
 							s_sx <= (int'(head_w4) & spr_coord_mask) + VIDEOSHIFT - bitmap_x0;
@@ -1253,7 +1298,7 @@ module video_macross2 #(
 				S_SPR_UNIT: begin
 					s_unit_code <= s_code + s_ty * (s_w + 1) + s_tx; // code walk order is unchanged by flipx
 					s_pixel_x_base <= (s_sx + (s_flipx ? (s_w - s_tx) : s_tx) * 16) & spr_wrap_mask;
-					s_pixel_y_base <= (s_sy + s_ty * 16) & spr_wrap_mask;
+					s_pixel_y_base <= (s_sy + (s_flipy ? (s_h - s_ty) : s_ty) * 16) & spr_wrap_mask; // flipy: units placed bottom-up (sy += delta*h, yinc negated), code walk unchanged
 					s_px <= 0; s_py <= 0;
 					state <= S_SPR_CHECK;
 				end
@@ -1330,7 +1375,7 @@ module video_macross2 #(
 			// Frame-synchronous plane swap (see pass_done above). Written
 			// after the case so a pass finishing in the trigger's own cycle
 			// is swapped in at once.
-			if (sprite_dma_trigger && (pass_done || state == S_DONE)) begin
+			if (swap_now && (pass_done || state == S_DONE)) begin
 				disp_buf  <= draw_buf;
 				pass_done <= 1'b0;
 			end
@@ -1356,7 +1401,7 @@ module video_macross2 #(
 		lat_snap_ready_d <= snap_ready;
 		if (sprite_dma_trigger) begin
 			$display("SPRLAT dma#%0d: frame %0d showed table from dma#%0d (lag %0d)", lat_dma_seq + 1, lat_dma_seq + 1, lat_disp_seq, lat_dma_seq + 1 - lat_disp_seq);
-			if (pass_done || state == S_DONE) lat_disp_seq = lat_pass_seq;   // same condition as the swap above
+			if (!spr_lag1 && (pass_done || state == S_DONE)) lat_disp_seq = lat_pass_seq;   // same condition as the swap above (lag-2 mode)
 			if (!snap_active) lat_snap_seq = lat_dma_seq + 1;                 // same condition as the snapshot start
 			lat_dma_seq = lat_dma_seq + 1;
 		end

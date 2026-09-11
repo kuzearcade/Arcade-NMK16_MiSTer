@@ -2589,6 +2589,134 @@ its Japanese sets open on a long silent story-text screen: the parent's
 first sound comes at 35 s in MAME and 44 s on the board (the loader's
 ~9 s), strahlj's at 60 s in MAME, just past the 70 s board capture.
 
+## Bombjack Twin, Task Force Harrier, the Vandyke and Hacha Mecha bootlegs on the Gunnail rbf (2026-09-12)
+
+Thirteen more sets joined the Gunnail rbf's game table, in three groups
+that each brought a new piece of hardware to the shared core.
+
+### Bombjack Twin family (bjtwin, bjtwina, bjtwinp, bjtwinpa, sabotenb, sabotenba, cactus, nouryoku, nouryokup)
+
+No sound CPU: the 68000 drives the two OKIM6295 directly (byte
+registers at 0x084001/0x084011) and an NMK112 banks their 1 MB sample
+ROMs (0x084020-2F). The core's `nmk112` instance (the Macross2 rbf's)
+sits in front of both OKI caches on these ids, the OKI write strobes
+and data are muxed from the 68000, and the NMK004 is held in reset.
+
+The video is one 8x8, 64x32 tilemap (VIDEO_START bjtwin) — exactly the
+shared module's "TX" layer geometry, so `tx_bg_mode` turns that layer
+opaque, y-scrolls it (`bjtwin_scroll_w`: -data) and puts the sprites
+over it; tile code bit 11 selects a second 8x8 ROM (`bjtwin_get_bg_
+tile_info`: the "bgtile" region, index | bgbank << 11), which the SDRAM
+layout places directly after the fgtile ROM so the one prefetch stream
+reaches it through a byte offset (`tx_bank_off`). The NMK214 byte
+descrambler is switched onto that stream for bank-1 tiles on the
+NMK-215 sets. Sprites are single-buffered here (`screen_update_bjtwin`
+draws `m_spriteram_old`, one DMA behind instead of two): `spr_lag1`
+swaps a finished plane in at the next visible-area start instead of
+the next DMA trigger.
+
+cactus is a bootleg of sabotenb whose ROM data is byte-for-byte
+sabotenb's (checked: bgtile identical, sprites identical in MAME's
+byte order) but which has no MCU; MAME's `init_nmk` table decode is
+the NMK214 scheme with the configs the NMK-215 sends sabotenb — 0x02
+for the sprites and 0x0E for the tiles, read off the sabotenb
+reference sim's config strobe — so the core writes those two bytes to
+the descramblers after reset (`CACTUS_CFG_*`). cactus and vandykeb use
+the fixed-scanline interrupt table (no PROM on the bootlegs).
+
+### Family G: Task Force Harrier (tharrier, tharrieru) and the Vandyke bootleg (vandykeb)
+
+Task Force Harrier's sound board is a Z80 at 4.9152 MHz (T80, a
+fractional clock enable) with the YM2203 on I/O ports 0/1, the two
+OKIs at 0xF400/0xF500 and their bank registers at 0xF600/0xF700
+(`tharrier_okibank_w`: entries 0-3, a write of 3 ignored), sound
+latches at 0xF000, program ROM through its own byte cache in the SDRAM
+slot the NMK004 program uses elsewhere. The YM write path is muxed
+between the NMK004 and the Z80, the OKI write path between the NMK004,
+the 68000 (bjtwin) and the Z80. The 68000 side (`tharrier_map`) reads
+IN0 active HIGH, the coin/start port through the undumped MCU, and the
+joysticks at 0x080202 — the three ports are rebuilt from the family's
+standard active-low inputs — and the MCU simulation returns MAME's
+15-byte sequence on upper-byte reads of 0x080002, except for the two
+reads at program counters 0x8A4/0x8C8 (MAME keys on 0x8AA/0x8CE, the
+PC after the instruction) which return main RAM word 0x9064 ORed with
+0x20/0x60 without advancing the sequence; the core tracks the last
+instruction-fetch address for that. The BG X scroll comes from main
+RAM word 0x9F00 (`screen_update_tharrier`), snooped from the 68000's
+writes. Sprites use `get_sprite_flip` (attribute bits 8/9), so the
+sprite pass gained a generic flipx/flipy (`spr_flip_en`; units are
+placed bottom-up / right-to-left and the source rows/columns mirrored,
+the code walk unchanged, as nmk16spr.cpp does). One boot trap: IN0 bit
+15 is an `IPT_CUSTOM` with no handler — active low, so it reads 1 —
+and the boot code at 0x88E spins until it does.
+
+vandykeb is vandyke's hardware with the PIC's four scroll words at
+0x080010/12/1A/1C (`vandykeb_scroll_w`), no NMK004 (0x08000E reads 0,
+its lone OKI is never written — MAME marks it no-sound), and the
+fixed-scanline interrupts. Its one input trap: IN0 bit 6 is
+`IP_ACTIVE_HIGH` ("tested on boot" in MAME's port definition), and
+it must read 0 idle. The bootleg's sound-command routine (program
+offset 0x664: `btst #6,$80001` / `bne` back, then `move.b D0,$8001F`)
+spins until the bit clears before writing the command to the PIC's
+latch — the PIC's busy flag. With the family's usual all-ones idle
+word the first sound command never completes: the first board build
+sat forever on a green-striped 256x224 screen 4 s after load, right
+where the boot sequence (ROM 1/2 CHECK, WRAM 1/2 CHECK, a tile page,
+a grid — all normal, MAME walks the same screens before its title at
+frame ~630) issues its first sound command. The IN0 read masks bit 6
+for this game only. Lesson from the diagnosis: a MAME Lua
+`install_read_tap` on an I/O port never fired (0 calls), so "MAME
+behaves the same with the bit forced" was no evidence — the 68000
+disassembly around the port reference was.
+
+tharrierb (the Lettering bootleg) is NOT included: MAME emulates its
+dumped M68705R3 program and this project has no 6805 core.
+
+### hachamfb
+
+hachamf's board with the unprotected bootleg program ROMs: the hachamf
+game id without the MCU, the same SDRAM layout as hachamfp.
+
+### Verification
+
+Reference sims against MAME exact-frame snapshots (`sim/rtl/gunnail_mg`):
+
+| game | frames compared | identical | the rest |
+|---|---|---|---|
+| hachamfb | 20-168, 150-449 | 149 + 286 | 167-183: the title wipe's last TX column (as hachamf) |
+| bjtwin | 20-168, 150-449 | 149 + 297 | 258-261: a scene change (three frames, up to 2k px) |
+| bjtwinp | 20-168, 150-449 | 149 + 297 | same three frames |
+| sabotenb | 20-168, 150-449 | 149 + 280 | 224-246 (demo start) and 2-frame pairs every 20-60 frames, 100-2100 px: the single-buffered sprite swap slipping a frame when the pass runs past the visible-area start |
+| cactus | 20-168, 150-449 | 149 + 284 | the same pairs as sabotenb (same program) |
+| nouryoku | 20-168, 150-449 | 149 + 299 | 186: a scene change |
+| nouryokup | 20-168, 150-449 | 149 + 299 | 186 |
+| tharrier | 20-168, 150-449 | 149 + 300 | |
+| vandykeb | 20-168, 150-449 | 149 + 291 | 380-388: a scene change (as vandyke's 381-389) |
+
+Hardware-path sims: bjtwin (NMK-215 firmware loader, NMK112 OKIs, the
+8x8 layer's two ROMs) 120 of 122 drawn frames identical to the
+reference sim, ROM and OKI golden audits clean (0 wrong bytes); sabotenb 119 of 120 drawn frames
+identical to the reference, OKI audits clean. tharrier's Z80 sound:
+the reference sim's first 12 s of audio against MAME's
+(`tools/audio_compare.py`) correlate 0.94-0.96 in every band below
+7 kHz (0.925 mean over all bands, level within 2.4 dB), i.e. the Z80,
+YM2203 and banked OKIs play the same music.
+
+Build (build 6, with the vandykeb IN0 fix): 25,486 ALMs (61 %, the
+Z80 and NMK112 add ~2.2k), 52 % of the block memory, worst setup slack
++1.8 ns on clk_sys and +2.8 ns on the SDRAM clock. Board (2026-09-11, `$SP/mg_hwtest.sh`: nine native
+screenshots and 60 s of audio per set): hachamfb, bjtwin, bjtwinp,
+bjtwinpa, sabotenb, cactus, nouryoku, nouryokup, tharrier, tharrieru
+and vandykeb all boot through their `.mra`, draw their title/attract
+scenes and (except the sound-less vandykeb) play sound; gunnail and
+vandyke re-checked on the same build. Two board-only lessons: the
+Bombjack Twin attract is a "how to play" demonstration on a black
+playfield with quiet sound, not a hang (MAME's own frames 600-4800
+show the same scene), and `.mra` file names must not carry MAME's
+"prototype?" — the SD card's filesystem rejects `?`, the two files
+silently never copied and the harness recorded the previous core's
+audio. bjtwina and sabotenba (ROM-only clones) were not loaded.
+
 ## Status
 
 Three RBFs run on the DE10-Nano and are tracked in `releases/`:
