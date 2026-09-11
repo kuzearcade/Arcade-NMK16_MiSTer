@@ -36,7 +36,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--zip", required=True, action="append", help="path to a romset zip (repeat for a split clone set: each file is read from the first zip that has it)")
     ap.add_argument("--region", required=True, action="append",
-                     help="OFFSET:file[,file...] — repeat per region; comma-separated files concatenate in order; 'lo+hi' interleaves a ROM_LOAD16_BYTE pair (low-byte chip on even addresses)")
+                     help="OFFSET:file[,file...] — repeat per region; comma-separated files concatenate in order; 'lo+hi' interleaves a ROM_LOAD16_BYTE pair (low-byte chip on even addresses); 'file@OFF/LEN' takes a slice of a file; 'zero/LEN' pads with zeros")
     ap.add_argument("--out", required=True, help="output raw binary file")
     args = ap.parse_args()
 
@@ -76,6 +76,14 @@ def main():
                 out[0::2] = lo
                 out[1::2] = hi
                 buf.extend(out)
+            elif fn.startswith("zero/"):
+                # "zero/LEN": LEN zero bytes (an unfilled tail of a region)
+                buf.extend(b"\x00" * int(fn[5:], 0))
+            elif "@" in fn:
+                # "file@OFF/LEN": LEN bytes of the file from OFF (a ROM_CONTINUE chunk)
+                name, rest = fn.split("@", 1)
+                off, ln = (int(v, 0) for v in rest.split("/", 1))
+                buf.extend(read_member(name)[off:off + ln])
             else:
                 buf.extend(read_member(fn))
 

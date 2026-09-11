@@ -534,6 +534,7 @@ module hachamf_core #(
 		.P7_EXT_EN(1'b1), .P7_EXT_VAL(8'h0C)
 	) prot_mcu (
 		.clk(prot_clk_r), .reset(reset),
+		.p7_ext_en_i(1'b0), .p7_ext_val_i(8'h00),
 		.bus_addr(prot_addr), .bus_rd(prot_rd), .bus_wr(prot_wr),
 		.bus_wdata(prot_wdata), .bus_rdata(prot_rdata),
 		.vpos_div4(vt_vcount[9:2]),
@@ -600,7 +601,7 @@ module hachamf_core #(
 		.VTIMING_FILE(VTIMING_FILE)
 	) irq_gen (
 		.clk_sys(clk_sys),
-		.table_sel(1'b0),
+		.table_sel(3'd0),
 		.reset(reset),
 		.line_start(vt_line_start),
 		.vcount(vt_vcount),

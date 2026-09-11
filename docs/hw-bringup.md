@@ -2389,12 +2389,199 @@ native `screenshot` command returns 384 x 224 / 320 x 224 images
 matching the scenes on screen. The previous RBF is kept on the box as
 `Macross2.rbf.pre_retime`.
 
+## The nine lowres NMK004 boards on the Gunnail rbf (2026-09-11)
+
+Macross, Black Heart, US AAF Mustang, Bio-ship Paladin, Vandyke,
+Acrobat Mission, Koutetsu Yousai Strahl, Thunder Dragon (the
+unprotected set and the NMK-110 protected one) and Hacha Mecha Fighter
+all share GunNail's sound and protection hardware (NMK004, YM2203, two
+OKIM6295, a TLCS-90 protection MCU on some) and differ from it in
+memory map, 68000 clock, screen geometry and a few video details. They
+now run as runtime game modes of `rtl/gunnail/gunnail_core.sv` —
+`game_sel`, from the `.mra` `<switches>` third byte — the same way
+Power Instinct joined the Macross2 rbf, rather than as nine more RBFs.
+Their earlier single-game sims under `rtl/<game>/` (hi-res geometry,
+never built for hardware) stay as register references.
+
+### What the game table muxes
+
+Every value is transcribed from nmk16.cpp (machine configs, memory
+maps, GFXDECODE tables, ROM_START blocks) and lives in the `g_*`
+wires and `case` blocks at the top of the core:
+
+- 68000 clock: 10 MHz (`clk_sys/4`, as gunnail), 8 MHz (`/5`, phases at
+  counts 4 and 2: blkheart, mustang, tdragon, tdragon1) or 12 MHz (the
+  3/10 accumulator tdragon2_core uses for Power Instinct: strahl).
+- Memory map: one `decode()` function keyed on a map id, used for both
+  the 68000 and the protection MCU's shared bus. macross_map (macross,
+  blkheart, hachamf), mustang_map (DSW1 only, at +4, one 16-bit port),
+  bioship_map (bank register at 0x084001, two scroll blocks on the HIGH
+  byte), vandyke_map (four scroll words, TX VRAM at 0x09D000, an
+  unknown 16 KB RAM at 0x094000), acrobatm_map (I/O and VRAM at
+  0x0C0000+), strahl_map (two scroll blocks, two BG VRAMs, palette at
+  0x08C000), tdragon_map (main RAM at 0x080000 mirrored over
+  0x080000-0x0BFFFF, I/O at 0x0C0000 mirrored at 0x0E0000).
+- `mainram_strange_w` (macross/mustang/bioship/vandyke maps): a 68000
+  byte write to main RAM stores the byte in both halves — the 68000
+  replicates the byte on both bus halves and this board's RAM takes
+  both — so UDS/LDS are ignored there.
+- Scroll registers in four formats: the byte-sequenced `scroll_w<L>`
+  (low byte; bioship on the high byte), vandyke's `x = v0*256 +
+  (v1>>8)`, mustang's one selector word. GunNail keeps its per-line
+  tables (`raster_scroll` is now a runtime input of the video module).
+- NMI level inverted for bioship (`nmk004_bioship_x0016_w`), sprite
+  DMA source 0xF000 for strahl (`m_sprdma_base`), OKI regions of
+  0xA0000 bytes for strahl (the physical address is 20 bits now — the
+  old 19-bit one would have wrapped bank 3).
+- V-PROMs: `nmk_irq` selects one of eight 256-byte tables (633ab1c9,
+  98ed1c97, e6ead349, mustangs' de156d99) from a 2048-line file;
+  strahl has no dumped PROM and uses MAME's fixed scanline table
+  (`nmk_irq_hacky`, instantiated alongside and muxed).
+- Protection: one `nmk_prot_core` serves the NMK-215 (gunnail,
+  macross: 8 KB ROM, 256 B RAM at 0xFEC0) and the NMK-110/113
+  (tdragon1, hachamf: 16 KB, 512 B at 0xFDC0) with the TMP91640 sizes
+  as a superset; port 7 reads 0x0C for hachamf (NMK-113's codepath
+  select), and it is held in reset on the boards without one. The
+  firmware is read into its on-chip array from SDRAM after reset (a
+  small loader on the port-3 arbiter, 68000 and MCU held in reset for
+  the ~2.5 ms it takes) — NOT copied from the download stream as the
+  first build did: on the board the game id (the `.mra` switches block,
+  ioctl index 254) is not there yet while the ROM streams in, so the
+  copy used gunnail's offset and tdragon1/hachamf booted with a slice
+  of their BG tiles as firmware — black and silent on the board while
+  the hardware sim, whose game id is a build parameter, played. The
+  MCU's reads of the 68000 ROM also go through the byte cache with
+  address bit 0 inverted now (the SDRAM word holds the low-byte chip in
+  its low half; the old wiring returned every byte pair swapped, unused
+  by the NMK-215 but real for the NMK-110/113).
+  The GunNail protection trace with the superset sizes is identical to
+  the previous build's over 85 frames, so the NMK-215 never touches
+  the addresses the larger internal ROM/RAM now hide.
+- NMK214 bypass: the descramblers apply SOME bitswap even unconfigured
+  (nmk214.sv follows the reference: no initialized guard), so the
+  video module got an `nmk214_en` input that routes the plain ROM
+  bytes around them on the boards without an NMK-215.
+- SDRAM layout per game (`BASE_BYTE_*` case block), contiguous in
+  `.mra` part order: maincpu, NMK004 program, NMK004 boot ROM,
+  [protection ROM], fgtile, bgtile, [bg2tile], [tilerom], sprites,
+  oki1, oki2, each exactly its ROM_START file total.
+
+### Video: the lowres window, runtime layer configuration, a second BG layer
+
+`set_screen_lowres` is 384 x 278 at 6 MHz with 256 visible pixels from
+x 92 — the same 64 us line as the 512 x 8 MHz raster the core already
+draws, so the raster is unchanged and the window is hcount 92..347
+(`lowres` on `video_macross2.sv`: screen_w_vis 256, bitmap_x0 92,
+max_sprite_clock 384*263, a 32-column TX tilemap). scrolldx and the
+sprite videoshift are both 92, so tilemap x = screen x + scroll and a
+sprite at X lands at screen X. Palette bases, BG tile-code masks
+(MAME's `code % elements`) and the sprite unit count became runtime
+inputs (`cfg_rt`; every earlier instantiation ties it 0 and is
+unchanged): gfx_macross for most, gfx_bioship (TX 0x300, VRAM layer
+0x100, sprites 0x200, ROM tilemap 0x000) and gfx_strahl (TX 0x000,
+bgvram0 0x300, sprites 0x100, bgvram1 0x200).
+
+bioship and strahl draw two BG layers (`screen_update_strahl`): layer A
+opaque underneath, layer B with pen 15 transparent above it, then TX
+and the sprites (both layers take tilemap priority 1, so the sprites'
+pri_mask passes over both). `BG2_LAYER=1` builds a second pipeline in
+the video module — its own VRAM port, scroll, code mask, palette base,
+tile ROM region and prefetch stream, which shares SDRAM port 1 with
+the sprite fetch (real-time stream first; the sprite pass just runs
+slower on those two games, whose MAME budget is 25 % smaller anyway).
+The core has a second 8192-word VRAM for it: strahl's bgvideoram1,
+vandyke's unknown RAM (plain read/write, never drawn), and bioship's
+ROM tilemap. That last one is MAME's `bioship_get_bg_tile_info`
+reading tile indices from the "tilerom" region at `(bank << 13) |
+tile_index` on every tile fetch; the hardware path cannot afford a
+second real-time index stream from SDRAM, so the selected 8192-word
+page is copied into that VRAM by a small DMA engine at reset and
+whenever `bioship_bank_w` changes the page — about 2.5 ms through the
+port-3 arbiter, between stages — and layer A draws it from there
+(bioship's layer A draws bg2tile and its VRAM layer bgtile; the
+video-side VRAM ports are swapped per game in the core).
+
+The output retimer from NMK-18 runs here at 48 MHz (`rtl/pll_video48.v`;
+`video_retime` took its geometry as parameters): 8 MHz pixels (/6) for
+gunnail's 512-px line, 6 MHz (/8) for the 384-px lowres line, 3072
+clk_vid per line either way. The lowres hsync sits at pixels 20..43 of
+the 92-px leading blank (an 8 us back porch, as gunnail's 8.5 us — the
+21 us lowres blanking cannot hold a pulse 3.5 us after the active end
+without crossing the line wrap). The eight retimer unit-test
+configurations (both PLL sets, both modes, with and without trims)
+pass.
+
+Inputs: every IN1 layout in the set is the same, acrobatm also reads
+button 3 ("used by secret code"), so the CONF_STR became "Button 1,
+Button 2, Button 3, Start, Coin" and all 21 Gunnail `.mra` files carry
+that five-entry list (Space / Q on the keyboard). mustang reads its
+single 16-bit DSW port with SW1 in the high byte, so its second switch
+byte rides in dsw1's high half. Orientation is hidden and rotation
+forced off for the horizontal games (blkheart, mustang, bioship,
+strahl, hachamf).
+
+### Verification
+
+Reference sims (`sim/rtl/gunnail_mg`, one build per game on the
+shared core at HW_ROMS=0) against MAME exact-frame snapshots, 120M
+clk_sys (~170 frames) each, compared with a PNG/PPM pixel diff:
+
+| game | frames compared | identical | the rest |
+|---|---|---|---|
+| gunnail | 85 | 85 | (bit-identical to the previous build) |
+| macross | 150-449 | 299 | frame 373, a screen-wipe column one frame early |
+| blkheart | 150-449 | 300 | |
+| mustang | 150-449 | 300 | |
+| bioship | 150-449 | 300 | |
+| vandyke | 150-449 | 291 | 381-389, a scene change (MAME's frame numbering slips by one across it) |
+| acrobatm | 150-449 | 299 | frame 249, a scene change |
+| strahl | 150-449 | 289 | 316-322, 396-398, 429: scene changes (sprite-DMA frame skew) |
+| tdragon | 150-449 | 300 | |
+| tdragon1 | 150-449 | 300 | |
+| hachamf | 150-449 | 300 | (its title wipe's last TX column, written at VBOUT time, shows one frame later than MAME's whole-frame render — frames 133-149 of the short run) |
+
+The comparison starts at frame 150 because each game boots black for
+20-70 frames while MAME shows its uninitialised RAM, and the reference
+sim reads the `.mra` DIP defaults (`SIM_DSW`; every switch off gave
+macross the Japanese logo and acrobatm a different DIP-menu page).
+
+The pre-boot frames differ because MAME's initial RAM contents are not
+ours; from the first frame the game draws itself, every frame is
+identical except the single transition frames noted. GunNail on the
+refactored core is bit-identical to the previous build (video,
+protection-MCU, 68000 and NMK004 traces over 85 frames). Hardware-path
+sims (`sim/rtl/gunnail_mg_hw`, real SDRAM model, the `.mra` byte
+stream) of bioship and strahl exercise the tilemap DMA, the second
+VRAM and the shared sprite port: strahl's 82 drawn frames are identical
+to the reference sim's, bioship's first drawn frames land in the run's
+last two (the download costs 35 frames) and the ROM/OKI golden audits
+are clean (0 wrong words/bytes, 0 unserved samples). tdragon1's
+hardware-path protection-bus trace (966 accesses in 60M cycles) is
+identical to the reference sim's, before and after the firmware
+loader.
+
+Build: 23,186 ALMs (55 %), 52 % of the block memory, 4 PLLs, worst
+setup slack +1.95 ns on clk_sys and +3.1 ns on the 96 MHz SDRAM clock
+(the framework's HDMI PLL at +0.59 ns is the reported worst). Board:
+all eleven parent sets (gunnail, macross, blkheart, mustang, bioship,
+vandyke, acrobatm, strahl, tdragon, tdragon1, hachamf) and the seven
+clones tested (gunnailp, hachamfp, mustangs, blkheartj, sbsgomo,
+vandykejal, strahlj) boot through the `.mra` loader, draw their title
+and attract sequences in native screenshots and play sound — the two
+protected games only after the firmware-loader fix above (`$SP/
+mg_hwtest.sh`: 9 screenshots and 60 s of audio per set). strahl and
+its Japanese sets open on a long silent story-text screen: the parent's
+first sound comes at 35 s in MAME and 44 s on the board (the loader's
+~9 s), strahlj's at 60 s in MAME, just past the 70 s board capture.
+
 ## Status
 
 Three RBFs run on the DE10-Nano and are tracked in `releases/`:
-`Macross2` (tdragon2, macross2 and their clones — one runtime-selected
-core), `Raphero` (raphero, rapheroa, arcadian) and `Gunnail` (gunnail,
-gunnailp). Each one boots through the `.mra` loader with its ROM image
+`Macross2` (tdragon2, macross2, powerins and their clones — one
+runtime-selected core), `Raphero` (raphero, rapheroa, arcadian) and
+`Gunnail` (gunnail, gunnailp and, since 2026-09-11, the nine lowres
+NMK004 boards with their clones — 21 sets on one runtime-selected core,
+see "The nine lowres NMK004 boards on the Gunnail rbf" above). Each one boots through the `.mra` loader with its ROM image
 matching simulation, renders its attract demo without the smearing,
 tearing or missing-sprite problems the sections above walk through,
 and is pixel-identical to MAME in native screenshots of the scenes

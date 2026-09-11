@@ -114,7 +114,7 @@ module gunnail_hw_top #(
 	gunnail_core #(.HW_ROMS(1), .VTIMING_FILE("roms/gunnail_vtiming.hex"),
 	               .ROM_FILE("../gunnail/roms/gunnail_maincpu.hex"),
 	               .OKI1_ROM_FILE("../gunnail/roms/gunnail_oki1.hex"), .OKI2_ROM_FILE("../gunnail/roms/gunnail_oki2.hex")) core_inst (
-		.clk_sys(clk_sys), .reset(reset),
+		.clk_sys(clk_sys), .reset(reset), .game_sel(4'd0), .lowres_o(),
 		.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
 		.ioctl_index(16'd0),
 		.sd0_addr(p0_addr), .sd0_wrl(p0_wrl), .sd0_wrh(p0_wrh), .sd0_din(p0_din), .sd0_dout(p0_dout), .sd0_dout_pair(p0_dout_pair), .sd0_req(p0_req), .sd0_ack(p0_ack),

@@ -27,7 +27,18 @@
 // even, so the parity sequence is consistent across the frame wrap):
 // line L is written into buf[L&1] during write line L and read back
 // during write line L+1, while the writer fills buf[(L+1)&1].
-module video_retime (
+// Parameters (2026-09-11, the Gunnail rbf): the two modes' geometry and
+// the clk_r count per line are parameters — the defaults are the
+// Macross2 rbf's (56 MHz clk_r: 512 px / 7 and 448 px / 8); Gunnail.sv
+// passes a 48 MHz set (512 px / 6 for gunnail, 384 px / 8 for the lowres
+// boards, 3072 clk_r per line). mode1 selects the second set.
+module video_retime #(
+	parameter [9:0] M0_X0 = 10'd28,  M0_HT = 10'd512, M0_HS = 10'd440, M0_HW = 10'd32, M0_AW = 10'd384,
+	parameter [3:0] M0_DIV = 4'd7,
+	parameter [9:0] M1_X0 = 10'd60,  M1_HT = 10'd448, M1_HS = 10'd404, M1_HW = 10'd28, M1_AW = 10'd320,
+	parameter [3:0] M1_DIV = 4'd8,
+	parameter integer LINE_CLKS = 3584   // clk_r per line: M0_HT*M0_DIV == M1_HT*M1_DIV
+) (
 	// write side — the core's raster
 	input         clk_w,
 	input         reset_w,
@@ -35,7 +46,7 @@ module video_retime (
 	input  [9:0]  hcount_w,         // 0..511, steps at ce_w
 	input  [9:0]  vcount_w,         // 0..277, steps at the hcount wrap
 	input  [23:0] rgb_w,            // pixel hcount_w-x0 of line vcount_w, sampled at ce_w
-	input         mode7,            // 1: 448 px / 7 MHz window (powerins); 0: 512 px / 8 MHz
+	input         mode1,            // 1: the M1_* geometry (powerins / lowres); 0: M0_*
 	input  [3:0]  hshift_sel,       // OSD H Shift, two's complement x2 px
 	input  [5:0]  vshift_sel,       // OSD V Shift, 0..20 = 0..+20, 21..40 = -20..-1
 
@@ -50,22 +61,21 @@ module video_retime (
 
 	// Geometry per mode (bitmap coordinates in the board's own pixel
 	// units; the write side always uses the 512-px raster's window).
-	localparam [9:0] W_X0_8 = 10'd28,  W_X0_7 = 10'd60;   // write-side active start (core raster)
-	localparam [9:0] R_X0_8 = 10'd28,  R_X0_7 = 10'd60;   // read-side active start
-	localparam [9:0] R_HT_8 = 10'd512, R_HT_7 = 10'd448;  // read-side HTOTAL
-	localparam [9:0] R_HS_8 = 10'd440, R_HS_7 = 10'd404;  // nominal hsync start (same 3.5 us after active end)
-	localparam [9:0] R_HW_8 = 10'd32,  R_HW_7 = 10'd28;   // hsync width (4 us)
-	localparam [9:0] AW_8   = 10'd384, AW_7   = 10'd320;  // active width
-	localparam [3:0] DIV_8  = 4'd7,    DIV_7  = 4'd8;     // clk_r per pixel
+	localparam [9:0] W_X0_8 = M0_X0,  W_X0_7 = M1_X0;    // write-side active start (core raster)
+	localparam [9:0] R_X0_8 = M0_X0,  R_X0_7 = M1_X0;    // read-side active start
+	localparam [9:0] R_HT_8 = M0_HT,  R_HT_7 = M1_HT;    // read-side HTOTAL
+	localparam [9:0] R_HS_8 = M0_HS,  R_HS_7 = M1_HS;    // nominal hsync start (3.5 us after active end)
+	localparam [9:0] R_HW_8 = M0_HW,  R_HW_7 = M1_HW;    // hsync width (4 us)
+	localparam [9:0] AW_8   = M0_AW,  AW_7   = M1_AW;    // active width
+	localparam [3:0] DIV_8  = M0_DIV, DIV_7  = M1_DIV;   // clk_r per pixel
 	localparam [9:0] VTOTAL = 10'd278;
-	localparam integer LINE_CLKS = 3584;                  // 512*7 = 448*8
 
 	// ------------------------------------------------------------------
 	// Write side
 	// ------------------------------------------------------------------
 	reg [23:0] buf_mem [0:1023];  // 2 lines x 512 slots (index = {line parity, x[8:0]}; x < 384)
-	wire [9:0] w_x0   = mode7 ? W_X0_7 : W_X0_8;
-	wire [9:0] w_aw   = mode7 ? AW_7   : AW_8;
+	wire [9:0] w_x0   = mode1 ? W_X0_7 : W_X0_8;
+	wire [9:0] w_aw   = mode1 ? AW_7   : AW_8;
 	wire [9:0] w_x    = hcount_w - w_x0;
 	wire       w_act  = (hcount_w >= w_x0) && (w_x < w_aw) && (vcount_w >= 10'd16) && (vcount_w < 10'd240);
 	reg        frame_tog = 1'b0;   // toggles at each write-side frame start
@@ -82,7 +92,7 @@ module video_retime (
 	wire frame_edge = ftog_sync[2] ^ ftog_sync[1];
 
 	reg  [1:0] mode_sync = 2'b00;
-	always @(posedge clk_r) mode_sync <= {mode_sync[0], mode7};
+	always @(posedge clk_r) mode_sync <= {mode_sync[0], mode1};
 	wire       m7 = mode_sync[1];
 	wire [9:0] r_x0 = m7 ? R_X0_7 : R_X0_8;
 	wire [9:0] r_ht = m7 ? R_HT_7 : R_HT_8;
