@@ -33,18 +33,24 @@ the built core.
 ## Status
 
 Three cores run on real hardware and match MAME frame by frame in the
-scenes that can be compared:
+scenes that can be compared. 35 game sets ship as `releases/*.mra`
+files, one per MAME set:
 
-| Core (`releases/*.rbf`) | Games (`releases/*.mra`) | Notes |
+| Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
-| `Macross2` | Macross II (3 sets), Thunder Dragon 2 (2 sets), Big Bang (2 sets) | 68000 + Z80 sound, YM2203, 2x OKIM6295 with NMK112 banking |
-| `Raphero` | Rapid Hero (2 sets), Arcadia | Bare TLCS-90 sound CPU at 14 MHz 68000 |
-| `Gunnail` | GunNail (2 sets), Super Spacefortress Macross, Black Heart (2), US AAF Mustang (2), Bio-ship Paladin (2), Vandyke (3), Acrobat Mission, Koutetsu Yousai Strahl (3), Thunder Dragon (2), Hacha Mecha Fighter (3) | NMK004 sound MCU; NMK-215/113/110 protection MCUs, dual NMK214; hi-res per-line scroll and the nine lowres boards as runtime game modes (two BG layers, bioship's ROM tilemap) |
+| `Macross2` | 68000 + Z80 sound, YM2203, 2x OKIM6295 with NMK112 banking; hi-res and Power Instinct's 320-px board as runtime modes | Thunder Dragon 2 (tdragon2, tdragon2a), Big Bang (bigbang, bigbanga), Super Spacefortress Macross II (macross2, macross2g, macross2k), Power Instinct / Gouketsuji Ichizoku (powerins, powerinsj, powerinspu, powerinspj) |
+| `Raphero` | Bare TLCS-90 sound CPU, 14 MHz 68000 | Rapid Hero (raphero, rapheroa), Arcadia (arcadian) |
+| `Gunnail` | NMK004 sound MCU, YM2203, 2x OKIM6295; NMK-215/113/110 protection MCUs with dual NMK214; hi-res per-line scroll (GunNail) and the nine lowres NMK004 boards as runtime game modes (two BG layers, Bio-ship's ROM tilemap) | GunNail (gunnail, gunnailp), Super Spacefortress Macross (macross), Black Heart (blkheart, blkheartj), US AAF Mustang (mustang, mustangs), Bio-ship Paladin / Space Battle Ship Gomorrah (bioship, sbsgomo), Vandyke (vandyke, vandykejal, vandykejal2), Acrobat Mission (acrobatm), Koutetsu Yousai Strahl (strahl, strahlj, strahlja), Thunder Dragon (tdragon, tdragon1), Hacha Mecha Fighter (hachamf, hachamfa, hachamfp) |
 
-Each of these is pixel-identical to MAME in simulation for the whole
-attract sequence that timing allows, and pixel-identical in hardware
-screenshots of static scenes. Audio is compared band by band against
-MAME captures. `SdramTest` is a hardware diagnostic, not a game.
+Every parent set has been loaded on a DE10-Nano through its `.mra`,
+drawn its title and attract sequence in native screenshots and played
+sound; the clones share their parent's hardware and differ only in ROM
+contents (hachamfa, strahlja and vandykejal2 have not been run on the
+board yet). Each core is pixel-identical to MAME in simulation for the
+whole attract sequence that timing allows, and pixel-identical in
+hardware screenshots of static scenes (`docs/hw-bringup.md` has the
+per-game results). Audio is compared band by band against MAME
+captures. `SdramTest` is a hardware diagnostic, not a game.
 
 A further set of games is ported and verified in Verilator against MAME
 traces but has not yet been built for hardware. Their RTL lives under
