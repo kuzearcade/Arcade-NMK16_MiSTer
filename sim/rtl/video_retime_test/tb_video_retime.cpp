@@ -25,12 +25,19 @@ int main(int argc, char **argv) {
 	int hshift = (argc > 2) ? atoi(argv[2]) : 0;   // 0..15 raw OSD value
 	int vshift = (argc > 3) ? atoi(argv[3]) : 0;   // 0..40 raw OSD value
 	Vvideo_retime top{&ctx};
-	const int HT_R = mode7 ? 448 : 512, AW = mode7 ? 320 : 384, X0 = mode7 ? 60 : 28;
-	const int HS_START_NOM = mode7 ? 404 : 440, HS_W = mode7 ? 28 : 32;
+	// argv[4]: clock profile — 0 = the Macross2 rbf's 56 MHz set (built with
+	// the module defaults), 1 = the Gunnail rbf's 48 MHz set (-G overrides:
+	// 512 px / 6 or 384 px / 8, LINE_CLKS 3072; clk ratio 40:48 = 5:6).
+	int profile = (argc > 4) ? atoi(argv[4]) : 0;
+	const int HT_R = profile ? (mode7 ? 384 : 512) : (mode7 ? 448 : 512);
+	const int AW   = profile ? (mode7 ? 256 : 384) : (mode7 ? 320 : 384);
+	const int X0   = profile ? (mode7 ? 92 : 28)   : (mode7 ? 60 : 28);
+	const int HS_START_NOM = profile ? (mode7 ? 20 : 440) : (mode7 ? 404 : 440), HS_W = profile ? (mode7 ? 24 : 32) : (mode7 ? 28 : 32);
+	const int CW_HALF = profile ? 6 : 7, CR_HALF = 5; // ticks per half period: 7:5 (40:56) or 6:5 (40:48)
 	int hshift_px = ((hshift & 8) ? hshift - 16 : hshift) * 2;
 	int vshift_ln = (vshift <= 20) ? vshift : vshift - 41;
 
-	top.clk_w = 0; top.clk_r = 0; top.reset_w = 1; top.ce_w = 0; top.mode7 = mode7;
+	top.clk_w = 0; top.clk_r = 0; top.reset_w = 1; top.ce_w = 0; top.mode1 = mode7;
 	top.hshift_sel = hshift; top.vshift_sel = vshift;
 	top.hcount_w = 0; top.vcount_w = 0; top.rgb_w = 0;
 	top.eval();
@@ -45,11 +52,11 @@ int main(int argc, char **argv) {
 	int lines_in_frame = 0, de_lines_bad = 0;
 
 	int cw = 0, cr = 0; // tick counters
-	const long TOTAL_TICKS = 7L * 2 * 5 * 512 * 278 * 6; // ~6 frames of clk_w
+	const long TOTAL_TICKS = (long)CW_HALF * 2 * 5 * 512 * 278 * 6; // ~6 frames of clk_w
 	for (long t = 0; t < TOTAL_TICKS; t++) {
 		bool w_edge = false, r_edge = false, w_tog = false, r_tog = false;
-		if (++cw == 7) { cw = 0; top.clk_w = !top.clk_w; w_edge = top.clk_w; w_tog = true; }
-		if (++cr == 5) { cr = 0; top.clk_r = !top.clk_r; r_edge = top.clk_r; r_tog = true; }
+		if (++cw == CW_HALF) { cw = 0; top.clk_w = !top.clk_w; w_edge = top.clk_w; w_tog = true; }
+		if (++cr == CR_HALF) { cr = 0; top.clk_r = !top.clk_r; r_edge = top.clk_r; r_tog = true; }
 		if (!w_tog && !r_tog) continue; // every clock transition is evaluated (a skipped falling edge hides the next rising one)
 		if (w_edge) {
 			// drive inputs for this edge (as if registered on the previous one)

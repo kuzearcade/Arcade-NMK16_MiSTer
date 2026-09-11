@@ -47,12 +47,13 @@ module nmk_irq #(
 	input        clk_sys,
 	input        reset,
 
-	// Second V-PROM table (2026-09-11): a shared RBF that serves boards
-	// with different PROMs (Macross2.rbf: tdragon2/macross2 vs powerins)
-	// loads a 512-line VTIMING_FILE — table 0 in lines 0-255, table 1 in
-	// 256-511 — and selects with this input. A 256-line file (every
-	// single-game build and sim) leaves table 1 unused; tie 0.
-	input        table_sel,
+	// Multiple V-PROM tables (2026-09-11): a shared RBF that serves boards
+	// with different PROMs (Macross2.rbf: tdragon2/macross2 vs powerins;
+	// Gunnail.rbf: 633ab1c9 / 98ed1c97 / e6ead349 / de156d99) loads a
+	// VTIMING_FILE of up to 2048 lines — table N in lines 256N..256N+255 —
+	// and selects with this input. A 256-line file (every single-game
+	// build and sim) leaves the other tables unused; tie 0.
+	input  [2:0] table_sel,
 
 	input        line_start,   // pulse at hcount==0, from video_timing
 	input  [9:0] vcount,       // 0..277, from video_timing
@@ -70,7 +71,7 @@ module nmk_irq #(
 	localparam [8:0] VPHASE     = 9'd66;  // see header's "Phase calibration"
 	localparam [8:0] VTOTAL     = 9'd278;
 
-	reg [7:0] vtiming_prom [0:511]; // two 256-entry tables, see table_sel
+	reg [7:0] vtiming_prom [0:2047]; // eight 256-entry tables, see table_sel
 	initial if (VTIMING_FILE != "") $readmemh(VTIMING_FILE, vtiming_prom);
 
 	// y_arg = (vcount + VPHASE) mod VTOTAL — see header. vcount+VPHASE

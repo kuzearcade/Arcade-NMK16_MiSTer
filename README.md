@@ -39,7 +39,7 @@ scenes that can be compared:
 |---|---|---|
 | `Macross2` | Macross II (3 sets), Thunder Dragon 2 (2 sets), Big Bang (2 sets) | 68000 + Z80 sound, YM2203, 2x OKIM6295 with NMK112 banking |
 | `Raphero` | Rapid Hero (2 sets), Arcadia | Bare TLCS-90 sound CPU at 14 MHz 68000 |
-| `Gunnail` | GunNail (2 sets) | NMK004 sound MCU, NMK-215 protection MCU, dual NMK214, per-line scroll |
+| `Gunnail` | GunNail (2 sets), Super Spacefortress Macross, Black Heart (2), US AAF Mustang (2), Bio-ship Paladin (2), Vandyke (3), Acrobat Mission, Koutetsu Yousai Strahl (3), Thunder Dragon (2), Hacha Mecha Fighter (3) | NMK004 sound MCU; NMK-215/113/110 protection MCUs, dual NMK214; hi-res per-line scroll and the nine lowres boards as runtime game modes (two BG layers, bioship's ROM tilemap) |
 
 Each of these is pixel-identical to MAME in simulation for the whole
 attract sequence that timing allows, and pixel-identical in hardware
@@ -50,10 +50,7 @@ A further set of games is ported and verified in Verilator against MAME
 traces but has not yet been built for hardware. Their RTL lives under
 `rtl/<game>/` with a matching testbench under `sim/rtl/<game>/`:
 
-- Family B (NMK004 sound, low resolution): mustang, bioship, vandyke,
-  blkheart, acrobatm, strahl, tdragon
-- Family D (NMK-215 protection): tdragon1, hachamf, hachamfb, macross,
-  bjtwin
+- Family D (NMK-215 protection, no NMK004): hachamfb, bjtwin
 - Family E (Seibu-style Z80 + YM3812 bootlegs): mustangb, tdragonb,
   acrobatmbl, strahljbl, gunnailb
 - Family C (Z80 direct sound): powerins (its own zero-latency reference
@@ -61,6 +58,10 @@ traces but has not yet been built for hardware. Their RTL lives under
   tdragon2_core's `game_powerins` mode — see docs/hw-bringup.md)
 - Family A (no sound CPU): cactus / bjtwin prototypes
 
+Family B (the lowres NMK004 boards) and the NMK004 half of Family D
+went to hardware on 2026-09-11 as runtime game modes of the Gunnail
+rbf (`rtl/gunnail/gunnail_core.sv`'s game table; their original
+single-game sims under `rtl/<game>/` remain as register references).
 The hardware path (SDRAM ROM caches, clock-domain crossing, wait
 states, OKI fetch stalls, the `.mra` loader layout) is shared, so
 bringing the remaining games to hardware is mostly wiring and
@@ -103,8 +104,10 @@ the original VHDL. See `docs/t80-vhdl-toolchain.md`.
 Simulations are run per game, for example:
 
 ```
-make -C sim/rtl/gunnail run        # reference sim, zero-latency ROMs
-make -C sim/rtl/gunnail_hw run     # hardware sim, SDRAM model and caches
+make -C sim/rtl/gunnail run                    # reference sim, zero-latency ROMs
+make -C sim/rtl/gunnail_hw run                 # hardware sim, SDRAM model and caches
+make -C sim/rtl/gunnail_mg GAME=bioship run    # any Gunnail-rbf game on the shared core
+make -C sim/rtl/gunnail_mg_hw GAME=strahl run  # ... on the hardware path
 ```
 
 The simulations read ROM images built from the MAME zips with the

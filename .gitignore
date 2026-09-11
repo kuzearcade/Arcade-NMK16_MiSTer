@@ -78,6 +78,10 @@ PLLJ_PLLSPE_INFO.txt
 # Simulation artifacts
 sim/**/obj_dir/
 sim/**/obj_dir_*/
+sim/**/obj_dir48/
+# per-run logs of the multi-game harnesses (sim/rtl/gunnail_mg*)
+sim/rtl/*/*.err
+sim/rtl/gunnail_mg_hw/unfixed_*/
 sim/**/*.vcd
 sim/**/*.fst
 sim/**/*.log

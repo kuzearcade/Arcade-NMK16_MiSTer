@@ -562,6 +562,7 @@ module macross_core #(
 		.ROM_SIZE(8192), .RAM_BASE(16'hfec0), .RAM_SIZE(256)
 	) prot_mcu (
 		.clk(prot_clk_r), .reset(reset),
+		.p7_ext_en_i(1'b0), .p7_ext_val_i(8'h00),
 		.bus_addr(prot_addr), .bus_rd(prot_rd), .bus_wr(prot_wr),
 		.bus_wdata(prot_wdata), .bus_rdata(prot_rdata),
 		.vpos_div4(vt_vcount[9:2]),
@@ -631,7 +632,7 @@ module macross_core #(
 		.VTIMING_FILE(VTIMING_FILE)
 	) irq_gen (
 		.clk_sys(clk_sys),
-		.table_sel(1'b0),
+		.table_sel(3'd0),
 		.reset(reset),
 		.line_start(vt_line_start),
 		.vcount(vt_vcount),

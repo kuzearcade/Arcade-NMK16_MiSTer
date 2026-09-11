@@ -12,6 +12,8 @@ set_global_assignment -name SEARCH_PATH rtl/third_party/jt6295/hdl
 
 set_global_assignment -name SYSTEMVERILOG_FILE Gunnail.sv
 set_global_assignment -name VERILOG_FILE rtl/pll.v
+set_global_assignment -name VERILOG_FILE rtl/pll_video48.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/video_retime.sv
 
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/gunnail/gunnail_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tlcs90/nmk004_core.sv
@@ -23,6 +25,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/macross2/video_macross2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/nmk112/nmk112.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/bjtwin/video_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/nmk_irq/nmk_irq.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/bjtwin/nmk_irq_hacky.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_req.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_arb.sv

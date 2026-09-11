@@ -1,22 +1,46 @@
-// NMK16 MiSTerFPGA project — GunNail (gunnail, gunnailp) system-level
-// integration, hardware-ready. Built on raphero_core.sv's HW_ROMS
-// machinery (every ROM through caches over rtl/sdram.sv, loaded by
-// ioctl_download; registered on-chip RAMs; sprite-DMA CPU stall; audio
-// mix; real inputs) and rtl/macross2/video_macross2.sv with the
-// gfx_macross parameters (4-bit sprite colour, TX palette at 0x200,
-// 13-bit BG code), RASTER_SCROLL=1 and the two NMK214 descramblers.
-// See docs/hw-bringup.md.
+// NMK16 MiSTerFPGA project — the "Gunnail" rbf's system-level
+// integration, hardware-ready: GunNail (gunnail, gunnailp) and, since
+// 2026-09-11, the nine lowres NMK004 boards as runtime game modes of the
+// same core (game_sel): Super Spacefortress Macross, Black Heart, US AAF
+// Mustang, Bio-ship Paladin, Vandyke, Acrobat Mission, Koutetsu Yousai
+// Strahl, Thunder Dragon (unprotected and NMK-110 protected) and Hacha
+// Mecha Fighter. Built on raphero_core.sv's HW_ROMS machinery (every ROM
+// through caches over rtl/sdram.sv, loaded by ioctl_download; registered
+// on-chip RAMs; sprite-DMA CPU stall; audio mix; real inputs) and
+// rtl/macross2/video_macross2.sv with the gfx_macross parameters (4-bit
+// sprite colour, TX palette at 0x200, 13-bit BG code), RASTER_SCROLL=1
+// and the two NMK214 descramblers. See docs/hw-bringup.md.
 //
-// What the board is (nmk16.cpp gunnail() + gunnail_prot(), cross-checked):
-//   - 68000 at 10 MHz (XTAL(10'000'000), verified on PCB), gunnail_map:
-//     I/O at 0x080000, palette 0x088000, gunnail_scrollram/scrollramy at
-//     0x08C000/0x08C200 (write-only, 256 words each), 0x08C400-0x08C7FF
-//     nopw, BG VRAM 0x090000 (8192 words, no tilerambank), TX VRAM
-//     0x09C000 mirrored at +0x1000, main RAM 0x0F0000 (plain, no swap).
+// What the boards are (nmk16.cpp, cross-checked per game):
+//   - gunnail: 68000 at 10 MHz, gunnail_map: I/O at 0x080000, palette
+//     0x088000, gunnail_scrollram/scrollramy at 0x08C000/0x08C200
+//     (write-only, 256 words each), BG VRAM 0x090000 (8192 words), TX
+//     VRAM 0x09C000 mirrored at +0x1000, main RAM 0x0F0000 (plain).
+//     set_screen_hires, VIDEO_START gunnail (64x32 TX + per-line scroll),
+//     NMK-215 + dual NMK214, V-PROM 633ab1c9.
+//   - The nine others: set_screen_lowres (384 x 278 at 6 MHz, visible
+//     92..347 — the same 64 us line as the 512 x 8 MHz raster, so this
+//     core keeps its raster and draws a 256-px window at hcount 92..347),
+//     32x32 TX tilemap, frame-constant scroll registers in four formats
+//     (byte-sequenced scroll_w<Layer> on the low or the high byte,
+//     vandyke's four words, mustang's one selector word), screen_update
+//     _macross (BG, TX, sprites) or _strahl (two BG layers: bioship's
+//     bottom layer is a ROM tilemap — "tilerom", 8 banks of 8192 tile
+//     indices selected by bioship_bank_w — under its VRAM layer; strahl
+//     has two VRAM layers), gfx_macross / gfx_bioship / gfx_strahl palette
+//     bases, 8/10/12 MHz 68000s, three V-PROMs (strahl: none dumped —
+//     MAME's fixed-scanline set_hacky_interrupt_timing, nmk_irq_hacky.sv),
+//     m_sprdma_base 0xF000 for strahl, bioship's inverted NMI level,
+//     mainram_strange_w (byte writes store the replicated byte in both
+//     halves — the 68000 puts the byte on both bus halves) on the
+//     macross_map boards, strahl's 0xA0000-byte OKI ROMs, hachamf's
+//     NMK-113 (TMP91640, 16 KB ROM, port 7 = 0x0C) and tdragon1's NMK-110
+//     protection MCUs on the same shared-bus mechanism as the NMK-215.
+//     The game table below (g_* / the case blocks) lists every value.
 //   - NMK004 sound MCU (TLCS-90 TMP90C840, rtl/tlcs90/nmk004_core.sv) at
-//     8 MHz: 8 KB internal boot ROM (nmk004.bin) + the game's 64 KB
-//     external program (92077_2.u101), YM2203 at 1.5 MHz, two OKIM6295
-//     at 4 MHz pin 7 low whose upper 128 KB window the NMK004 banks
+//     8 MHz on every board: 8 KB internal boot ROM (nmk004.bin) + the
+//     game's 64 KB external program, YM2203 at 1.5 MHz, two OKIM6295 at
+//     4 MHz pin 7 low whose upper 128 KB window the NMK004 banks
 //     (oki1_map/oki2_map + nmk004's fc01/fc02 bank writes). The NMK004's
 //     P4 bit 0 resets the 68000; 0x080016 bit 0 drives its NMI (a
 //     watchdog kick). Both MCUs run on clk_sys with clock enables here
@@ -25,21 +49,30 @@
 //     mechanism), the protection MCU's 4 MHz enable while a shared-bus
 //     access waits for its RAM port.
 //   - NMK-215 protection MCU (TMP90840, nmk_prot_core.sv, 8 KB ROM
-//     nmk-215.bin, byte-identical to macross's) at 4 MHz: in this game
+//     nmk-215.bin, byte-identical between gunnail and macross) at 4 MHz:
 //     it only loads the two NMK214 descrambler configs at boot through
 //     its port 3/port 7 (a MAME Lua trace over 30 s of attract mode
 //     shows no 68000-bus access at all, and its port 6 writes are
 //     0x03/0x0B — never the 0x08 "halt the 68000" the NMK-110/113
-//     firmware uses). The shared-bus path is still wired (RAM-port steal
-//     with the 68000 held off by DTACK, own ROM cache) so the mechanism
-//     is real if a firmware uses it.
-//   - Video: VIDEO_START gunnail = macross2's 64x32 TX tilemap + the
-//     per-line scroll tables (bg_update: both tables indexed by bitmap
-//     y), gfx_macross bases (BG 0x000, sprites 0x100 x16, TX 0x200),
-//     BG ROM 1 MB (13-bit code), sprite ROM 2 MB, both descrambled
-//     per-fetch by the NMK214s. Same V-PROM as macross (9_82s135.u72).
+//     firmware uses). The shared-bus path is wired (RAM-port steal with
+//     the 68000 held off by DTACK, own ROM cache) and IS used by the
+//     NMK-110/113 firmware (tdragon1/hachamf). One nmk_prot_core instance
+//     serves both parts: 16 KB ROM / 512 B RAM at 0xFDC0 (the TMP91640
+//     sizes, a superset of the TMP90840's 8 KB / 256 B at 0xFEC0 —
+//     verified against the single-game sims' protection traces), the
+//     firmware written into it from the ioctl stream, held in reset on
+//     the boards without one.
 //
-// SDRAM layout (bytes; word offset = byte offset / 2), see BASE_BYTE_*:
+// SDRAM layout (bytes; word offset = byte offset / 2): per game, see the
+// BASE_BYTE_* case block — the regions are always maincpu, NMK004
+// external program (0x10000), NMK004 boot ROM (0x2000, nmk004.zip),
+// [protection MCU ROM], fgtile, bgtile, [bg2tile], [tilerom], sprites,
+// oki1, oki2, in that order, each exactly its ROM_START file total and
+// CONTIGUOUS: the MiSTer .mra loader streams the <part>s back to back
+// with no way to place one at an offset, so any gap in this table shifts
+// every later ROM (the first hardware build had a 0xC000 gap after the
+// protection ROM and drew scrambled BG tiles and sprites from the shifted
+// data while the text layer happened to survive). gunnail's own:
 //   0x000000 maincpu  0x080000 (3o.u133 even / 3e.u131 odd bytes — the
 //                     .mra <interleave> puts the LOW-byte chip on even
 //                     ioctl addresses, which the parity rebuild makes the
@@ -55,11 +88,6 @@
 //   0x1B4000 sprites  0x200000 (ROM_LOAD16_WORD_SWAP)
 //   0x3B4000 oki1     0x080000
 //   0x434000 oki2     0x080000, image ends 0x4B4000
-// The regions are CONTIGUOUS: the MiSTer .mra loader streams the <part>s
-// back to back with no way to place one at an offset, so any gap in this
-// table shifts every later ROM (the first hardware build had a 0xC000
-// gap after the protection ROM and drew scrambled BG tiles and sprites
-// from the shifted data while the text layer happened to survive).
 module gunnail_core #(
 	parameter ROM_FILE          = "",
 	parameter NMK004_BOOT_FILE  = "",
@@ -70,15 +98,25 @@ module gunnail_core #(
 	parameter VTIMING_FILE      = "",
 	parameter FGTILE_FILE       = "",
 	parameter BGTILE_FILE       = "",
+	parameter BG2TILE_FILE      = "",  // bioship/strahl second tile ROM (sim)
+	parameter TILEROM_FILE      = "",  // bioship ROM tilemap indices, 16-bit words (sim)
 	parameter SPRITES_FILE      = "",
 	// HW_ROMS=0 (reference sim): $readmemh 0-latency arrays. HW_ROMS=1
 	// (Gunnail.sv and the gunnail_hw sim): every ROM through a cache over
 	// rtl/sdram.sv, loaded via ioctl_download.
 	parameter HW_ROMS           = 0,
-	parameter DBG_MISS_PAINT    = 0
+	parameter DBG_MISS_PAINT    = 0,
+	// HW_ROMS=0 only: 1 = the DIP switches come from dsw1_i/dsw2_i (the
+	// testbench drives the .mra defaults, so the MAME comparison covers
+	// language/demo-sound dependent screens); 0 = 0xFFFF as before.
+	parameter SIM_DSW           = 0
 ) (
-	input clk_sys,        // 40 MHz (68000 clk_sys/4 = 10 MHz; NMK004/pixel clk_sys/5 = 8 MHz; protection MCU clk_sys/10 = 4 MHz)
+	input clk_sys,        // 40 MHz (68000 clk_sys/4 = 10 MHz, /5 = 8 MHz, 3/10 = 12 MHz; NMK004/pixel clk_sys/5 = 8 MHz; protection MCU clk_sys/10 = 4 MHz)
 	input reset,          // async, active high
+
+	// Game select (2026-09-11) — see the game table below. Static for a
+	// session (from the .mra <switches> third byte in Gunnail.sv).
+	input [3:0] game_sel,
 
 	// Hardware-mode-only ports (HW_ROMS=1) — see tdragon2_core.sv.
 	input             ioctl_download,
@@ -97,8 +135,7 @@ module gunnail_core #(
 	input      [31:0] sd0_dout_pair,
 	output            sd0_req,
 	input             sd0_ack,
-	// SDRAM port 1: NMK004 program ROM, OKI0/OKI1 samples, protection
-	// MCU ROM — 4-way arbitrated internally.
+	// SDRAM port 1: sprite fetch (+ BG layer B's prefetch stream).
 	output     [24:1] sd1_addr,
 	output            sd1_req,
 	input      [15:0] sd1_dout,
@@ -113,7 +150,8 @@ module gunnail_core #(
 	input      [31:0] sd2_dout_pair,
 	output            sd2_req,
 	input             sd2_ack,
-	// SDRAM port 3: video_macross2.sv's TX-tile prefetch + sprite fetch.
+	// SDRAM port 3: TX-tile prefetch, NMK004 program ROM, OKI0/OKI1
+	// samples, protection MCU ROM, bioship tilemap DMA — arbitrated.
 	output     [24:1] sd3_addr,
 	output            sd3_req,
 	input      [15:0] sd3_dout,
@@ -212,6 +250,7 @@ module gunnail_core #(
 	output [9:0]  vcount_o,
 	output        hblank_o,
 	output        vblank_o,
+	output        lowres_o,   // 1 = 256-px window at hcount 92..347 (every game but gunnail)
 
 	// Real inputs (HW_ROMS=1 only; the sim path reads 0xFFFF = idle).
 	input  [15:0] in0_i,
@@ -221,6 +260,92 @@ module gunnail_core #(
 
 	input extra_por_hold
 );
+
+	// ------------------------------------------------------------------
+	// Game table (2026-09-11). Every per-game difference is a function of
+	// game_sel; the values are transcribed from nmk16.cpp's machine
+	// configs, memory maps, GFXDECODE tables and ROM_START blocks (see the
+	// header). The ids are the .mra <switches> third byte.
+	// ------------------------------------------------------------------
+	localparam [3:0] G_GUNNAIL  = 4'd0,
+	                 G_MACROSS  = 4'd1,
+	                 G_BLKHEART = 4'd2,
+	                 G_MUSTANG  = 4'd3,
+	                 G_BIOSHIP  = 4'd4,
+	                 G_VANDYKE  = 4'd5,
+	                 G_ACROBATM = 4'd6,
+	                 G_STRAHL   = 4'd7,
+	                 G_TDRAGON  = 4'd8,
+	                 G_HACHAMF  = 4'd9,
+	                 G_TDRAGON1 = 4'd10,
+	                 G_HACHAMFP = 4'd11,   // hachamf location-test prototype: no protection MCU (plain hachamf()), ROM_LOAD16_BYTE sprites
+	                 G_MUSTANGS = 4'd12;   // mustang (Seoul Trading): its own V-PROM (90058-10, de156d99)
+	wire g_gunnail  = (game_sel == G_GUNNAIL) || (game_sel > G_MUSTANGS); // unknown ids fall back to gunnail
+	wire g_macross  = (game_sel == G_MACROSS);
+	wire g_blkheart = (game_sel == G_BLKHEART);
+	wire g_mustang  = (game_sel == G_MUSTANG) || (game_sel == G_MUSTANGS);
+	wire g_bioship  = (game_sel == G_BIOSHIP);
+	wire g_vandyke  = (game_sel == G_VANDYKE);
+	wire g_acrobatm = (game_sel == G_ACROBATM);
+	wire g_strahl   = (game_sel == G_STRAHL);
+	wire g_tdragon  = (game_sel == G_TDRAGON);
+	wire g_hachamf  = (game_sel == G_HACHAMF) || (game_sel == G_HACHAMFP);
+	wire g_hachamfp = (game_sel == G_HACHAMFP);
+	wire g_tdragon1 = (game_sel == G_TDRAGON1);
+	wire g_mustangs = (game_sel == G_MUSTANGS);
+
+	wire lowres          = ~g_gunnail;                                   // set_screen_lowres
+	wire cpu_8mhz        = g_blkheart | g_mustang | g_tdragon | g_tdragon1;
+	wire cpu_12mhz       = g_strahl;                                     // "12 MHz ?"
+	wire has_prot        = g_gunnail | g_macross | (g_hachamf & ~g_hachamfp) | g_tdragon1; // NMK-215 / NMK-113 / NMK-110
+	wire has_214         = g_gunnail | g_macross;                        // base_nmk214_215: bgtile + sprites scrambled
+	wire prot_rom_16k    = g_hachamf | g_tdragon1;                       // TMP91640 (NMK-110/113): 16 KB firmware
+	wire nmi_invert      = g_bioship;                                    // nmk004_bioship_x0016_w
+	wire mainram_strange = g_macross | g_blkheart | g_mustang | g_bioship | g_vandyke; // macross_map/mustang_map/bioship_map/vandyke_map mainram_strange_w
+	wire bg2             = g_bioship | g_strahl;                         // screen_update_strahl: two BG layers
+	wire irq_hacky       = g_strahl;                                     // set_hacky_interrupt_timing (no V-PROM)
+	wire [2:0] vprom_sel = (g_blkheart | g_bioship | g_vandyke) ? 3'd1 : // 98ed1c97
+	                       (g_tdragon | g_tdragon1)             ? 3'd2 : // e6ead349
+	                       g_mustangs                           ? 3'd3 : // de156d99
+	                                                              3'd0;  // 633ab1c9 (gunnail, macross, mustang, acrobatm, hachamf)
+	// Memory maps (nmk16.cpp): the decode function below keys on these.
+	localparam [2:0] M_GUNNAIL = 3'd0, M_MACROSS = 3'd1, M_MUSTANG = 3'd2, M_BIOSHIP = 3'd3,
+	                 M_VANDYKE = 3'd4, M_ACROBATM = 3'd5, M_STRAHL = 3'd6, M_TDRAGON = 3'd7;
+	wire [2:0] map_id = g_gunnail  ? M_GUNNAIL :
+	                    g_mustang  ? M_MUSTANG :
+	                    g_bioship  ? M_BIOSHIP :
+	                    g_vandyke  ? M_VANDYKE :
+	                    g_acrobatm ? M_ACROBATM :
+	                    g_strahl   ? M_STRAHL :
+	                    (g_tdragon | g_tdragon1) ? M_TDRAGON : M_MACROSS; // macross, blkheart, hachamf
+	wire [23:0] rom_max = (g_gunnail | g_macross | g_blkheart) ? 24'h07FFFF : 24'h03FFFF;
+
+	// Video configuration (GFXDECODE bases; ROM tile counts - 1 as code
+	// masks; sprite ROM bytes / 128; m_sprdma_base / 2).
+	reg [10:0] cfg_bga_pal, cfg_bgb_pal, cfg_spr_pal, cfg_tx_pal;
+	reg [13:0] cfg_bga_mask, cfg_bgb_mask;
+	reg [17:0] cfg_spr_units;
+	always @(*) begin
+		cfg_bga_pal = 11'h000; cfg_bgb_pal = 11'h000; cfg_spr_pal = 11'h100; cfg_tx_pal = 11'h200; // gfx_macross
+		cfg_bga_mask = 14'h1FFF; cfg_bgb_mask = 14'h0FFF; cfg_spr_units = 18'd16384;
+		case (game_sel)
+			G_MACROSS:  begin cfg_bga_mask = 14'h3FFF; end                                  // bgtile 0x200000
+			G_BLKHEART: begin cfg_spr_units = 18'd8192; end
+			G_MUSTANG:  begin cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd8192; end        // bgtile 0x80000
+			G_BIOSHIP:  begin // gfx_bioship: TX 0x300, bgtile (VRAM layer, gfx1) 0x100, sprites 0x200, bg2tile (ROM tilemap, gfx3) 0x000
+			            cfg_bga_pal = 11'h000; cfg_bgb_pal = 11'h100; cfg_spr_pal = 11'h200; cfg_tx_pal = 11'h300;
+			            cfg_bga_mask = 14'h0FFF; cfg_bgb_mask = 14'h0FFF; cfg_spr_units = 18'd4096; end
+			G_VANDYKE:  begin cfg_bga_mask = 14'h0FFF; end                                  // bgtile 0x80000, sprites 0x200000
+			G_ACROBATM: begin cfg_spr_units = 18'd12288; end                                // sprites 0x180000
+			G_STRAHL:   begin // gfx_strahl: TX 0x000, bgtile (bgvram0, gfx1) 0x300, sprites 0x100, bg2tile (bgvram1, gfx3) 0x200
+			            cfg_bga_pal = 11'h300; cfg_bgb_pal = 11'h200; cfg_spr_pal = 11'h100; cfg_tx_pal = 11'h000;
+			            cfg_bga_mask = 14'h07FF; cfg_bgb_mask = 14'h0FFF; cfg_spr_units = 18'd12288; end // bgtile 0x40000, bg2tile 0x80000
+			G_TDRAGON, G_TDRAGON1, G_HACHAMF, G_HACHAMFP: begin cfg_spr_units = 18'd8192; end
+			G_MUSTANGS: begin cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd8192; end
+			default: ;
+		endcase
+	end
+	wire [14:0] cfg_sprdma_word = g_strahl ? 15'h7800 : 15'h4000;
 
 	// ------------------------------------------------------------------
 	// Power-on-only reset for the SDRAM req/arb instances (see
@@ -241,10 +366,35 @@ module gunnail_core #(
 	// ------------------------------------------------------------------
 	// Clock enables
 	// ------------------------------------------------------------------
+	// 68000: 10 MHz = clk_sys/4 (phases 2 apart); 8 MHz = clk_sys/5
+	// (phases at counts 4 and 2); 12 MHz = a 3/10 accumulator as
+	// tdragon2_core.sv's powerins mode (enPhi1 at ticks 4, 7, 10 mod 10,
+	// enPhi2 on the tick after the one following each — never adjacent
+	// to the next enPhi1; the RAM ready flags below are combinational
+	// compares, which that spacing requires).
 	reg [1:0] cpu_div = 2'd0;
 	always @(posedge clk_sys) cpu_div <= cpu_div + 2'd1;
-	wire enPhi1 = (cpu_div == 2'd3);
-	wire enPhi2 = (cpu_div == 2'd1);
+	reg [2:0] cpu_div5 = 3'd0;
+	always @(posedge clk_sys) cpu_div5 <= (cpu_div5 == 3'd4) ? 3'd0 : cpu_div5 + 3'd1;
+	reg [3:0] cpu_acc = 4'd0;
+	reg       cpu_acc_phi1 = 1'b0, cpu_acc_phi2 = 1'b0, cpu_acc_half = 1'b0;
+	always @(posedge clk_sys) begin
+		cpu_acc_phi1 <= 1'b0;
+		cpu_acc_phi2 <= 1'b0;
+		if (cpu_acc + 4'd3 >= 4'd10) begin
+			cpu_acc      <= cpu_acc + 4'd3 - 4'd10;
+			cpu_acc_phi1 <= 1'b1;
+			cpu_acc_half <= 1'b1;
+		end else begin
+			cpu_acc <= cpu_acc + 4'd3;
+			if (cpu_acc_half) begin
+				cpu_acc_phi2 <= 1'b1;
+				cpu_acc_half <= 1'b0;
+			end
+		end
+	end
+	wire enPhi1 = cpu_12mhz ? cpu_acc_phi1 : cpu_8mhz ? (cpu_div5 == 3'd4) : (cpu_div == 2'd3);
+	wire enPhi2 = cpu_12mhz ? cpu_acc_phi2 : cpu_8mhz ? (cpu_div5 == 3'd2) : (cpu_div == 2'd1);
 
 	reg [2:0] pix_div = 3'd0;
 	wire ce_pix = (pix_div == 3'd4);
@@ -304,11 +454,12 @@ module gunnail_core #(
 	wire mainram_dma_wait = sel_mainram & ~ASn & sprite_dma_busy;
 	wire palette_wait = sel_palette & cpu_read & ~palette_ready;
 	wire bgvram_wait  = sel_bgvram  & cpu_read & ~bgvram_ready;
+	wire bgvram2_wait = sel_bgvram2 & cpu_read & ~bgvram2_ready;
 	wire txvram_wait  = sel_txvram  & cpu_read & ~txvram_ready;
-	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | mainram_dma_wait | palette_wait | bgvram_wait | txvram_wait;
+	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | mainram_dma_wait | palette_wait | bgvram_wait | bgvram2_wait | txvram_wait;
 
 	wire [7:0] nmk004_p4;
-	wire m68k_extReset = reset | nmk004_p4[0];
+	wire m68k_extReset = reset | nmk004_p4[0] | prot_loading; // prot_loading: see the protection firmware loader
 
 	wire halt_68k;
 	assign dbg_halt_68k = halt_68k;
@@ -340,27 +491,109 @@ module gunnail_core #(
 	wire        cpu_read  = eRWn & ~ASn;
 
 	// ------------------------------------------------------------------
-	// Address decode (gunnail_map)
+	// Address decode — one function for the 68000 and the protection
+	// MCU's shared bus (the MCU sees the 68000's map), keyed on map_id.
+	// Bit positions of the returned select vector:
 	// ------------------------------------------------------------------
-	wire sel_rom       = (byte_addr <= 24'h07FFFF);
-	wire sel_in0       = (byte_addr[23:1] == 23'h040000); // 080000/080001
-	wire sel_in1       = (byte_addr[23:1] == 23'h040001); // 080002/080003
-	wire sel_dsw1      = (byte_addr[23:1] == 23'h040004); // 080008/080009
-	wire sel_dsw2      = (byte_addr[23:1] == 23'h040005); // 08000A/08000B
-	wire sel_nmk004_r  = (byte_addr[23:1] == 23'h040007); // 08000E/08000F
-	wire sel_flip      = (byte_addr[23:1] == 23'h04000A); // 080014/080015
-	wire sel_nmi       = (byte_addr[23:1] == 23'h04000B); // 080016/080017
-	wire sel_tilebank  = (byte_addr[23:1] == 23'h04000C); // 080018/080019
-	wire sel_nmk004_w  = (byte_addr[23:1] == 23'h04000F); // 08001E/08001F
-	wire sel_palette   = (byte_addr >= 24'h088000) && (byte_addr <= 24'h0887FF);
-	wire sel_scrollram  = (byte_addr >= 24'h08C000) && (byte_addr <= 24'h08C1FF);
-	wire sel_scrollramy = (byte_addr >= 24'h08C200) && (byte_addr <= 24'h08C3FF);
-	wire sel_bgvram    = (byte_addr >= 24'h090000) && (byte_addr <= 24'h093FFF);
-	wire sel_txvram    = (byte_addr >= 24'h09C000) && (byte_addr <= 24'h09DFFF); // mirror bit 12 ignored
-	wire sel_mainram   = (byte_addr >= 24'h0F0000) && (byte_addr <= 24'h0FFFFF);
+	localparam S_ROM = 0, S_IN0 = 1, S_IN1 = 2, S_DSW1 = 3, S_DSW2 = 4, S_NMK004_R = 5,
+	           S_FLIP = 6, S_NMI = 7, S_TILEBANK = 8, S_NMK004_W = 9, S_PALETTE = 10,
+	           S_SCROLLA = 11, S_SCROLLB = 12, S_SCROLLRAM = 13, S_SCROLLRAMY = 14,
+	           S_BGVRAM = 15, S_BGVRAM2 = 16, S_TXVRAM = 17, S_MAINRAM = 18, S_BG0BANK = 19,
+	           S_N = 20;
+	function automatic [S_N-1:0] decode(input [23:0] a, input [2:0] m, input [23:0] romtop);
+		reg io;          // the 32-byte I/O block
+		reg [3:0] r;     // word offset within it
+		begin
+			decode = {S_N{1'b0}};
+			decode[S_ROM] = (a <= romtop);
+			case (m)
+				M_ACROBATM: io = (a[23:5] == 19'h06000);                            // 0x0C0000
+				M_TDRAGON:  io = (a[23:5] == 19'h06000) || (a[23:5] == 19'h07000);  // 0x0C0000 mirror 0x020000
+				default:    io = (a[23:5] == 19'h04000);                            // 0x080000
+			endcase
+			r = a[4:1];
+			decode[S_IN0]      = io && (r == 4'h0);
+			decode[S_IN1]      = io && (r == 4'h1);
+			decode[S_DSW1]     = io && (r == ((m == M_MUSTANG) ? 4'h2 : 4'h4));   // mustang: DSW1 at +4, no DSW2
+			decode[S_DSW2]     = io && (r == 4'h5) && (m != M_MUSTANG);
+			decode[S_NMK004_R] = io && (r == 4'h7);
+			decode[S_FLIP]     = io && (r == 4'hA);
+			decode[S_NMI]      = io && (r == 4'hB);
+			decode[S_TILEBANK] = io && (r == 4'hC) && (m != M_MUSTANG) && (m != M_BIOSHIP) && (m != M_STRAHL);
+			decode[S_NMK004_W] = io && (r == 4'hF);
+			case (m)
+				M_ACROBATM: begin
+					decode[S_PALETTE] = (a >= 24'h0C4000) && (a <= 24'h0C45FF);
+					decode[S_SCROLLA] = (a >= 24'h0C8000) && (a <= 24'h0C8007);
+					decode[S_BGVRAM]  = (a >= 24'h0CC000) && (a <= 24'h0CFFFF);
+					decode[S_TXVRAM]  = (a >= 24'h0D4000) && (a <= 24'h0D47FF);
+					decode[S_MAINRAM] = (a >= 24'h080000) && (a <= 24'h08FFFF);
+				end
+				M_TDRAGON: begin
+					decode[S_PALETTE] = (a >= 24'h0C8000) && (a <= 24'h0C87FF);
+					decode[S_SCROLLA] = (a >= 24'h0C4000) && (a <= 24'h0C4007);
+					decode[S_BGVRAM]  = (a >= 24'h0CC000) && (a <= 24'h0CFFFF);
+					decode[S_TXVRAM]  = (a >= 24'h0D0000) && (a <= 24'h0D07FF);
+					decode[S_MAINRAM] = (a[23:18] == 6'b000010);                    // 0x080000-0x08FFFF mirror 0x030000
+				end
+				M_STRAHL: begin
+					decode[S_PALETTE] = (a >= 24'h08C000) && (a <= 24'h08C7FF);
+					decode[S_SCROLLA] = (a >= 24'h084000) && (a <= 24'h084007);      // scroll_w<0>
+					decode[S_SCROLLB] = (a >= 24'h088000) && (a <= 24'h088007);      // scroll_w<1>
+					decode[S_BGVRAM]  = (a >= 24'h090000) && (a <= 24'h093FFF);      // bgvideoram0
+					decode[S_BGVRAM2] = (a >= 24'h094000) && (a <= 24'h097FFF);      // bgvideoram1
+					decode[S_TXVRAM]  = (a >= 24'h09C000) && (a <= 24'h09C7FF);
+					decode[S_MAINRAM] = (a >= 24'h0F0000) && (a <= 24'h0FFFFF);
+				end
+				M_GUNNAIL: begin
+					decode[S_PALETTE]    = (a >= 24'h088000) && (a <= 24'h0887FF);
+					decode[S_SCROLLRAM]  = (a >= 24'h08C000) && (a <= 24'h08C1FF);
+					decode[S_SCROLLRAMY] = (a >= 24'h08C200) && (a <= 24'h08C3FF);
+					decode[S_BGVRAM]     = (a >= 24'h090000) && (a <= 24'h093FFF);
+					decode[S_TXVRAM]     = (a >= 24'h09C000) && (a <= 24'h09DFFF);   // mirror bit 12 ignored
+					decode[S_MAINRAM]    = (a >= 24'h0F0000) && (a <= 24'h0FFFFF);
+				end
+				default: begin // M_MACROSS, M_MUSTANG, M_BIOSHIP, M_VANDYKE
+					decode[S_PALETTE] = (a >= 24'h088000) && (a <= 24'h0887FF);
+					decode[S_SCROLLA] = (m == M_MUSTANG) ? (a[23:1] == 23'h046000) :                // mustang_scroll_w, one word
+					                    (m == M_BIOSHIP) ? ((a >= 24'h08C010) && (a <= 24'h08C017)) : // scroll_w<0> (the ROM tilemap)
+					                                       ((a >= 24'h08C000) && (a <= 24'h08C007));  // scroll_w<0> / vandyke_scroll_w
+					decode[S_SCROLLB] = (m == M_BIOSHIP) && (a >= 24'h08C000) && (a <= 24'h08C007);  // scroll_w<1> (the VRAM layer)
+					decode[S_BGVRAM]  = (a >= 24'h090000) && (a <= 24'h093FFF);
+					decode[S_BGVRAM2] = (m == M_VANDYKE) && (a >= 24'h094000) && (a <= 24'h097FFF);  // "what is this?" RAM
+					decode[S_TXVRAM]  = (m == M_VANDYKE) ? ((a >= 24'h09D000) && (a <= 24'h09D7FF))
+					                                     : ((a >= 24'h09C000) && (a <= 24'h09C7FF));
+					decode[S_MAINRAM] = (a >= 24'h0F0000) && (a <= 24'h0FFFFF);
+					decode[S_BG0BANK] = (m == M_BIOSHIP) && (a[23:1] == 23'h042000);                  // bioship_bank_w, 0x084001
+				end
+			endcase
+		end
+	endfunction
+
+	wire [S_N-1:0] sel = decode(byte_addr, map_id, rom_max);
+	wire sel_rom        = sel[S_ROM];
+	wire sel_in0        = sel[S_IN0];
+	wire sel_in1        = sel[S_IN1];
+	wire sel_dsw1       = sel[S_DSW1];
+	wire sel_dsw2       = sel[S_DSW2];
+	wire sel_nmk004_r   = sel[S_NMK004_R];
+	wire sel_flip       = sel[S_FLIP];
+	wire sel_nmi        = sel[S_NMI];
+	wire sel_tilebank   = sel[S_TILEBANK];
+	wire sel_nmk004_w   = sel[S_NMK004_W];
+	wire sel_palette    = sel[S_PALETTE];
+	wire sel_scrolla    = sel[S_SCROLLA];
+	wire sel_scrollb    = sel[S_SCROLLB];
+	wire sel_scrollram  = sel[S_SCROLLRAM];
+	wire sel_scrollramy = sel[S_SCROLLRAMY];
+	wire sel_bgvram     = sel[S_BGVRAM];
+	wire sel_bgvram2    = sel[S_BGVRAM2];
+	wire sel_txvram     = sel[S_TXVRAM];
+	wire sel_mainram    = sel[S_MAINRAM];
+	wire sel_bg0bank    = sel[S_BG0BANK];
 
 	// ------------------------------------------------------------------
-	// Protection MCU shared-bus decode (20-bit byte address)
+	// Protection MCU shared-bus decode (20-bit byte address, same map)
 	// ------------------------------------------------------------------
 	wire [19:0] prot_addr;
 	assign dbg_prot_addr = prot_addr;
@@ -370,46 +603,93 @@ module gunnail_core #(
 	assign dbg_prot_bus_rd = prot_rd;
 	assign dbg_prot_bus_wr = prot_wr;
 
-	wire prot_sel_rom       = (prot_addr <= 20'h07FFFF);
-	wire prot_sel_in0       = (prot_addr[19:1] == 19'h040000);
-	wire prot_sel_in1       = (prot_addr[19:1] == 19'h040001);
-	wire prot_sel_dsw1      = (prot_addr[19:1] == 19'h040004);
-	wire prot_sel_dsw2      = (prot_addr[19:1] == 19'h040005);
-	wire prot_sel_nmk004_r  = (prot_addr[19:1] == 19'h040007);
-	wire prot_sel_flip      = (prot_addr[19:1] == 19'h04000A);
-	wire prot_sel_nmi       = (prot_addr[19:1] == 19'h04000B);
-	wire prot_sel_tilebank  = (prot_addr[19:1] == 19'h04000C);
-	wire prot_sel_nmk004_w  = (prot_addr[19:1] == 19'h04000F);
-	wire prot_sel_palette   = (prot_addr >= 20'h088000) && (prot_addr <= 20'h0887FF);
-	wire prot_sel_scrollram  = (prot_addr >= 20'h08C000) && (prot_addr <= 20'h08C1FF);
-	wire prot_sel_scrollramy = (prot_addr >= 20'h08C200) && (prot_addr <= 20'h08C3FF);
-	wire prot_sel_bgvram    = (prot_addr >= 20'h090000) && (prot_addr <= 20'h093FFF);
-	wire prot_sel_txvram    = (prot_addr >= 20'h09C000) && (prot_addr <= 20'h09DFFF);
-	wire prot_sel_mainram   = (prot_addr >= 20'h0F0000) && (prot_addr <= 20'h0FFFFF);
+	wire [S_N-1:0] psel = decode({4'd0, prot_addr}, map_id, rom_max);
+	wire prot_sel_rom        = psel[S_ROM];
+	wire prot_sel_in0        = psel[S_IN0];
+	wire prot_sel_in1        = psel[S_IN1];
+	wire prot_sel_dsw1       = psel[S_DSW1];
+	wire prot_sel_dsw2       = psel[S_DSW2];
+	wire prot_sel_nmk004_r   = psel[S_NMK004_R];
+	wire prot_sel_flip       = psel[S_FLIP];
+	wire prot_sel_nmi        = psel[S_NMI];
+	wire prot_sel_tilebank   = psel[S_TILEBANK];
+	wire prot_sel_nmk004_w   = psel[S_NMK004_W];
+	wire prot_sel_palette    = psel[S_PALETTE];
+	wire prot_sel_scrolla    = psel[S_SCROLLA];
+	wire prot_sel_scrollram  = psel[S_SCROLLRAM];
+	wire prot_sel_scrollramy = psel[S_SCROLLRAMY];
+	wire prot_sel_bgvram     = psel[S_BGVRAM];
+	wire prot_sel_txvram     = psel[S_TXVRAM];
+	wire prot_sel_mainram    = psel[S_MAINRAM];
 
 	// ------------------------------------------------------------------
-	// SDRAM image offsets — see header.
+	// SDRAM image offsets — see header. Per game, contiguous, in .mra
+	// part order; every size is the ROM_START file total.
 	// ------------------------------------------------------------------
-	localparam [23:0] BASE_BYTE_NMK004_EXT  = 24'h080000;
-	localparam [23:0] BASE_BYTE_NMK004_BOOT = 24'h090000;
-	localparam [23:0] BASE_BYTE_PROT        = 24'h092000;
-	localparam [23:0] BASE_BYTE_FGTILE      = 24'h094000;
-	localparam [23:0] BASE_BYTE_BGTILE      = 24'h0B4000;
-	localparam [23:0] BASE_BYTE_SPRITES     = 24'h1B4000;
-	localparam [23:0] BASE_BYTE_OKI1        = 24'h3B4000;
-	localparam [23:0] BASE_BYTE_OKI2        = 24'h434000;
-	localparam [22:0] BASE_WORD_NMK004      = BASE_BYTE_NMK004_EXT[23:1]; // boot at +0x10000 bytes, see nmk004_cache_addr
-	localparam [22:0] BASE_WORD_PROT        = BASE_BYTE_PROT[23:1];
-	localparam [22:0] BASE_WORD_FGTILE      = BASE_BYTE_FGTILE[23:1];
-	localparam [22:0] BASE_WORD_BGTILE      = BASE_BYTE_BGTILE[23:1];
-	localparam [22:0] BASE_WORD_SPRITES     = BASE_BYTE_SPRITES[23:1];
-	localparam [22:0] BASE_WORD_OKI1        = BASE_BYTE_OKI1[23:1];
-	localparam [22:0] BASE_WORD_OKI2        = BASE_BYTE_OKI2[23:1];
+	reg [23:0] BASE_BYTE_NMK004_EXT, BASE_BYTE_PROT, BASE_BYTE_FGTILE, BASE_BYTE_BGTILE,
+	           BASE_BYTE_BG2TILE, BASE_BYTE_TILEROM, BASE_BYTE_SPRITES, BASE_BYTE_OKI1, BASE_BYTE_OKI2;
+	reg [13:0] PROT_ROM_BYTES_M1; // protection ROM size - 1 (0x1FFF / 0x3FFF)
+	always @(*) begin
+		PROT_ROM_BYTES_M1 = prot_rom_16k ? 14'h3FFF : 14'h1FFF;
+		BASE_BYTE_BG2TILE = 24'h000000; BASE_BYTE_TILEROM = 24'h000000; BASE_BYTE_PROT = 24'h000000;
+		case (game_sel)
+			G_MACROSS: begin // maincpu 0x80000, ext, boot, nmk-215 0x2000, fg 0x20000, bg 0x200000, spr 0x200000, oki 0x80000 x2
+				BASE_BYTE_NMK004_EXT = 24'h080000; BASE_BYTE_PROT = 24'h092000; BASE_BYTE_FGTILE = 24'h094000;
+				BASE_BYTE_BGTILE = 24'h0B4000; BASE_BYTE_SPRITES = 24'h2B4000; BASE_BYTE_OKI1 = 24'h4B4000; BASE_BYTE_OKI2 = 24'h534000;
+			end
+			G_BLKHEART, G_TDRAGON, G_HACHAMFP: begin // maincpu 0x40000, ext, boot, fg 0x20000, bg 0x100000, spr 0x100000, oki 0x80000 x2
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h052000;
+				BASE_BYTE_BGTILE = 24'h072000; BASE_BYTE_SPRITES = 24'h172000; BASE_BYTE_OKI1 = 24'h272000; BASE_BYTE_OKI2 = 24'h2F2000;
+			end
+			G_MUSTANG, G_MUSTANGS: begin // maincpu 0x40000, ext, boot, fg 0x20000, bg 0x80000, spr 0x100000 (pair), oki 0x80000 x2
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h052000;
+				BASE_BYTE_BGTILE = 24'h072000; BASE_BYTE_SPRITES = 24'h0F2000; BASE_BYTE_OKI1 = 24'h1F2000; BASE_BYTE_OKI2 = 24'h272000;
+			end
+			G_BIOSHIP: begin // maincpu 0x40000, ext, boot, fg 0x10000, bg 0x80000, bg2 0x80000, tilerom 0x20000 (pair), spr 0x80000, oki 0x80000 x2
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h052000; BASE_BYTE_BGTILE = 24'h062000;
+				BASE_BYTE_BG2TILE = 24'h0E2000; BASE_BYTE_TILEROM = 24'h162000; BASE_BYTE_SPRITES = 24'h182000;
+				BASE_BYTE_OKI1 = 24'h202000; BASE_BYTE_OKI2 = 24'h282000;
+			end
+			G_VANDYKE: begin // maincpu 0x40000, ext, boot, fg 0x10000, bg 0x80000, spr 0x200000 (2 pairs), oki 0x80000 x2
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h052000;
+				BASE_BYTE_BGTILE = 24'h062000; BASE_BYTE_SPRITES = 24'h0E2000; BASE_BYTE_OKI1 = 24'h2E2000; BASE_BYTE_OKI2 = 24'h362000;
+			end
+			G_ACROBATM: begin // maincpu 0x40000, ext, boot, fg 0x10000, bg 0x100000, spr 0x180000, oki 0x80000 x2
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h052000;
+				BASE_BYTE_BGTILE = 24'h062000; BASE_BYTE_SPRITES = 24'h162000; BASE_BYTE_OKI1 = 24'h2E2000; BASE_BYTE_OKI2 = 24'h362000;
+			end
+			G_STRAHL: begin // maincpu 0x40000, ext, boot, fg 0x10000, bg 0x40000, bg2 0x80000, spr 0x180000, oki 0xA0000 x2
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h052000; BASE_BYTE_BGTILE = 24'h062000;
+				BASE_BYTE_BG2TILE = 24'h0A2000; BASE_BYTE_SPRITES = 24'h122000; BASE_BYTE_OKI1 = 24'h2A2000; BASE_BYTE_OKI2 = 24'h342000;
+			end
+			G_HACHAMF, G_TDRAGON1: begin // maincpu 0x40000, ext, boot, nmk-113/110 0x4000, fg 0x20000, bg 0x100000, spr 0x100000, oki 0x80000 x2
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_PROT = 24'h052000; BASE_BYTE_FGTILE = 24'h056000;
+				BASE_BYTE_BGTILE = 24'h076000; BASE_BYTE_SPRITES = 24'h176000; BASE_BYTE_OKI1 = 24'h276000; BASE_BYTE_OKI2 = 24'h2F6000;
+			end
+			default: begin // gunnail
+				BASE_BYTE_NMK004_EXT = 24'h080000; BASE_BYTE_PROT = 24'h092000; BASE_BYTE_FGTILE = 24'h094000;
+				BASE_BYTE_BGTILE = 24'h0B4000; BASE_BYTE_SPRITES = 24'h1B4000; BASE_BYTE_OKI1 = 24'h3B4000; BASE_BYTE_OKI2 = 24'h434000;
+			end
+		endcase
+	end
+	wire [22:0] BASE_WORD_NMK004  = BASE_BYTE_NMK004_EXT[23:1]; // boot at +0x10000 bytes, see nmk004_cache_addr
+	wire [22:0] BASE_WORD_FGTILE  = BASE_BYTE_FGTILE[23:1];
+	wire [22:0] BASE_WORD_BGTILE  = BASE_BYTE_BGTILE[23:1];
+	wire [22:0] BASE_WORD_BG2TILE = BASE_BYTE_BG2TILE[23:1];
+	wire [22:0] BASE_WORD_TILEROM = BASE_BYTE_TILEROM[23:1];
+	wire [22:0] BASE_WORD_SPRITES = BASE_BYTE_SPRITES[23:1];
+	wire [22:0] BASE_WORD_OKI1    = BASE_BYTE_OKI1[23:1];
+	wire [22:0] BASE_WORD_OKI2    = BASE_BYTE_OKI2[23:1];
+	// Layer A draws bioship's ROM tilemap from bg2tile (gfx3), its VRAM
+	// layer (B) from bgtile (gfx1); strahl's bgvram0 (A) is gfx1 and
+	// bgvram1 (B) gfx3 — see video_macross2.sv's BG2_LAYER.
+	wire [22:0] BASE_WORD_BGTILE_A = g_bioship ? BASE_WORD_BG2TILE : BASE_WORD_BGTILE;
+	wire [22:0] BASE_WORD_BGTILE_B = g_strahl  ? BASE_WORD_BG2TILE : BASE_WORD_BGTILE;
 
 	// ------------------------------------------------------------------
-	// ROM (maincpu), 0x80000 bytes. HW_ROMS=1: rom_cache1 over SDRAM
-	// port 0, shared with the ioctl_download writes; the cache only sees
-	// ROM addresses (see raphero_core.sv's rom_addr_held).
+	// ROM (maincpu), up to 0x80000 bytes. HW_ROMS=1: rom_cache_n over
+	// SDRAM port 0, shared with the ioctl_download writes; the cache only
+	// sees ROM addresses (see raphero_core.sv's rom_addr_held).
 	// ------------------------------------------------------------------
 	wire [15:0] rom_dout;
 	wire        rom_ready;
@@ -490,11 +770,12 @@ module gunnail_core #(
 	// ------------------------------------------------------------------
 	wire prot_acc = prot_rd | prot_wr;
 	reg  prot_wr_done;
+	wire prot_reg_w = prot_wr & (HW_ROMS ? ~prot_wr_done : prot_cen); // an MCU register/scroll write this clock (once per bus cycle)
 	wire mainram_prot_grant, palette_prot_grant, bgvram_prot_grant, txvram_prot_grant; // 1 = the MCU owns that RAM's CPU-side port this clock
 	wire [15:0] prot_rom_word;
 
 	// ------------------------------------------------------------------
-	// Main work RAM (32768 x 16, plain — gunnail_map has no address swap)
+	// Main work RAM (32768 x 16, plain — no address swap on these boards)
 	// ------------------------------------------------------------------
 	// Two 8-bit lane arrays with the shared 68000/MCU port coded as a
 	// true-dual-port read/write port (its read register takes the byte
@@ -504,9 +785,15 @@ module gunnail_core #(
 	// for the video read, which the old-data read-during-write of a
 	// 16-bit array with lane writes forced on every dual-read RAM (NMK-10;
 	// raphero_core.sv has the isolated synthesis test's story).
+	// mainram_strange (macross_map & co.): a 68000 byte write stores the
+	// byte in BOTH lanes (mainram_strange_w — the 68000 replicates the
+	// byte on both halves of its data bus, and this board's RAM takes
+	// both), so UDS/LDS are ignored there.
 	reg [7:0] mainram_hi [0:32767];
 	reg [7:0] mainram_lo [0:32767];
 	wire [14:0] mainram_addr_cpu = byte_addr[15:1];
+	wire        mr_uds = ~UDSn | mainram_strange;
+	wire        mr_lds = ~LDSn | mainram_strange;
 	reg  [15:0] mainram_dout;
 	wire        mainram_ready;
 	wire        prot_mainram_ready;
@@ -518,8 +805,8 @@ module gunnail_core #(
 				if (~prot_addr[0]) mainram_hi[prot_addr[15:1]] <= prot_wdata;
 				else                mainram_lo[prot_addr[15:1]] <= prot_wdata;
 			end else if (sel_mainram & cpu_write & ~sprite_dma_busy) begin
-				if (~UDSn) mainram_hi[mainram_addr_cpu] <= oEdb[15:8];
-				if (~LDSn) mainram_lo[mainram_addr_cpu] <= oEdb[7:0];
+				if (mr_uds) mainram_hi[mainram_addr_cpu] <= oEdb[15:8];
+				if (mr_lds) mainram_lo[mainram_addr_cpu] <= oEdb[7:0];
 			end
 		end
 		always @(*) mainram_dout = {mainram_hi[mainram_addr_cpu], mainram_lo[mainram_addr_cpu]};
@@ -533,8 +820,8 @@ module gunnail_core #(
 		reg  [14:0] port_addr_r;
 		reg         port_src_r;
 		wire        prot_w = grant & prot_wr & ~prot_wr_done;
-		wire        we_hi = (prot_w & ~prot_addr[0]) | (~grant & sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy);
-		wire        we_lo = (prot_w &  prot_addr[0]) | (~grant & sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy);
+		wire        we_hi = (prot_w & ~prot_addr[0]) | (~grant & sel_mainram & cpu_write & mr_uds & ~sprite_dma_busy);
+		wire        we_lo = (prot_w &  prot_addr[0]) | (~grant & sel_mainram & cpu_write & mr_lds & ~sprite_dma_busy);
 		wire [7:0]  wd_hi = prot_w ? prot_wdata : oEdb[15:8];
 		wire [7:0]  wd_lo = prot_w ? prot_wdata : oEdb[7:0];
 		always @(posedge clk_sys) begin
@@ -598,7 +885,8 @@ module gunnail_core #(
 	endgenerate
 
 	// ------------------------------------------------------------------
-	// BG tilemap VRAM (8192 x 16)
+	// BG tilemap VRAM (8192 x 16) — bgvideoram0 (bioship: bgvideoram1,
+	// its VRAM layer; the video-side mux below routes it to layer B there)
 	// ------------------------------------------------------------------
 	// Lane arrays + true-dual-port shared port, as mainram above (NMK-10).
 	reg [7:0] bgvram_hi [0:8191];
@@ -650,7 +938,57 @@ module gunnail_core #(
 	endgenerate
 
 	// ------------------------------------------------------------------
-	// TX tilemap VRAM (2048 x 16, mirror bit ignored)
+	// Second BG VRAM (8192 x 16, 2026-09-11): strahl's bgvideoram1
+	// (0x094000, layer B), vandyke's unknown RAM at 0x094000 (plain
+	// read/write, never drawn), and bioship's ROM tilemap page — filled
+	// by the DMA engine below from the "tilerom" region (8 x 8192 words,
+	// bioship_bank_w selects the page) and drawn as layer A. No
+	// protection-MCU port (none of these boards has an MCU).
+	// ------------------------------------------------------------------
+	reg [7:0] bgvram2_hi [0:8191];
+	reg [7:0] bgvram2_lo [0:8191];
+	wire [12:0] bgvram2_addr_cpu = byte_addr[13:1];
+	reg  [15:0] bgvram2_dout;
+	wire        bgvram2_ready;
+	wire        dma_active;   // the tilemap DMA owns the CPU-side port
+	wire        dma_we;
+	wire [12:0] dma_addr;
+	wire [15:0] dma_wdata;
+	generate
+	if (!HW_ROMS) begin : g_bgvram2_sim
+		always @(posedge clk_sys) begin
+			if (dma_we) begin
+				bgvram2_hi[dma_addr] <= dma_wdata[15:8];
+				bgvram2_lo[dma_addr] <= dma_wdata[7:0];
+			end else if (sel_bgvram2 & cpu_write) begin
+				if (~UDSn) bgvram2_hi[bgvram2_addr_cpu] <= oEdb[15:8];
+				if (~LDSn) bgvram2_lo[bgvram2_addr_cpu] <= oEdb[7:0];
+			end
+		end
+		always @(*) bgvram2_dout = {bgvram2_hi[bgvram2_addr_cpu], bgvram2_lo[bgvram2_addr_cpu]};
+		assign bgvram2_ready = 1'b1;
+	end else begin : g_bgvram2_hw
+		wire [12:0] port_addr = dma_active ? dma_addr : bgvram2_addr_cpu;
+		reg  [12:0] port_addr_r;
+		reg         port_src_r;
+		wire        we_hi = dma_we | (~dma_active & sel_bgvram2 & cpu_write & ~UDSn);
+		wire        we_lo = dma_we | (~dma_active & sel_bgvram2 & cpu_write & ~LDSn);
+		wire [7:0]  wd_hi = dma_active ? dma_wdata[15:8] : oEdb[15:8];
+		wire [7:0]  wd_lo = dma_active ? dma_wdata[7:0]  : oEdb[7:0];
+		always @(posedge clk_sys) begin
+			if (we_hi) begin bgvram2_hi[port_addr] <= wd_hi; bgvram2_dout[15:8] <= wd_hi; end
+			else       bgvram2_dout[15:8] <= bgvram2_hi[port_addr];
+			if (we_lo) begin bgvram2_lo[port_addr] <= wd_lo; bgvram2_dout[7:0]  <= wd_lo; end
+			else       bgvram2_dout[7:0]  <= bgvram2_lo[port_addr];
+			port_addr_r <= port_addr;
+			port_src_r  <= dma_active;
+		end
+		assign bgvram2_ready = ~port_src_r & (port_addr_r == bgvram2_addr_cpu);
+	end
+	endgenerate
+
+	// ------------------------------------------------------------------
+	// TX tilemap VRAM (2048 x 16; the lowres boards use the first 1024)
 	// ------------------------------------------------------------------
 	// Lane arrays + true-dual-port shared port, as mainram above (NMK-10).
 	reg [7:0] txvram_hi [0:2047];
@@ -707,7 +1045,7 @@ module gunnail_core #(
 	// 512 x 16 array: [0:255] X table, [256:511] Y table. Word 0 of each
 	// is mirrored in a register for the video's scrollram_0/scrollramy_0
 	// taps; the rows are read through the video port (registered, two
-	// rows on alternate cycles).
+	// rows on alternate cycles). gunnail only.
 	// ------------------------------------------------------------------
 	reg [15:0] scrollmem [0:511];
 	wire       sel_scrollmem      = sel_scrollram | sel_scrollramy;
@@ -767,10 +1105,68 @@ module gunnail_core #(
 	endgenerate
 
 	// ------------------------------------------------------------------
+	// Frame-constant scroll registers (every game but gunnail), in the
+	// board's own format (nmk16_v.cpp):
+	//   scroll_w<Layer> (macross_map/acrobatm/tdragon/hachamf/strahl on
+	//     the LOW byte of words 0x...0/2/4/6; bioship on the HIGH byte —
+	//     umask16(0xff00)): bytes [Xhi, Xlo, Yhi, Ylo]
+	//   vandyke_scroll_w: four words, x = v0*256 + (v1>>8), y = v2*256 + (v3>>8)
+	//   mustang_scroll_w: one word, data[15:8] selects: 0 = x high byte,
+	//     1 = x low byte, 2/3 = ignored; no y scroll
+	// The protection MCU's byte writes reach scroll_w<0> too (odd
+	// addresses on the low-byte boards).
+	// ------------------------------------------------------------------
+	reg [7:0]  scr_a [0:3];
+	reg [7:0]  scr_b [0:3];
+	reg [15:0] vsc   [0:3];
+	reg [15:0] must_x;
+	wire [1:0] scr_idx = byte_addr[2:1];
+	wire       scr_hi_byte = g_bioship; // the register byte travels on the high half
+	integer si;
+	always @(posedge clk_sys) begin
+		if (reset) begin
+			for (si = 0; si < 4; si = si + 1) begin scr_a[si] <= 8'h00; scr_b[si] <= 8'h00; vsc[si] <= 16'h0000; end
+			must_x <= 16'h0000;
+		end else begin
+			if (prot_reg_w & prot_sel_scrolla & prot_addr[0] & ~g_vandyke & ~g_mustang & ~g_bioship)
+				scr_a[prot_addr[2:1]] <= prot_wdata;
+			else if (sel_scrolla & cpu_write) begin
+				if (g_vandyke) begin
+					if (~UDSn) vsc[scr_idx][15:8] <= oEdb[15:8];
+					if (~LDSn) vsc[scr_idx][7:0]  <= oEdb[7:0];
+				end else if (g_mustang) begin
+					case (oEdb[15:8])
+						8'h00: must_x[15:8] <= oEdb[7:0];
+						8'h01: must_x[7:0]  <= oEdb[7:0];
+						default: ;
+					endcase
+				end else if (scr_hi_byte) begin
+					if (~UDSn) scr_a[scr_idx] <= oEdb[15:8];
+				end else begin
+					if (~LDSn) scr_a[scr_idx] <= oEdb[7:0];
+				end
+			end
+			if (sel_scrollb & cpu_write) begin
+				if (scr_hi_byte) begin
+					if (~UDSn) scr_b[scr_idx] <= oEdb[15:8];
+				end else begin
+					if (~LDSn) scr_b[scr_idx] <= oEdb[7:0];
+				end
+			end
+		end
+	end
+	wire [15:0] bga_xscroll = g_vandyke ? {vsc[0][7:0], vsc[1][15:8]} : g_mustang ? must_x   : {scr_a[0], scr_a[1]};
+	wire [15:0] bga_yscroll = g_vandyke ? {vsc[2][7:0], vsc[3][15:8]} : g_mustang ? 16'h0000 : {scr_a[2], scr_a[3]};
+	wire [15:0] bgb_xscroll = {scr_b[0], scr_b[1]};
+	wire [15:0] bgb_yscroll = {scr_b[2], scr_b[3]};
+
+	// ------------------------------------------------------------------
 	// Dual-port video read taps
 	// ------------------------------------------------------------------
-	wire [14:0] vid_bgvram_addr;
+	wire [14:0] vid_bgvram_addr;     // layer A (bit 14:13 = tilerambank, always 0 here)
 	wire [15:0] vid_bgvram_dout;
+	wire [12:0] vid_bgvram_b_addr;   // layer B
+	wire [15:0] vid_bgvram_b_dout;
 	wire [10:0] vid_txvram_addr;
 	wire [15:0] vid_txvram_dout;
 	wire [10:0] vid_palette_addr;     // 11 bits: video_macross2.sv's port; bit 10 is only set in its powerins mode
@@ -795,25 +1191,36 @@ module gunnail_core #(
 		assign vid_spr_palette_dout = vid_spr_palette_dout_r;
 	end
 	endgenerate
+	// Layer A draws bgvram (the 68000's BG VRAM) except on bioship, where
+	// it draws the DMA-filled ROM tilemap page in bgvram2 and layer B
+	// draws bgvram; strahl's layer B draws bgvram2 (its bgvideoram1).
+	wire [12:0] vid_arr1_addr = g_bioship ? vid_bgvram_b_addr : vid_bgvram_addr[12:0];
+	wire [12:0] vid_arr2_addr = g_bioship ? vid_bgvram_addr[12:0] : vid_bgvram_b_addr;
+	wire [15:0] vid_arr1_dout, vid_arr2_dout;
+	assign vid_bgvram_dout   = g_bioship ? vid_arr2_dout : vid_arr1_dout;
+	assign vid_bgvram_b_dout = g_bioship ? vid_arr1_dout : vid_arr2_dout;
 	wire [14:0] vid_mainram_addr;
 	wire [15:0] vid_mainram_dout;
 	wire        vid_mainram_ready;
 	generate
 	if (!HW_ROMS) begin : g_vidram_read_sim
-		assign vid_bgvram_dout  = {bgvram_hi[vid_bgvram_addr[12:0]], bgvram_lo[vid_bgvram_addr[12:0]]};
-		assign vid_txvram_dout  = {txvram_hi[vid_txvram_addr],       txvram_lo[vid_txvram_addr]};
-		assign vid_mainram_dout = {mainram_hi[vid_mainram_addr],     mainram_lo[vid_mainram_addr]};
+		assign vid_arr1_dout    = {bgvram_hi[vid_arr1_addr],   bgvram_lo[vid_arr1_addr]};
+		assign vid_arr2_dout    = {bgvram2_hi[vid_arr2_addr],  bgvram2_lo[vid_arr2_addr]};
+		assign vid_txvram_dout  = {txvram_hi[vid_txvram_addr],  txvram_lo[vid_txvram_addr]};
+		assign vid_mainram_dout = {mainram_hi[vid_mainram_addr], mainram_lo[vid_mainram_addr]};
 		assign vid_mainram_ready = 1'b1;
 	end else begin : g_vidram_read_hw
-		reg [15:0] vid_bgvram_dout_r, vid_txvram_dout_r, vid_mainram_dout_r;
+		reg [15:0] vid_arr1_dout_r, vid_arr2_dout_r, vid_txvram_dout_r, vid_mainram_dout_r;
 		reg [14:0] vid_mainram_addr_r;
 		always @(posedge clk_sys) begin
-			vid_bgvram_dout_r  <= {bgvram_hi[vid_bgvram_addr[12:0]], bgvram_lo[vid_bgvram_addr[12:0]]};
-			vid_txvram_dout_r  <= {txvram_hi[vid_txvram_addr],       txvram_lo[vid_txvram_addr]};
-			vid_mainram_dout_r <= {mainram_hi[vid_mainram_addr],     mainram_lo[vid_mainram_addr]};
+			vid_arr1_dout_r    <= {bgvram_hi[vid_arr1_addr],   bgvram_lo[vid_arr1_addr]};
+			vid_arr2_dout_r    <= {bgvram2_hi[vid_arr2_addr],  bgvram2_lo[vid_arr2_addr]};
+			vid_txvram_dout_r  <= {txvram_hi[vid_txvram_addr],  txvram_lo[vid_txvram_addr]};
+			vid_mainram_dout_r <= {mainram_hi[vid_mainram_addr], mainram_lo[vid_mainram_addr]};
 			vid_mainram_addr_r <= vid_mainram_addr;
 		end
-		assign vid_bgvram_dout   = vid_bgvram_dout_r;
+		assign vid_arr1_dout     = vid_arr1_dout_r;
+		assign vid_arr2_dout     = vid_arr2_dout_r;
 		assign vid_txvram_dout   = vid_txvram_dout_r;
 		assign vid_mainram_dout  = vid_mainram_dout_r;
 		assign vid_mainram_ready = (vid_mainram_addr_r == vid_mainram_addr);
@@ -837,12 +1244,13 @@ module gunnail_core #(
 	// ------------------------------------------------------------------
 	reg [7:0]  flip_screen_reg;
 	reg [7:0]  bgbank_reg;
+	reg [7:0]  bg0bank_reg;   // bioship_bank_w: the ROM tilemap's page
 	reg        nmi_level;
-	wire       prot_reg_w = prot_wr & (HW_ROMS ? ~prot_wr_done : prot_cen);
 	always @(posedge clk_sys) begin
 		if (reset) begin
 			flip_screen_reg <= 8'h00;
 			bgbank_reg      <= 8'h00;
+			bg0bank_reg     <= 8'h00;
 			nmi_level       <= 1'b0;
 		end else begin
 			if (prot_reg_w & prot_sel_flip)           flip_screen_reg <= prot_wdata;
@@ -851,8 +1259,62 @@ module gunnail_core #(
 			if (prot_reg_w & prot_sel_tilebank)       bgbank_reg <= prot_wdata;
 			else if (sel_tilebank & cpu_write & ~LDSn) bgbank_reg <= oEdb[7:0];
 
-			if (prot_reg_w & prot_sel_nmi)            nmi_level <= prot_wdata[0];
-			else if (sel_nmi & cpu_write)              nmi_level <= oEdb[0];
+			if (sel_bg0bank & cpu_write & ~LDSn)       bg0bank_reg <= oEdb[7:0];
+
+			// nmk004_x0016_w: NMI level = bit 0; bioship's own inverts it
+			// ("otherwise bioship doesn't hit the NMI enough").
+			if (prot_reg_w & prot_sel_nmi)            nmi_level <= prot_wdata[0] ^ nmi_invert;
+			else if (sel_nmi & cpu_write)              nmi_level <= oEdb[0] ^ nmi_invert;
+		end
+	end
+
+	// ------------------------------------------------------------------
+	// bioship ROM-tilemap DMA (2026-09-11): MAME's bioship_get_bg_tile_info
+	// reads the tile index from the "tilerom" region at (bank << 13) |
+	// tile_index on every tile fetch. The hardware path cannot afford a
+	// second real-time index stream from SDRAM, so the selected 8192-word
+	// page is copied into bgvram2 instead — at reset and whenever
+	// bioship_bank_w changes the page (about 100k clk_sys = 2.5 ms per
+	// copy through the port-3 arbiter; the game changes the page between
+	// stages). HW_ROMS=0 copies from the TILEROM_FILE array the same way,
+	// one word per clock.
+	// ------------------------------------------------------------------
+	reg        dma_run = 1'b0;
+	reg [12:0] dma_idx;
+	reg [2:0]  dma_bank;
+	reg [3:0]  dma_bank_loaded;  // 4'hF = nothing loaded yet
+	reg        dma_req;
+	reg        dma_gap;          // one idle clock between transactions (the arbiter samples req low)
+	wire [15:0] dma_word;
+	wire        dma_word_valid;
+	assign dma_active = dma_run;
+	assign dma_addr   = dma_idx;
+	assign dma_wdata  = dma_word;
+	assign dma_we     = dma_run & dma_req & dma_word_valid;
+	always @(posedge clk_sys) begin
+		if (reset) begin
+			dma_run <= 1'b0; dma_req <= 1'b0; dma_gap <= 1'b0; dma_idx <= 13'd0; dma_bank <= 3'd0;
+			dma_bank_loaded <= 4'hF;
+		end else if (!dma_run) begin
+			if (g_bioship && (dma_bank_loaded != {1'b0, bg0bank_reg[2:0]})) begin
+				dma_run  <= 1'b1;
+				dma_idx  <= 13'd0;
+				dma_bank <= bg0bank_reg[2:0];
+				dma_req  <= 1'b1;
+				dma_gap  <= 1'b0;
+			end
+		end else if (dma_gap) begin
+			dma_gap <= 1'b0;
+			dma_req <= 1'b1;
+		end else if (dma_req & dma_word_valid) begin
+			dma_req <= 1'b0;
+			if (dma_idx == 13'd8191) begin
+				dma_run <= 1'b0;
+				dma_bank_loaded <= {1'b0, dma_bank};
+			end else begin
+				dma_idx <= dma_idx + 13'd1;
+				dma_gap <= 1'b1;
+			end
 		end
 	end
 
@@ -876,7 +1338,7 @@ module gunnail_core #(
 	// ------------------------------------------------------------------
 	// NMK004 sound MCU — nmk004_core.sv on clk_sys + snd_cen. Program
 	// ROM: $readmemh at HW_ROMS=0; at HW_ROMS=1 one oki_rom_cache over
-	// SDRAM port 1 serving both the boot ROM and the external program
+	// SDRAM port 3 serving both the boot ROM and the external program
 	// (see the layout in the header), with the cen withheld on a miss.
 	// ------------------------------------------------------------------
 	wire       ym_cs, ym_we, ym_addr_sel;
@@ -926,13 +1388,14 @@ module gunnail_core #(
 	assign dbg_nmk004_cen   = snd_cen;
 	assign dbg_nmk004_stall = snd_stall;
 
-	// SDRAM port 1, four channels: NMK004 ROM, OKI0, OKI1, protection ROM.
-	wire        p1_busy [0:4];
-	wire        p1_valid[0:4];
-	wire [24:1] p1_addr [0:4];
-	wire        p1_req  [0:4];
-	wire [15:0] p1_dout [0:4];
-	wire [31:0] p1_dout_pair [0:4];
+	// SDRAM port 3, seven channels: TX prefetch, NMK004 ROM, OKI0, OKI1,
+	// protection ROM reads, bioship tilemap DMA, protection firmware load.
+	wire        p1_busy [0:6];
+	wire        p1_valid[0:6];
+	wire [24:1] p1_addr [0:6];
+	wire        p1_req  [0:6];
+	wire [15:0] p1_dout [0:6];
+	wire [31:0] p1_dout_pair [0:6];
 	wire [7:0]  prot_rom_din;
 	wire        prot_rom_ready;
 	generate
@@ -942,22 +1405,27 @@ module gunnail_core #(
 		assign prot_rom_din     = 8'h00;
 		assign prot_rom_ready   = 1'b1;
 		assign sd3_addr = 24'd0; assign sd3_req = 1'b0;
-		assign p1_busy  = '{1'b0, 1'b0, 1'b0, 1'b0, 1'b0};
-		assign p1_valid = '{1'b0, 1'b0, 1'b0, 1'b0, 1'b0};
-		assign p1_dout  = '{16'd0, 16'd0, 16'd0, 16'd0, 16'd0};
-		assign p1_dout_pair = '{32'd0, 32'd0, 32'd0, 32'd0, 32'd0};
+		assign p1_busy  = '{1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0};
+		assign p1_valid = '{1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0};
+		assign p1_dout  = '{16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'd0};
+		assign p1_dout_pair = '{32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd0, 32'd0};
 		// channel 0 (TX prefetch) is driven by the video module's txc_* outputs
-		assign p1_addr[1] = 24'd0; assign p1_addr[2] = 24'd0; assign p1_addr[3] = 24'd0; assign p1_addr[4] = 24'd0;
-		// channel 0 (TX prefetch) is driven by the video module's txc_* outputs
-		assign p1_req[1] = 1'b0; assign p1_req[2] = 1'b0; assign p1_req[3] = 1'b0; assign p1_req[4] = 1'b0;
+		assign p1_addr[1] = 24'd0; assign p1_addr[2] = 24'd0; assign p1_addr[3] = 24'd0; assign p1_addr[4] = 24'd0; assign p1_addr[5] = 24'd0; assign p1_addr[6] = 24'd0;
+		assign p1_req[1] = 1'b0; assign p1_req[2] = 1'b0; assign p1_req[3] = 1'b0; assign p1_req[4] = 1'b0; assign p1_req[5] = 1'b0; assign p1_req[6] = 1'b0;
+		assign pl_word = 16'd0; assign pl_word_valid = 1'b0;
+		// tilemap DMA source: the sim array, served the same clock
+		reg [15:0] tilerom [0:65535];
+		initial if (TILEROM_FILE != "") $readmemh(TILEROM_FILE, tilerom);
+		assign dma_word       = tilerom[{dma_bank, dma_idx}];
+		assign dma_word_valid = 1'b1;
 	end else begin : g_p1_hw
 		// Physical port 3: channel 0 is the video module's TX prefetch
 		// stream (top priority, it is real-time), the sound consumers
-		// follow. The sprite fetch has physical port 1 to itself (video
-		// sd_b_*) — see video_macross2.sv TX_EXTERNAL.
-		sdram_arb #(.N(5), .FIXED_PRIO(1)) p1_arb_inst (
+		// follow, the tilemap DMA last. The sprite fetch has physical
+		// port 1 (video sd_b_*) — see video_macross2.sv TX_EXTERNAL.
+		sdram_arb #(.N(7), .FIXED_PRIO(1)) p1_arb_inst (
 			.clk(clk_sys), .reset(por_rst),
-			.i_addr(p1_addr), .i_we('{1'b0, 1'b0, 1'b0, 1'b0, 1'b0}), .i_wrl('{1'b0, 1'b0, 1'b0, 1'b0, 1'b0}), .i_wrh('{1'b0, 1'b0, 1'b0, 1'b0, 1'b0}), .i_din('{16'd0, 16'd0, 16'd0, 16'd0, 16'd0}),
+			.i_addr(p1_addr), .i_we('{1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0}), .i_wrl('{1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0}), .i_wrh('{1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0}), .i_din('{16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'd0}),
 			.i_req(p1_req), .i_busy(p1_busy), .i_valid(p1_valid), .i_dout(p1_dout), .i_dout_pair(p1_dout_pair),
 			.sdram_addr(sd3_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
 			.sdram_dout(sd3_dout), .sdram_dout_pair(sd3_dout_pair), .sdram_req(sd3_req), .sdram_ack(sd3_ack)
@@ -968,14 +1436,31 @@ module gunnail_core #(
 			.byte_addr(nmk004_cache_addr), .data(nmk004_rom_din), .ready(nmk004_rom_ready), .stall(),
 			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1]), .sd_dout_pair(p1_dout_pair[1])
 		);
-		// Protection MCU reads of the 68000 ROM (none in this game's
-		// firmware, wired for completeness): its own 1-line byte cache.
+		// Protection MCU reads of the 68000 ROM (none in the NMK-215
+		// firmware, real for the NMK-110/113): its own 1-line byte cache.
+		// Address bit 0 inverted: the SDRAM word is {odd stream byte, even
+		// stream byte} and the .mra puts the 68000's LOW-byte chip on even
+		// stream addresses, so the 68000's byte at an even address is the
+		// word's HIGH byte — the same ^1 the sprite cache applies. Without
+		// it the NMK-110/113 read every ROM byte pair swapped and tdragon1/
+		// hachamf sat black on the board while the reference sim (a plain
+		// word array) played (2026-09-11).
 		rom_cache1_byte prot_rom_cache_inst (
 			.base_word(23'd0),
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({5'd0, prot_addr[18:0]}), .data(prot_rom_din), .word(), .ready(prot_rom_ready),
+			.byte_addr({5'd0, prot_addr[18:0] ^ 19'd1}), .data(prot_rom_din), .word(), .ready(prot_rom_ready),
 			.sd_addr(p1_addr[4]), .sd_req(p1_req[4]), .sd_busy(p1_busy[4]), .sd_valid(p1_valid[4]), .sd_dout(p1_dout[4]), .sd_dout_pair(p1_dout_pair[4])
 		);
+		// Tilemap DMA: one word per transaction (see the engine above).
+		assign p1_addr[5]     = {1'b0, BASE_WORD_TILEROM} + {8'd0, dma_bank, dma_idx};
+		assign p1_req[5]      = dma_req;
+		// Protection firmware load: one word per transaction (see the loader below).
+		assign p1_addr[6]     = {1'b0, BASE_BYTE_PROT[23:1]} + {11'd0, pl_idx};
+		assign p1_req[6]      = pl_req;
+		assign pl_word        = p1_dout[6];
+		assign pl_word_valid  = p1_valid[6];
+		assign dma_word       = p1_dout[5];
+		assign dma_word_valid = p1_valid[5];
 	end
 	endgenerate
 
@@ -1013,8 +1498,9 @@ module gunnail_core #(
 
 	// ------------------------------------------------------------------
 	// OKIM6295 x2 — jt6295, NMK004-driven banking: 0x00000-0x1FFFF fixed,
-	// 0x20000-0x3FFFF = bank (n+1) x 0x20000 of the 0x80000 ROM
-	// (oki1_map/oki2_map + nmk004_device's okibank entries).
+	// 0x20000-0x3FFFF = bank (n+1) x 0x20000 of the ROM (oki1_map/oki2_map
+	// + nmk004_device's okibank entries). 20-bit physical address: strahl's
+	// regions are 0xA0000 bytes (bank 3 = 0x80000-0x9FFFF).
 	// ------------------------------------------------------------------
 	reg [1:0] oki1_bank_r = 2'd0, oki2_bank_r = 2'd0;
 	always @(posedge clk_sys) begin
@@ -1022,27 +1508,25 @@ module gunnail_core #(
 		if (oki1_bank_we & snd_cen) oki2_bank_r <= oki1_bank[1:0];
 	end
 
-	function automatic [18:0] oki_phys_addr(input [17:0] rom_addr, input [1:0] bank);
+	function automatic [19:0] oki_phys_addr(input [17:0] rom_addr, input [1:0] bank);
 		reg [2:0] bank_p1;
-		reg [19:0] full;
 		begin
 			bank_p1 = {1'b0, bank} + 3'd1;
-			full = rom_addr[17] ? ({bank_p1, 17'd0} + {3'd0, rom_addr[16:0]}) : {3'd0, rom_addr[16:0]};
-			oki_phys_addr = full[18:0];
+			oki_phys_addr = rom_addr[17] ? ({bank_p1, 17'd0} + {3'd0, rom_addr[16:0]}) : {3'd0, rom_addr[16:0]};
 		end
 	endfunction
 
 	wire [17:0] oki1_rom_addr, oki2_rom_addr;
-	wire [18:0] oki1_phys = oki_phys_addr(oki1_rom_addr, oki1_bank_r);
-	wire [18:0] oki2_phys = oki_phys_addr(oki2_rom_addr, oki2_bank_r);
+	wire [19:0] oki1_phys = oki_phys_addr(oki1_rom_addr, oki1_bank_r);
+	wire [19:0] oki2_phys = oki_phys_addr(oki2_rom_addr, oki2_bank_r);
 
 	wire [7:0] oki1_rom_data, oki2_rom_data;
 	wire       oki1_rom_ok, oki2_rom_ok;
 	wire       oki1_stall, oki2_stall;
 	generate
 	if (!HW_ROMS) begin : g_oki_sim
-		reg [7:0] oki1_rom [0:524287];
-		reg [7:0] oki2_rom [0:524287];
+		reg [7:0] oki1_rom [0:655359];
+		reg [7:0] oki2_rom [0:655359];
 		initial if (OKI1_ROM_FILE != "") $readmemh(OKI1_ROM_FILE, oki1_rom);
 		initial if (OKI2_ROM_FILE != "") $readmemh(OKI2_ROM_FILE, oki2_rom);
 		reg [7:0] oki1_rom_data_r, oki2_rom_data_r;
@@ -1061,21 +1545,21 @@ module gunnail_core #(
 		oki_rom_cache oki1_cache_inst (
 			.base_word(BASE_WORD_OKI1),
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({3'd0, oki1_phys}), .data(oki1_rom_data), .ready(oki1_rom_ok), .stall(oki1_stall),
+			.byte_addr({2'd0, oki1_phys}), .data(oki1_rom_data), .ready(oki1_rom_ok), .stall(oki1_stall),
 			.sd_addr(p1_addr[2]), .sd_req(p1_req[2]), .sd_busy(p1_busy[2]), .sd_valid(p1_valid[2]), .sd_dout(p1_dout[2]), .sd_dout_pair(p1_dout_pair[2])
 		);
 		oki_rom_cache oki2_cache_inst (
 			.base_word(BASE_WORD_OKI2),
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({3'd0, oki2_phys}), .data(oki2_rom_data), .ready(oki2_rom_ok), .stall(oki2_stall),
+			.byte_addr({2'd0, oki2_phys}), .data(oki2_rom_data), .ready(oki2_rom_ok), .stall(oki2_stall),
 			.sd_addr(p1_addr[3]), .sd_req(p1_req[3]), .sd_busy(p1_busy[3]), .sd_valid(p1_valid[3]), .sd_dout(p1_dout[3]), .sd_dout_pair(p1_dout_pair[3])
 		);
 `ifdef VERILATOR
 		reg [31:0] oki0_adpcm_total_r = 32'd0, oki0_adpcm_unserved_r = 32'd0;
 		reg [31:0] oki1_adpcm_total_r = 32'd0, oki1_adpcm_unserved_r = 32'd0;
 		reg [31:0] oki_cen_total_r = 32'd0, oki0_stall_cen_r = 32'd0, oki1_stall_cen_r = 32'd0;
-		reg [7:0] golden0 [0:524287];
-		reg [7:0] golden1 [0:524287];
+		reg [7:0] golden0 [0:655359];
+		reg [7:0] golden1 [0:655359];
 		initial if (OKI1_ROM_FILE != "") $readmemh(OKI1_ROM_FILE, golden0);
 		initial if (OKI2_ROM_FILE != "") $readmemh(OKI2_ROM_FILE, golden1);
 		reg [31:0] oki0_bytes_wrong = 32'd0, oki1_bytes_wrong = 32'd0, oki0_bytes_checked = 32'd0, oki1_bytes_checked = 32'd0;
@@ -1166,8 +1650,8 @@ module gunnail_core #(
 		.sound(oki2_snd), .sample()
 	);
 
-	// Audio mix — same routes as tdragon2/raphero (FM 1.20, PSG 0.50 x3,
-	// each OKI 0.10): jt03's mixed snd + each OKI x 3/8, saturated.
+	// Audio mix — same routes on every board (FM 1.20, PSG 0.50 x3,
+	// each OKI 0.10): jt03's mixed snd + each OKI x 3/2, saturated.
 	wire signed [17:0] oki0_ext = {{4{oki1_snd[13]}}, oki1_snd};
 	wire signed [17:0] oki1_ext = {{4{oki2_snd[13]}}, oki2_snd};
 	wire signed [17:0] oki0_g   = oki0_ext + (oki0_ext >>> 1); // x 3/2 (was 3/8 -- measured 8-13dB quiet vs MAME's real OKI:FM balance)
@@ -1183,36 +1667,80 @@ module gunnail_core #(
 	assign dbg_oki1_snd = oki2_snd;
 
 	// ------------------------------------------------------------------
-	// Protection MCU (NMK-215/TMP90840) — nmk_prot_core.sv on clk_sys +
-	// prot_cen. Boot ROM: $readmemh at HW_ROMS=0; at HW_ROMS=1 written
-	// into its on-chip array from the ioctl stream (the 8 KB at
-	// BASE_BYTE_PROT) while the core is in reset.
+	// Protection MCU (NMK-215/TMP90840, NMK-110/113/TMP91640) —
+	// nmk_prot_core.sv on clk_sys + prot_cen. Boot ROM: $readmemh at
+	// HW_ROMS=0; at HW_ROMS=1 written into its on-chip array from the
+	// ioctl stream (the 8 or 16 KB at BASE_BYTE_PROT) while the core is
+	// in reset. Held in reset on the boards without one.
 	// ------------------------------------------------------------------
 	wire nmk214_cfg_we;
 	wire [7:0] nmk214_cfg_data;
 	assign dbg_nmk214_cfg_we   = nmk214_cfg_we;
 	assign dbg_nmk214_cfg_data = nmk214_cfg_data;
 
-	wire prot_rom_we = HW_ROMS && ioctl_rom_wr && ioctl_wr && (ioctl_addr[24:13] == {1'b0, BASE_BYTE_PROT[23:13]});
-	wire [13:0] prot_rom_waddr = {1'b0, ioctl_addr[12:0]}; // offset within the 8 KB region
+	// Protection firmware load (2026-09-11). The firmware used to be copied
+	// into the MCU's on-chip array straight from the ioctl stream, keyed on
+	// game_sel's BASE_BYTE_PROT — but on the board game_sel is not known
+	// yet while the ROM streams in (the .mra <switches> block, ioctl index
+	// 254, arrives separately), so tdragon1/hachamf got their firmware
+	// copied from gunnail's offset (a slice of their BG tiles) and sat
+	// black and silent while the hardware sim, whose game id is a build
+	// parameter, played. The firmware is now read back from SDRAM after
+	// reset — 8/16 KB over the port-3 arbiter, ~2.5 ms at most — with the
+	// 68000 and the MCU held in reset until it is in; the NMK004 boots
+	// meanwhile and just waits for its first command, as it does in MAME
+	// when the 68000 is slower to start.
+	reg        pl_run = 1'b0, pl_done = 1'b0, pl_req = 1'b0, pl_gap = 1'b0;
+	reg [12:0] pl_idx;
+	reg        pl_lo_written;
+	wire [15:0] pl_word;
+	wire        pl_word_valid;
+	wire        prot_loading = HW_ROMS && has_prot && !pl_done;
+	wire        pl_last = (pl_idx == PROT_ROM_BYTES_M1[13:1]);
+	always @(posedge clk_sys) begin
+		if (reset) begin
+			pl_run <= 1'b0; pl_done <= 1'b0; pl_req <= 1'b0; pl_gap <= 1'b0; pl_idx <= 13'd0; pl_lo_written <= 1'b0;
+		end else if (!pl_done && !pl_run) begin
+			pl_run <= 1'b1; pl_idx <= 13'd0; pl_req <= 1'b1; pl_gap <= 1'b0; pl_lo_written <= 1'b0;
+		end else if (pl_run) begin
+			if (pl_gap) begin
+				pl_gap <= 1'b0; pl_req <= 1'b1;
+			end else if (pl_req & pl_word_valid) begin
+				// two byte writes per word: the low stream byte (even
+				// offset) now, the high one (odd) on the next clock — the
+				// arbiter's registered i_dout holds the word meanwhile
+				pl_req <= 1'b0; pl_lo_written <= 1'b1;
+			end else if (pl_lo_written) begin
+				pl_lo_written <= 1'b0;
+				if (pl_last) begin pl_run <= 1'b0; pl_done <= 1'b1; end
+				else begin pl_idx <= pl_idx + 13'd1; pl_gap <= 1'b1; end
+			end
+		end
+	end
+	wire        prot_rom_we    = HW_ROMS && pl_run && ((pl_req & pl_word_valid) | pl_lo_written);
+	wire [13:0] prot_rom_waddr = {pl_idx, pl_lo_written};
+	wire [7:0]  prot_rom_wdata = pl_lo_written ? pl_word[15:8] : pl_word[7:0];
 
 	wire [9:0] vt_hcount, vt_vcount;
+	wire prot_halt_raw;
 	nmk_prot_core #(
 		.BOOT_ROM_FILE(PROT_BOOT_FILE),
-		.ROM_SIZE(8192), .RAM_BASE(16'hfec0), .RAM_SIZE(256),
+		.ROM_SIZE(16384), .RAM_BASE(16'hfdc0), .RAM_SIZE(512),
 		.USE_CEN(1)
 	) prot_mcu (
-		.clk(clk_sys), .cen(prot_cen), .reset(reset),
-		.rom_we(prot_rom_we), .rom_waddr(prot_rom_waddr), .rom_wdata(ioctl_dout),
+		.clk(clk_sys), .cen(prot_cen), .reset(reset | ~has_prot | prot_loading),
+		.p7_ext_en_i(g_hachamf), .p7_ext_val_i(8'h0C), // NMK-113 selects its Hacha Mecha Fighter codepath by this port-7 constant
+		.rom_we(prot_rom_we), .rom_waddr(prot_rom_waddr), .rom_wdata(prot_rom_wdata),
 		.bus_addr(prot_addr), .bus_rd(prot_rd), .bus_wr(prot_wr),
 		.bus_wdata(prot_wdata), .bus_rdata(prot_rdata),
 		.vpos_div4(vt_vcount[9:2]),
-		.halt_68k(halt_68k),
+		.halt_68k(prot_halt_raw),
 		.nmk214_cfg_we(nmk214_cfg_we), .nmk214_cfg_data(nmk214_cfg_data),
 		.dbg_pc(dbg_prot_pc), .dbg_valid(dbg_prot_valid),
 		.dbg_hl(dbg_prot_hl), .dbg_a(dbg_prot_a), .dbg_de(dbg_prot_de), .dbg_iy(dbg_prot_iy),
 		.dbg_int_ram_at_hl(dbg_prot_int_ram_at_hl)
 	);
+	assign halt_68k = prot_halt_raw & has_prot;
 
 	// Shared-bus read mux (byte) and the ready/stall logic.
 	reg [15:0] prot_rdata16;
@@ -1225,8 +1753,8 @@ module gunnail_core #(
 		else if (prot_sel_nmk004_r) prot_rdata16 = {8'h00, nmk004_to_host_latch};
 		else if (prot_sel_in0)     prot_rdata16 = HW_ROMS ? in0_i  : 16'hFFFF;
 		else if (prot_sel_in1)     prot_rdata16 = HW_ROMS ? in1_i  : 16'hFFFF;
-		else if (prot_sel_dsw1)    prot_rdata16 = HW_ROMS ? dsw1_i : 16'hFFFF;
-		else if (prot_sel_dsw2)    prot_rdata16 = HW_ROMS ? dsw2_i : 16'hFFFF;
+		else if (prot_sel_dsw1)    prot_rdata16 = (HW_ROMS || (SIM_DSW != 0)) ? dsw1_i : 16'hFFFF;
+		else if (prot_sel_dsw2)    prot_rdata16 = (HW_ROMS || (SIM_DSW != 0)) ? dsw2_i : 16'hFFFF;
 		else                       prot_rdata16 = 16'hFFFF;
 	end
 	assign prot_rdata = prot_addr[0] ? prot_rdata16[7:0] : prot_rdata16[15:8];
@@ -1259,18 +1787,21 @@ module gunnail_core #(
 		else if (sel_mainram) rdata = mainram_dout;
 		else if (sel_palette) rdata = palette_dout;
 		else if (sel_bgvram)  rdata = bgvram_dout;
+		else if (sel_bgvram2) rdata = bgvram2_dout;
 		else if (sel_txvram)  rdata = txvram_dout;
 		else if (sel_nmk004_r) rdata = {8'h00, nmk004_to_host_latch};
 		else if (sel_in0)     rdata = HW_ROMS ? in0_i  : 16'hFFFF;
 		else if (sel_in1)     rdata = HW_ROMS ? in1_i  : 16'hFFFF;
-		else if (sel_dsw1)    rdata = HW_ROMS ? dsw1_i : 16'hFFFF;
-		else if (sel_dsw2)    rdata = HW_ROMS ? dsw2_i : 16'hFFFF;
-		else                  rdata = 16'hFFFF; // unmapped (incl. the write-only scroll tables)
+		else if (sel_dsw1)    rdata = (HW_ROMS || (SIM_DSW != 0)) ? dsw1_i : 16'hFFFF;
+		else if (sel_dsw2)    rdata = (HW_ROMS || (SIM_DSW != 0)) ? dsw2_i : 16'hFFFF;
+		else                  rdata = 16'hFFFF; // unmapped (incl. the write-only scroll registers)
 	end
 	assign iEdb = rdata;
 
 	// ------------------------------------------------------------------
-	// Raster timing + V-PROM interrupt generation
+	// Raster timing + interrupt generation: the V-PROM state machine
+	// (three PROM tables, vprom_sel) or MAME's fixed-scanline substitute
+	// for strahl (irq_hacky). Both run; the selected one's outputs count.
 	// ------------------------------------------------------------------
 	wire vt_line_start, vt_hblank, vt_vblank;
 	video_timing vtiming (
@@ -1284,54 +1815,80 @@ module gunnail_core #(
 	assign vcount_o = vt_vcount;
 	assign hblank_o = vt_hblank;
 	assign vblank_o = vt_vblank;
+	assign lowres_o = lowres;
 
 	wire sprite_dma_trigger;
+	wire [2:0] ipl_prom, ipl_hacky;
+	wire       sprdma_prom, sprdma_hacky;
 	nmk_irq #(
 		.VTIMING_FILE(VTIMING_FILE)
 	) irq_gen (
 		.clk_sys(clk_sys),
-		.table_sel(1'b0),
+		.table_sel(vprom_sel),
 		.reset(reset),
 		.line_start(vt_line_start),
 		.vcount(vt_vcount),
 		.iack_cycle(iack_cycle),
 		.iack_level(eab[3:1]),
-		.ipl_level(ipl_level),
-		.sprite_dma_trigger(sprite_dma_trigger)
+		.ipl_level(ipl_prom),
+		.sprite_dma_trigger(sprdma_prom)
 	);
+	nmk_irq_hacky irq_gen_hacky (
+		.clk_sys(clk_sys),
+		.reset(reset),
+		.line_start(vt_line_start),
+		.vcount(vt_vcount),
+		.iack_cycle(iack_cycle),
+		.iack_level(eab[3:1]),
+		.ipl_level(ipl_hacky),
+		.sprite_dma_trigger(sprdma_hacky)
+	);
+	assign ipl_level          = irq_hacky ? ipl_hacky    : ipl_prom;
+	assign sprite_dma_trigger = irq_hacky ? sprdma_hacky : sprdma_prom;
 
 	// ------------------------------------------------------------------
 	// Video — video_macross2.sv, gfx_macross parameters + per-line scroll
-	// + NMK214 descramble.
+	// + NMK214 descramble, with the runtime layer configuration above.
 	// ------------------------------------------------------------------
 	video_macross2 #(
 		.TX_EXTERNAL(1),
 		.FGTILE_FILE(FGTILE_FILE),
 		.BGTILE_FILE(BGTILE_FILE),
+		.BG2TILE_FILE(BG2TILE_FILE),
 		.SPRITES_FILE(SPRITES_FILE),
 		.HW_ROMS(HW_ROMS),
 		.DBG_MISS_PAINT(DBG_MISS_PAINT),
 		.RASTER_SCROLL(1),
 		.SPRITES_BYTES(2097152),
+		.BGTILE_BYTES(2097152),
+		.BG2TILE_BYTES(524288),
 		.SPR_COLOUR_BITS(4),
 		.TX_PAL_BASE_P(10'h200),
 		.BG_CODE_BITS(13),
-		.NMK214(1)
+		.NMK214(1),
+		.BG2_LAYER(1)
 	) video (
 		.clk_sys(clk_sys), .reset(reset),
+		.lowres(lowres), .raster_scroll(g_gunnail), .cfg_rt(1'b1),
+		.bga_pal_base_i(cfg_bga_pal), .bgb_pal_base_i(cfg_bgb_pal), .spr_pal_base_i(cfg_spr_pal), .tx_pal_base_i(cfg_tx_pal),
+		.bga_code_mask_i(cfg_bga_mask), .bgb_code_mask_i(cfg_bgb_mask), .spr_units_i(cfg_spr_units),
+		.sprdma_word_base(cfg_sprdma_word), .nmk214_en(has_214),
+		.bg2_en(bg2), .bga_rom2(g_bioship), .bgb_rom2(g_strahl), .base_word_bgtile_b(BASE_WORD_BGTILE_B),
+		.bgvram_b_addr(vid_bgvram_b_addr), .bgvram_b_data(vid_bgvram_b_dout),
+		.bgb_xscroll(bgb_xscroll), .bgb_yscroll(bgb_yscroll),
 		.sprite_dma_trigger(sprite_dma_trigger), .sprite_dma_busy(sprite_dma_busy),
 		.bgvram_addr(vid_bgvram_addr), .bgvram_data(vid_bgvram_dout),
 		.txvram_addr(vid_txvram_addr), .txvram_data(vid_txvram_dout),
 		.palette_addr(vid_palette_addr), .palette_data(vid_palette_dout),
 		.spr_palette_addr(vid_spr_palette_addr), .spr_palette_data(vid_spr_palette_dout),
 		.mainram_addr(vid_mainram_addr), .mainram_data(vid_mainram_dout), .mainram_ready(vid_mainram_ready),
-		.bg_xscroll(16'd0), .bg_yscroll(16'd0),
+		.bg_xscroll(bga_xscroll), .bg_yscroll(bga_yscroll),
 		.scrollram_0(scrollram0_reg), .scrollramy_0(scrollramy0_reg),
 		.scroll_row_addr(vid_scroll_row_addr),
 		.scrollram_row(vid_scrollram_row), .scrollramy_row(vid_scrollramy_row),
-		.nmk214_cfg_we(nmk214_cfg_we), .nmk214_cfg_data(nmk214_cfg_data),
+		.nmk214_cfg_we(nmk214_cfg_we & has_214), .nmk214_cfg_data(nmk214_cfg_data),
 		.bg_bank(bgbank_reg),
-		.game_powerins(1'b0), .base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE), .base_word_sprites(BASE_WORD_SPRITES),
+		.game_powerins(1'b0), .base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE_A), .base_word_sprites(BASE_WORD_SPRITES),
 		.tilerambank(2'd0),
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),

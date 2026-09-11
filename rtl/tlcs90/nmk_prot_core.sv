@@ -119,6 +119,13 @@ module nmk_prot_core #(
 	input cen,
 	input reset,
 
+	// Runtime port-7 constant (2026-09-11, the multi-game Gunnail rbf):
+	// ORed with / overriding the P7_EXT_* parameters above, so one
+	// instance can serve NMK-113 (hachamf: 0x0C) and the ROMs that wire
+	// nothing to port 7. Tie 0 / 8'h00 to keep the parameters' behaviour.
+	input        p7_ext_en_i,
+	input  [7:0] p7_ext_val_i,
+
 	// Boot-ROM load port (hardware core: the .mra download writes the
 	// protection ROM into the on-chip array while the core is in reset;
 	// sim wrappers leave these unconnected and use BOOT_ROM_FILE).
@@ -291,7 +298,7 @@ module nmk_prot_core #(
 		.p5_ext_en(1'b1), .p5_ext_val(vpos_div4),
 		.p6_ext_en(1'b1), .p6_ext_val(p6_read_value),
 		.p6_we(p6_we), .p6_wdata(p6_wdata),
-		.p7_ext_en(P7_EXT_EN), .p7_ext_val(P7_EXT_VAL),
+		.p7_ext_en(P7_EXT_EN | p7_ext_en_i), .p7_ext_val(P7_EXT_EN ? P7_EXT_VAL : p7_ext_val_i),
 		.p3_we(p3_we), .p3_wdata(p3_wdata), .p7_we(p7_we), .p7_wdata(p7_wdata)
 	);
 

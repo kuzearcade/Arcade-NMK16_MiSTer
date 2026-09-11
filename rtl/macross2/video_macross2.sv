@@ -88,10 +88,52 @@ module video_macross2 #(
 	parameter SPR_COLOUR_BITS = 5,
 	parameter [9:0] TX_PAL_BASE_P = 10'h300,
 	parameter BG_CODE_BITS = 14,
-	parameter NMK214 = 0
+	parameter NMK214 = 0,
+	// Second BG layer (2026-09-11, the multi-game Gunnail rbf): bioship
+	// and strahl (screen_update_strahl) draw two 256x32 page-mapped
+	// tilemaps, layer A opaque underneath and layer B with pen 15
+	// transparent above it, then TX and the sprites (both BG layers take
+	// tilemap priority 1, so sprites — pri_mask bit 1 — pass over both).
+	// BG2_LAYER=1 builds layer B's pipeline (its own VRAM port, scroll,
+	// palette base, tile ROM region and prefetch stream on the sprite
+	// port); bg2_en switches it on per game. Requires TX_EXTERNAL=1.
+	parameter BG2_LAYER = 0,
+	parameter BG2TILE_FILE = "",
+	parameter integer BG2TILE_BYTES = 524288
 ) (
 	input clk_sys,
 	input reset,
+
+	// ------------------------------------------------------------------
+	// Runtime layer configuration (2026-09-11, Gunnail.rbf's nine lowres
+	// NMK004 games). lowres: set_screen_lowres geometry — 256 visible
+	// pixels from bitmap x 92 (the same 64 us line: 384 px at 6 MHz),
+	// TX tilemap 32x32, max_sprite_clock 384*263. cfg_rt=1: the palette
+	// bases, BG tile-code masks and sprite unit count below replace the
+	// parameter-derived values (cfg_rt=0: every earlier instantiation,
+	// bit-for-bit unchanged). raster_scroll: RASTER_SCROLL=1 builds only —
+	// 1 = the per-line tables, 0 = the bg_xscroll/bg_yscroll registers.
+	// ------------------------------------------------------------------
+	input        lowres,
+	input        raster_scroll,
+	input        cfg_rt,
+	input [10:0] bga_pal_base_i,   // layer A (gfx1's palette base in the game's GFXDECODE)
+	input [10:0] bgb_pal_base_i,   // layer B
+	input [10:0] spr_pal_base_i,
+	input [10:0] tx_pal_base_i,
+	input [13:0] bga_code_mask_i,  // (code & 0xfff | bgbank << 12) & mask: the ROM's tile count - 1
+	input [13:0] bgb_code_mask_i,
+	input [17:0] spr_units_i,      // sprite ROM bytes / 128
+	input [14:0] sprdma_word_base, // m_sprdma_base / 2: 0x4000, strahl 0x7800
+	input        nmk214_en,        // NMK214=1 builds: 0 = descramblers bypassed (no protection MCU on this board)
+	// Layer B (BG2_LAYER=1)
+	input        bg2_en,
+	input        bga_rom2,         // HW_ROMS=0: layer A reads the bg2tile array (bioship's ROM tilemap draws gfx3)
+	input        bgb_rom2,         // HW_ROMS=0: layer B reads the bg2tile array (strahl)
+	input [22:0] base_word_bgtile_b, // HW_ROMS=1: layer B's tile ROM region
+	output [12:0] bgvram_b_addr,
+	input  [15:0] bgvram_b_data,
+	input [15:0] bgb_xscroll, bgb_yscroll,
 
 	// Runtime game mode (2026-09-11): 1 = Power Instinct (powerins,
 	// set_screen_midres + gfx_powerins + get_flip_extcode_powerins +
@@ -237,10 +279,16 @@ module video_macross2 #(
 	// SCREEN_W stays the sprite-plane STRIDE (384) in both modes; only the
 	// visible width, screen_w_vis, changes.
 	// ------------------------------------------------------------------
-	wire [9:0]  screen_w_vis     = game_powerins ? 10'd320 : 10'd384;
-	wire [9:0]  bitmap_x0        = game_powerins ? 10'd60  : 10'd28;
+	// lowres (set_screen_lowres, 2026-09-11): raw 384 x 278 at 6 MHz,
+	// visible x 92..347 (256 px) — bitmap origin (92,16), again the same
+	// 64 us line as the 512 x 8 MHz raster; set_scrolldx(92) = VIDEOSHIFT
+	// and videoshift 92, so tilemap x = screen x + scroll and a sprite at
+	// X lands at screen X. Sprite masks 0x1ff/512 as hi-res;
+	// max_sprite_clock 384*263; TX tilemap 32 x 32 (see the TX block).
+	wire [9:0]  screen_w_vis     = game_powerins ? 10'd320 : lowres ? 10'd256 : 10'd384;
+	wire [9:0]  bitmap_x0        = game_powerins ? 10'd60  : lowres ? 10'd92  : 10'd28;
 	integer     max_sprite_clock;
-	always @(*) max_sprite_clock = game_powerins ? 117824 : 134656; // 448*263 / 512*263, set_max_sprite_clock
+	always @(*) max_sprite_clock = game_powerins ? 117824 : lowres ? 100992 : 134656; // 448*263 / 384*263 / 512*263, set_max_sprite_clock
 	integer     spr_wrap;                                             // sprite coordinate modulus (xpos_max/ypos_max)
 	always @(*) spr_wrap = game_powerins ? 1024 : 512;
 	// The modulus is applied as a bit mask (both are powers of two and
@@ -253,8 +301,9 @@ module video_macross2 #(
 
 	// Palette bases — see header and the mode block above.
 	localparam [10:0] BG_PAL_BASE  = 11'h000;
-	wire       [10:0] spr_pal_base = game_powerins ? 11'h400 : 11'h100;
-	wire       [10:0] tx_pal_base  = game_powerins ? 11'h200 : {1'b0, TX_PAL_BASE_P};
+	wire       [10:0] bg_pal_base  = cfg_rt ? bga_pal_base_i : BG_PAL_BASE;
+	wire       [10:0] spr_pal_base = game_powerins ? 11'h400 : cfg_rt ? spr_pal_base_i : 11'h100;
+	wire       [10:0] tx_pal_base  = game_powerins ? 11'h200 : cfg_rt ? tx_pal_base_i  : {1'b0, TX_PAL_BASE_P};
 
 	// ------------------------------------------------------------------
 	// Graphics ROMs (byte-addressed, see tools/mkgfxrom.py). No
@@ -288,6 +337,10 @@ module video_macross2 #(
 	wire [15:0] bg_vram_use;
 	wire [15:0] tx_vram_use;
 	wire        bg_hit, tx_hit; // prefetch-cache hit flags (DBG_MISS_PAINT only; tied 1 at HW_ROMS=0)
+	// Layer B (BG2_LAYER=1): its own byte/VRAM streams, same contract.
+	wire [7:0]  bgbtile_rom_byte;
+	wire [15:0] bgb_vram_use;
+	wire        bgb_hit;
 	generate
 	if (!HW_ROMS) begin : g_video_rom_sim
 		reg [7:0] fgtile_rom  [0:131071];  // mcrs2j.1, 8x8x4bpp packed_msb, 32B/tile
@@ -297,7 +350,6 @@ module video_macross2 #(
 		initial if (BGTILE_FILE  != "") $readmemh(BGTILE_FILE,  bgtile_rom);
 		initial if (SPRITES_FILE != "") $readmemh(SPRITES_FILE, sprites_rom);
 		assign fgtile_rom_byte  = fgtile_rom[fg_byte_addr_sim[16:0]];
-		assign bgtile_rom_byte  = bgtile_rom[bg_byte_addr];
 		assign sprites_rom_byte = sprites_rom[spr_byte_addr];
 		assign sprites_rom_word = {sprites_rom[{spr_byte_addr[22:1], 1'b0}], sprites_rom[{spr_byte_addr[22:1], 1'b1}]}; // get_u16be
 		assign sprites_ready = 1'b1;
@@ -310,6 +362,25 @@ module video_macross2 #(
 		assign sd_addr = 24'd0; assign sd_wrl = 1'b0; assign sd_wrh = 1'b0; assign sd_din = 16'd0; assign sd_req = 1'b0;
 		assign sd_b_addr = 24'd0; assign sd_b_req = 1'b0;
 		assign txc_addr = 24'd0; assign txc_req = 1'b0;
+		if (BG2_LAYER) begin : g_bg2_sim
+			// Two tile ROM arrays, either layer may draw from either (see
+			// bga_rom2/bgb_rom2: bioship's ROM tilemap is gfx3 = "bg2tile"
+			// underneath its VRAM layer on gfx1 = "bgtile"; strahl has
+			// bgvram0 on gfx1 and bgvram1 on gfx3).
+			reg [7:0] bg2tile_rom [0:BG2TILE_BYTES-1];
+			initial if (BG2TILE_FILE != "") $readmemh(BG2TILE_FILE, bg2tile_rom);
+			assign bgtile_rom_byte  = bga_rom2 ? bg2tile_rom[bg_byte_addr[18:0]]  : bgtile_rom[bg_byte_addr];
+			assign bgbtile_rom_byte = bgb_rom2 ? bg2tile_rom[bgb_byte_addr[18:0]] : bgtile_rom[bgb_byte_addr];
+			assign bgvram_b_addr = bgb_vram_addr_use;
+			assign bgb_vram_use  = bgvram_b_data;
+			assign bgb_hit = 1'b1;
+		end else begin : g_no_bg2_sim
+			assign bgtile_rom_byte  = bgtile_rom[bg_byte_addr];
+			assign bgbtile_rom_byte = 8'hFF;
+			assign bgvram_b_addr = 13'd0;
+			assign bgb_vram_use  = 16'd0;
+			assign bgb_hit = 1'b1;
+		end
 	end else begin : g_video_rom_hw
 		// Port A (sd_*): the BG prefetch stream alone, straight onto its own
 		// sdram_req. Port B (sd_b_*): TX prefetch + sprites, fixed priority.
@@ -354,14 +425,59 @@ module video_macross2 #(
 			assign arb_valid[0] = txc_valid;
 			assign arb_dout[0]  = txc_dout;
 			assign arb_dout_pair[0] = txc_dout_pair;
-			sdram_req spr_req_inst (
-				.clk(clk_sys), .reset(reset),
-				.addr(arb_addr[1]), .we(1'b0), .wrl(1'b0), .wrh(1'b0), .din(16'd0),
-				.req(arb_req[1]), .busy(arb_busy[1]), .valid(arb_valid[1]), .dout(arb_dout[1]), .dout_pair(arb_dout_pair[1]),
-				.sdram_addr(sd_b_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
-				.sdram_dout(sd_b_dout), .sdram_dout_pair(sd_b_dout_pair), .sdram_req(sd_b_req), .sdram_ack(sd_b_ack)
-			);
+			if (BG2_LAYER) begin : g_bg2_hw
+				// Layer B's prefetch stream shares port B with the sprite
+				// fetch, real-time stream first: the sprite pass is a
+				// background compositing pass that simply runs slower while
+				// a two-layer game is drawing (its MAME budget is 25 %
+				// smaller on the lowres boards anyway), whereas layer A's
+				// port (sd_*) and the TX/sound port already carry one
+				// real-time stream each.
+				wire        b_busy [0:1];
+				wire        b_valid[0:1];
+				wire [24:1] b_addr [0:1];
+				wire        b_req  [0:1];
+				wire [15:0] b_dout [0:1];
+				wire [31:0] b_dout_pair [0:1];
+				assign b_addr[1] = arb_addr[1];
+				assign b_req[1]  = arb_req[1];
+				assign arb_busy[1]  = b_busy[1];
+				assign arb_valid[1] = b_valid[1];
+				assign arb_dout[1]  = b_dout[1];
+				assign arb_dout_pair[1] = b_dout_pair[1];
+				sdram_arb #(.N(2), .FIXED_PRIO(1)) bg2_arb_inst (
+					.clk(clk_sys), .reset(reset),
+					.i_addr(b_addr), .i_we('{1'b0,1'b0}), .i_wrl('{1'b0,1'b0}), .i_wrh('{1'b0,1'b0}), .i_din('{16'd0,16'd0}),
+					.i_req(b_req), .i_busy(b_busy), .i_valid(b_valid), .i_dout(b_dout), .i_dout_pair(b_dout_pair),
+					.sdram_addr(sd_b_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
+					.sdram_dout(sd_b_dout), .sdram_dout_pair(sd_b_dout_pair), .sdram_req(sd_b_req), .sdram_ack(sd_b_ack)
+				);
+				assign bgvram_b_addr = bgb_vram_addr_look;
+				tile_prefetch_byte #(.TAG_W(19), .ENTRIES(8)) bgbtile_cache_inst (
+					.base_word(base_word_bgtile_b),
+					.clk(clk_sys), .reset(reset),
+					.pf_tag(bgb_look_tag), .pf_byte_addr({2'd0, bgbl_byte_addr}), .pf_vram(bgvram_b_data),
+					.use_tag(bgb_use_tag), .use_sel(bgb_half_col[2:1]), .data(bgbtile_rom_byte), .vram(bgb_vram_use), .hit(bgb_hit),
+					.sd_addr(b_addr[0]), .sd_req(b_req[0]), .sd_busy(b_busy[0]), .sd_valid(b_valid[0]), .sd_dout(b_dout[0]), .sd_dout_pair(b_dout_pair[0])
+				);
+			end else begin : g_no_bg2_hw
+				assign bgvram_b_addr = 13'd0;
+				assign bgbtile_rom_byte = 8'hFF;
+				assign bgb_vram_use = 16'd0;
+				assign bgb_hit = 1'b1;
+				sdram_req spr_req_inst (
+					.clk(clk_sys), .reset(reset),
+					.addr(arb_addr[1]), .we(1'b0), .wrl(1'b0), .wrh(1'b0), .din(16'd0),
+					.req(arb_req[1]), .busy(arb_busy[1]), .valid(arb_valid[1]), .dout(arb_dout[1]), .dout_pair(arb_dout_pair[1]),
+					.sdram_addr(sd_b_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
+					.sdram_dout(sd_b_dout), .sdram_dout_pair(sd_b_dout_pair), .sdram_req(sd_b_req), .sdram_ack(sd_b_ack)
+				);
+			end
 		end else begin : g_tx_int
+			assign bgvram_b_addr = 13'd0;
+			assign bgbtile_rom_byte = 8'hFF;
+			assign bgb_vram_use = 16'd0;
+			assign bgb_hit = 1'b1;
 			assign txc_addr = 24'd0; assign txc_req = 1'b0;
 			sdram_arb #(.N(2), .FIXED_PRIO(1)) video_arb_inst (
 				.clk(clk_sys), .reset(reset),
@@ -485,8 +601,8 @@ module video_macross2 #(
 	wire [8:0]  bm_y      = rd_y + BITMAP_Y0[8:0];
 	// Effective scroll for this line — see header (RASTER_SCROLL).
 	assign scroll_row_addr = bm_y[7:0];
-	wire [15:0] bg_xscroll_eff = RASTER_SCROLL ? (scrollram_0 + scrollram_row)   : bg_xscroll;
-	wire [15:0] bg_yscroll_eff = RASTER_SCROLL ? (scrollramy_0 + scrollramy_row) : bg_yscroll;
+	wire [15:0] bg_xscroll_eff = (RASTER_SCROLL && raster_scroll) ? (scrollram_0 + scrollram_row)   : bg_xscroll;
+	wire [15:0] bg_yscroll_eff = (RASTER_SCROLL && raster_scroll) ? (scrollramy_0 + scrollramy_row) : bg_yscroll;
 	wire [12:0] bg_line_x = (bm_x + 13'd4096 - VIDEOSHIFT[12:0] + bg_xscroll_eff[12:0]) % 13'd4096;
 	wire [12:0] bg_line_y = (bm_y + 13'd512 + bg_yscroll_eff[12:0]) % 13'd512;
 	wire [7:0]  bg_col = bg_line_x[11:4];
@@ -518,7 +634,12 @@ module video_macross2 #(
 	// powerins_get_bg_tile_info: (code & 0x7ff) | (bgbank << 11) — the
 	// 0x280000-byte ROM holds 20480 tiles, so bank values 0..9 (4 bits)
 	// cover it; colour = {code[11], code[15:12]} (5 bits, see mode block).
+	// cfg_rt: the full 14-bit (bank[1:0], code[11:0]) masked to the ROM's
+	// tile count (MAME: code % elements, a power of two for every board
+	// but the sprites' — see spr_units); the parameter form is the same
+	// for the two masks it can express.
 	wire [14:0] bg_code = game_powerins        ? {bg_bank[3:0], bgvram_data[10:0]} :
+	                      cfg_rt               ? {1'b0, {bg_bank[1:0], bgvram_data[11:0]} & bga_code_mask_i} :
 	                      (BG_CODE_BITS == 14) ? {1'b0, bg_bank[1:0], bgvram_data[11:0]} : {2'b0, bg_bank[0], bgvram_data[11:0]};
 	wire [3:0]  bg_half_col = bg_px;
 	assign bg_byte_addr = {bg_code, 7'd0} + (bg_half_col >= 4'd8 ? 22'd64 : 22'd0) + {16'd0, bg_py, 2'd0} + {20'd0, bg_half_col[2:1]};
@@ -527,11 +648,42 @@ module video_macross2 #(
 	// with the cached byte (bg_vram_use == bgvram_data at HW_ROMS=0) —
 	// the NMK214 selects its data bitswap from bits of this address.
 	wire [14:0] bg_use_code = game_powerins        ? {bg_bank[3:0], bg_vram_use[10:0]} :
+	                          cfg_rt               ? {1'b0, {bg_bank[1:0], bg_vram_use[11:0]} & bga_code_mask_i} :
 	                          (BG_CODE_BITS == 14) ? {1'b0, bg_bank[1:0], bg_vram_use[11:0]} : {2'b0, bg_bank[0], bg_vram_use[11:0]};
 	wire [21:0] bg_use_byte_addr = {bg_use_code, 7'd0} + (bg_half_col >= 4'd8 ? 22'd64 : 22'd0) + {16'd0, bg_py, 2'd0} + {20'd0, bg_half_col[2:1]};
 	wire [3:0] bg_pix_nib = bg_tile_pixel_nib(bgtile_byte, bg_half_col & 4'h7);
-	wire [10:0] bg_pal_addr = BG_PAL_BASE + (game_powerins ? {2'd0, bg_vram_use[11], bg_vram_use[15:12], bg_pix_nib}
-	                                                       : {3'd0, bg_vram_use[15:12], bg_pix_nib});
+	wire [10:0] bg_pal_addr = bg_pal_base + (game_powerins ? {2'd0, bg_vram_use[11], bg_vram_use[15:12], bg_pix_nib}
+                                                       : {3'd0, bg_vram_use[15:12], bg_pix_nib});
+
+	// ------------------------------------------------------------------
+	// BG layer B (BG2_LAYER=1, see the parameter): the same 256x32
+	// page-mapped tilemap with its own frame-constant scroll, code mask,
+	// palette base and tile ROM; common_get_bg_tile_info<1, Gfx> — the
+	// bgbank applies here too. Pen 15 is transparent (set_transparent_pen
+	// in VIDEO_START bioship/strahl). No NMK214 (neither board has one).
+	// The wires exist unconditionally (tied at BG2_LAYER=0) so the
+	// composite mux below is the same in every build.
+	// ------------------------------------------------------------------
+	wire [12:0] bgb_line_x = (bm_x + 13'd4096 - VIDEOSHIFT[12:0] + bgb_xscroll[12:0]) % 13'd4096;
+	wire [12:0] bgb_line_y = (bm_y + 13'd512 + bgb_yscroll[12:0]) % 13'd512;
+	wire [7:0]  bgb_col = bgb_line_x[11:4];
+	wire [3:0]  bgb_px  = bgb_line_x[3:0];
+	wire [4:0]  bgb_row = bgb_line_y[8:4];
+	wire [3:0]  bgb_py  = bgb_line_y[3:0];
+	wire [12:0] bgb_vram_addr_use = {bgb_row[4], bgb_col, bgb_row[3:0]};
+	wire [12:0] bgbl_line_x = (bm_x_look + 13'd4096 - VIDEOSHIFT[12:0] + bgb_xscroll[12:0]) % 13'd4096;
+	wire [7:0]  bgbl_col      = bgbl_line_x[11:4];
+	wire [3:0]  bgbl_half_col = bgbl_line_x[3:0];
+	wire [12:0] bgb_vram_addr_look = {bgb_row[4], bgbl_col, bgb_row[3:0]};
+	wire [18:0] bgb_use_tag  = {1'b0, bgb_line_y[8:0], bgb_line_x[11:3]};
+	wire [18:0] bgb_look_tag = {1'b0, bgb_line_y[8:0], bgbl_line_x[11:3]};
+	wire [14:0] bgb_code = {1'b0, {bg_bank[1:0], bgvram_b_data[11:0]} & bgb_code_mask_i};
+	wire [3:0]  bgb_half_col = bgb_px;
+	wire [21:0] bgb_byte_addr  = {bgb_code, 7'd0} + (bgb_half_col  >= 4'd8 ? 22'd64 : 22'd0) + {16'd0, bgb_py, 2'd0} + {20'd0, bgb_half_col[2:1]};
+	wire [21:0] bgbl_byte_addr = {bgb_code, 7'd0} + (bgbl_half_col >= 4'd8 ? 22'd64 : 22'd0) + {16'd0, bgb_py, 2'd0} + {20'd0, bgbl_half_col[2:1]};
+	wire [3:0]  bgb_pix_nib = bg_tile_pixel_nib(bgbtile_rom_byte, bgb_half_col & 4'h7);
+	wire        bgb_opaque  = (BG2_LAYER != 0) && bg2_en && (bgb_pix_nib != 4'hF);
+	wire [10:0] bgb_pal_addr = bgb_pal_base_i + {3'd0, bgb_vram_use[15:12], bgb_pix_nib};
 
 	// ------------------------------------------------------------------
 	// TX tilemap: fixed 8x8 tiles, 64x32 (512x256 logical px — see
@@ -546,8 +698,11 @@ module video_macross2 #(
 	// third (a second NMK logo on tdragon2's title, no HUD column, Macross
 	// II's "SPECIAL THANKS" cut at x=256). Found by comparing real-hardware
 	// captures against MAME snapshots, see docs/hw-bringup.md.
+	// lowres: the TX tilemap is 32 x 32 (VIDEO_START manybloc/macross,
+	// TILEMAP_SCAN_COLS 8,8,32,32 — 256 logical px, the whole screen), so
+	// the logical x is taken modulo 256 and the column has 5 bits.
 	wire [9:0] tx_sum = bm_x + 10'd512 - VIDEOSHIFT[9:0];
-	wire [8:0] tx_line_x = tx_sum[8:0]; // mod 512 (logical width), truncation is the modulo
+	wire [8:0] tx_line_x = lowres ? {1'b0, tx_sum[7:0]} : tx_sum[8:0]; // mod 512 (logical width), truncation is the modulo
 	wire [7:0] tx_line_y = bm_y[7:0];   // 256 logical height, no scroll — bitmap y directly
 	wire [5:0] tx_col = tx_line_x[8:3]; // 6 bits — 64 columns
 	wire [2:0] tx_px  = tx_line_x[2:0];
@@ -560,7 +715,7 @@ module video_macross2 #(
 	// Lookahead-pixel derivation (same line): HW_ROMS=1 drives txvram_addr
 	// from this one and fetches fgl_byte_addr — see the BG block above.
 	wire [9:0]  txl_sum    = bm_x_look + 10'd512 - VIDEOSHIFT[9:0];
-	wire [8:0]  txl_line_x = txl_sum[8:0];
+	wire [8:0]  txl_line_x = lowres ? {1'b0, txl_sum[7:0]} : txl_sum[8:0];
 	wire [5:0]  txl_col    = txl_line_x[8:3];
 	wire [2:0]  txl_px     = txl_line_x[2:0];
 	wire [10:0] tx_vram_addr_look = {txl_col, 5'd0} + {6'd0, tx_row};
@@ -573,10 +728,11 @@ module video_macross2 #(
 	wire [10:0] tx_pal_addr = tx_pal_base + {3'd0, tx_vram_use[15:12], tx_pix_nib};
 
 	// ------------------------------------------------------------------
-	// Live per-pixel palette tap, shared by both tilemap layers — TX
-	// wins when opaque (pen!=15), else BG.
+	// Live per-pixel palette tap, shared by the tilemap layers — TX
+	// wins when opaque (pen!=15), else BG layer B (opaque, BG2_LAYER
+	// builds only), else BG layer A.
 	// ------------------------------------------------------------------
-	assign palette_addr = tx_opaque ? tx_pal_addr : bg_pal_addr;
+	assign palette_addr = tx_opaque ? tx_pal_addr : bgb_opaque ? bgb_pal_addr : bg_pal_addr;
 	wire [23:0] tile_rgb = (DBG_MISS_PAINT && !bg_hit) ? 24'hFF00FF :
 	                       (DBG_MISS_PAINT && !tx_hit) ? 24'h00FFFF :
 	                       decode_rgb(palette_data);
@@ -831,8 +987,8 @@ module video_macross2 #(
 	// for both ROM sizes without a divider; a power-of-two size wraps the
 	// same way plain truncation did.
 	localparam integer SPR_UNITS = SPRITES_BYTES / 128;
-	integer spr_units; // powerins: 0x800000/128 = 65536, the full 16-bit code space
-	always @(*) spr_units = game_powerins ? 65536 : SPR_UNITS;
+	integer spr_units; // powerins: 0x800000/128 = 65536, the full 16-bit code space; cfg_rt: the game's own count (acrobatm/strahl: 12288, not a power of two)
+	always @(*) spr_units = game_powerins ? 65536 : cfg_rt ? int'(spr_units_i) : SPR_UNITS;
 	wire [31:0] s_unit_wrapped = (s_unit_code >= 2*spr_units) ? s_unit_code - 2*spr_units :
 	                             (s_unit_code >= spr_units)   ? s_unit_code - spr_units : s_unit_code;
 	wire [31:0] spr_byte_addr_full = s_unit_wrapped * 128 + ((s_px_src >= 8) ? 64 : 0) + s_py * 4 + ((s_px_src & 7) >> 1);
@@ -850,6 +1006,7 @@ module video_macross2 #(
 	generate
 	if (NMK214) begin : g_nmk214
 		wire [15:0] spr_dec_word;
+		wire [7:0]  bgtile_dec;
 		nmk214 #(
 			.MODE(1'b1), .ADDR_WIDTH(21),
 			.ADDR_BITSWAP({5'd20,5'd19,5'd18,5'd17,5'd16,5'd15,5'd14,5'd13,5'd11,5'd3,5'd2,5'd1,5'd0})
@@ -857,7 +1014,7 @@ module video_macross2 #(
 			.clk(clk_sys), .reset(reset),
 			.cfg_we(nmk214_cfg_we), .cfg_data(nmk214_cfg_data), .initialized(),
 			.addr(bg_use_byte_addr[20:0]), .din(16'h0), .dout_word(),
-			.din8(bgtile_rom_byte), .dout_byte(bgtile_byte)
+			.din8(bgtile_rom_byte), .dout_byte(bgtile_dec)
 		);
 		nmk214 #(
 			.MODE(1'b0), .ADDR_WIDTH(21),
@@ -868,7 +1025,12 @@ module video_macross2 #(
 			.addr({1'b0, spr_byte_addr[22:1] & 22'hFFFFF}), .din(sprites_rom_word), .dout_word(spr_dec_word),
 			.din8(8'h0), .dout_byte()
 		);
-		assign sprites_byte = spr_byte_addr[0] ? spr_dec_word[7:0] : spr_dec_word[15:8];
+		// nmk214_en=0 (a board without the NMK-215 in a shared rbf): the
+		// descramblers are bypassed — the device applies SOME bitswap even
+		// unconfigured (see nmk214.sv), which would scramble plain ROMs.
+		wire [7:0] sprites_dec = spr_byte_addr[0] ? spr_dec_word[7:0] : spr_dec_word[15:8];
+		assign bgtile_byte  = nmk214_en ? bgtile_dec  : bgtile_rom_byte;
+		assign sprites_byte = nmk214_en ? sprites_dec : sprites_rom_byte;
 	end else begin : g_no_nmk214
 		assign bgtile_byte  = bgtile_rom_byte;
 		assign sprites_byte = sprites_rom_byte;
@@ -935,7 +1097,7 @@ module video_macross2 #(
 			end else begin
 				case (snap_phase)
 					2'd0: begin // request: mainram[0x8000 + 2*i] -> snap_buf[snap_tgt][i], i = 0..2047
-						mainram_addr <= 15'h4000 + snap_idx[10:0]; // 0x8000 bytes / 2 = 0x4000 word offset
+						mainram_addr <= sprdma_word_base + {4'd0, snap_idx[10:0]}; // m_sprdma_base 0x8000 bytes / 2 = 0x4000 word offset (strahl 0xF000 / 0x7800)
 						snap_phase <= 2'd1;
 					end
 					2'd1: if (mainram_ready) snap_phase <= 2'd2; // HW_ROMS=1: real block; HW_ROMS=0: one pass-through cycle
