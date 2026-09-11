@@ -216,10 +216,21 @@ but not proven), `infra` (build/test/doc health).
   in macross2 gameplay, closing the gap.
 
 ### NMK-12 · New Orientation/Flip options not re-verified for settings persistence
-- **Cores:** all three · **Severity:** gap · **Status:** open
-- Vert 270 / Vert 90 / Flip screen were each verified by HDMI capture.
-  "Save settings → reload core → option still set" was only verified
-  for the original single-choice Orientation on tdragon2.
+- **Cores:** all three · **Severity:** gap · **Status:** fixed — verified on the box (2026-09-10)
+- Vert 270 / Vert 90 / Flip screen were each verified by HDMI capture,
+  but "Save settings → reload core → option still set" had only been
+  checked for the original single-choice Orientation on tdragon2.
+- Verified now on tdragon2 (Macross2.rbf), gunnail and raphero, both
+  directions: set Orientation Vert 90 / Flip screen On / H Shift +14 /
+  V Shift +20 → OSD > System > Save settings (cursor confirmed on
+  "Save settings", not "Reset settings", before each Enter) → reload
+  the .mra → all four values come back; then restore Horz / Off / 0 /
+  0 → save → reload → defaults come back. The box is left at defaults
+  with a saved `config/<mra>.CFG` for each of the three .mra files.
+  One procedural note for `tools/mister_keys.py` scripting: F12
+  toggles the OSD, so a sequence must track whether the menu is open —
+  a first pass sent the restore key presses into the game on two cores
+  because the OSD had been left open after a capture.
 
 ## Documentation
 

@@ -1474,7 +1474,14 @@ session — all confirmed on the box by capturing the un-flipped and
 flipped Horz frame for each of tdragon2/gunnail/raphero (HUD/text
 elements land on the opposite side and upside-down in the flipped
 capture, not just re-colored) and by reading the P1 Autofire OSD value
-back after setting it on macross2. `Raphero.qsf`'s `SEED` moved 19 ->
+back after setting it on macross2. Persistence of the new options
+(NMK-12) was then verified explicitly on all three cores, both
+directions: Orientation Vert 90 / Flip screen On / H Shift +14 /
+V Shift +20 saved, core reloaded, all four read back; defaults
+restored, saved, reloaded, defaults read back. When scripting this
+with `tools/mister_keys.py`, remember F12 *toggles* the OSD: the key
+sequence has to track whether the menu is open, or the presses go
+into the game. `Raphero.qsf`'s `SEED` moved 19 ->
 23 in the same pass: the Flip screen addition alone pushed the build
 just far enough that `SEED 19` missed timing (setup slack -0.065 ns);
 `SEED 23` in a fresh scratch rebuild passed (+0.255 ns) and was
