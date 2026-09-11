@@ -286,9 +286,10 @@ module raphero_core #(
 	wire sprite_dma_busy;
 	wire mainram_dma_wait = sel_mainram & ~ASn & sprite_dma_busy;
 	wire bgvram_wait  = sel_bgvram  & cpu_read & ~bgvram_ready;
+	wire palette_wait = sel_palette & cpu_read & ~palette_ready;
 	wire txvram_wait  = sel_txvram  & cpu_read & ~txvram_ready;
 	wire scroll_wait  = (sel_scrollram | sel_scrollramy | sel_pad0400) & cpu_read & ~scroll_ready;
-	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | mainram_dma_wait | bgvram_wait | txvram_wait | scroll_wait;
+	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | mainram_dma_wait | bgvram_wait | txvram_wait | scroll_wait | palette_wait;
 
 	fx68k fx68k_inst (
 		.clk(clk_sys),
@@ -449,7 +450,18 @@ module raphero_core #(
 	// byte-enable writes for block-RAM inference (tdragon2_core.sv has
 	// the full story), one extra DTACK wait via mainram_ready.
 	// ------------------------------------------------------------------
-	reg [15:0] mainram [0:32767];
+	// Two 8-bit lane arrays, not one 16-bit array with lane writes
+	// (2026-09-10, NMK-10): with the CPU port coded as a read/write port
+	// whose read returns the byte being written (Quartus's true-dual-port
+	// template, see g_mainram_cpu_hw) Quartus 17 infers ONE M10K set in
+	// BIDIR_DUAL_PORT mode — CPU port A, video port B. The 16-bit form's
+	// old-data read-during-write can only be met by a simple-dual-port set
+	// plus a second full copy for the video read, which is what every
+	// dual-read RAM here was getting (bgvram 64 extra M10K, mainram 16,
+	// txvram 4). Isolated 4-variant synthesis test in docs/hw-bringup.md.
+	// mainram_ready/DTACK, the address swap and the DMA gate are unchanged.
+	reg [7:0] mainram_hi [0:32767];
+	reg [7:0] mainram_lo [0:32767];
 	wire [14:0] mainram_addr_cpu =
 		{byte_addr[15:12], byte_addr[8], byte_addr[10:9], byte_addr[11], byte_addr[7:1]};
 	reg [15:0] mainram_dout;
@@ -458,11 +470,11 @@ module raphero_core #(
 	if (!HW_ROMS) begin : g_mainram_cpu_sim
 		always @(posedge clk_sys) begin
 			if (sel_mainram & cpu_write & ~sprite_dma_busy) begin
-				if (~UDSn) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
-				if (~LDSn) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
+				if (~UDSn) mainram_hi[mainram_addr_cpu] <= oEdb[15:8];
+				if (~LDSn) mainram_lo[mainram_addr_cpu] <= oEdb[7:0];
 			end
 		end
-		always @(*) mainram_dout  = mainram[mainram_addr_cpu];
+		always @(*) mainram_dout  = {mainram_hi[mainram_addr_cpu], mainram_lo[mainram_addr_cpu]};
 		assign mainram_ready = 1'b1;
 	end else begin : g_mainram_cpu_hw
 		// ready is COMBINATIONAL on the registered address: 1 exactly when
@@ -474,11 +486,17 @@ module raphero_core #(
 		// enPhi1) it can, and then ends the bus cycle with the previous
 		// address's data — seen in the hardware sim as the boot RAM test
 		// faulting with an illegal-opcode exception.
+		// True-dual-port template: on a write the read register takes the
+		// written byte (never consumed — a 68000 bus cycle is read OR
+		// write), otherwise the array. Keep this exact shape; see above.
 		reg [14:0] mainram_addr_cpu_r;
+		wire       we_hi = sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy;
+		wire       we_lo = sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy;
 		always @(posedge clk_sys) begin
-			if (sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
-			if (sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
-			mainram_dout       <= mainram[mainram_addr_cpu];
+			if (we_hi) begin mainram_hi[mainram_addr_cpu] <= oEdb[15:8]; mainram_dout[15:8] <= oEdb[15:8]; end
+			else       mainram_dout[15:8] <= mainram_hi[mainram_addr_cpu];
+			if (we_lo) begin mainram_lo[mainram_addr_cpu] <= oEdb[7:0];  mainram_dout[7:0]  <= oEdb[7:0];  end
+			else       mainram_dout[7:0]  <= mainram_lo[mainram_addr_cpu];
 			mainram_addr_cpu_r <= mainram_addr_cpu;
 		end
 		assign mainram_ready = (mainram_addr_cpu_r == mainram_addr_cpu);
@@ -488,21 +506,44 @@ module raphero_core #(
 	// ------------------------------------------------------------------
 	// Palette RAM (1024 x 16)
 	// ------------------------------------------------------------------
+	// HW_ROMS=1: every read of this array is registered (CPU port here,
+	// the two video taps below) so it infers as block RAM — one M10K pair
+	// per read port — instead of 16K flip-flops behind three 1024:1
+	// asynchronous muxes, which was most of this module's own logic in
+	// the fitter's entity report (NMK-10). CPU reads take one DTACK wait
+	// (palette_wait), the bgvram pattern.
 	reg [15:0] palette [0:1023];
 	wire [9:0] palette_addr = byte_addr[10:1];
 	reg [15:0] palette_dout;
-	always @(posedge clk_sys) begin
-		if (sel_palette & cpu_write) begin
-			if (~UDSn) palette[palette_addr][15:8] <= oEdb[15:8];
-			if (~LDSn) palette[palette_addr][7:0]  <= oEdb[7:0];
+	wire       palette_ready;
+	generate
+	if (!HW_ROMS) begin : g_palette_sim
+		always @(posedge clk_sys) begin
+			if (sel_palette & cpu_write) begin
+				if (~UDSn) palette[palette_addr][15:8] <= oEdb[15:8];
+				if (~LDSn) palette[palette_addr][7:0]  <= oEdb[7:0];
+			end
 		end
+		always @(*) palette_dout = palette[palette_addr];
+		assign palette_ready = 1'b1;
+	end else begin : g_palette_hw
+		reg [9:0] palette_addr_r;
+		always @(posedge clk_sys) begin
+			if (sel_palette & cpu_write & ~UDSn) palette[palette_addr][15:8] <= oEdb[15:8];
+			if (sel_palette & cpu_write & ~LDSn) palette[palette_addr][7:0]  <= oEdb[7:0];
+			palette_dout   <= palette[palette_addr];
+			palette_addr_r <= palette_addr;
+		end
+		assign palette_ready = (palette_addr_r == palette_addr); // see mainram_ready
 	end
-	always @(*) palette_dout = palette[palette_addr];
+	endgenerate
 
 	// ------------------------------------------------------------------
 	// BG tilemap VRAM (32768 x 16)
 	// ------------------------------------------------------------------
-	reg [15:0] bgvram [0:32767];
+	// Lane arrays + true-dual-port CPU port, as mainram above (NMK-10).
+	reg [7:0] bgvram_hi [0:32767];
+	reg [7:0] bgvram_lo [0:32767];
 	wire [14:0] bgvram_addr = byte_addr[15:1];
 	wire [15:0] bgvram_dout;
 	reg  [15:0] bgvram_dout_r;
@@ -511,18 +552,21 @@ module raphero_core #(
 	if (!HW_ROMS) begin : g_bgvram_cpu_sim
 		always @(posedge clk_sys) begin
 			if (sel_bgvram & cpu_write) begin
-				if (~UDSn) bgvram[bgvram_addr][15:8] <= oEdb[15:8];
-				if (~LDSn) bgvram[bgvram_addr][7:0]  <= oEdb[7:0];
+				if (~UDSn) bgvram_hi[bgvram_addr] <= oEdb[15:8];
+				if (~LDSn) bgvram_lo[bgvram_addr] <= oEdb[7:0];
 			end
 		end
-		assign bgvram_dout = bgvram[bgvram_addr];
+		assign bgvram_dout = {bgvram_hi[bgvram_addr], bgvram_lo[bgvram_addr]};
 		assign bgvram_ready = 1'b1;
 	end else begin : g_bgvram_cpu_hw
 		reg [14:0] bgvram_addr_r;
+		wire       we_hi = sel_bgvram & cpu_write & ~UDSn;
+		wire       we_lo = sel_bgvram & cpu_write & ~LDSn;
 		always @(posedge clk_sys) begin
-			if (sel_bgvram & cpu_write & ~UDSn) bgvram[bgvram_addr][15:8] <= oEdb[15:8];
-			if (sel_bgvram & cpu_write & ~LDSn) bgvram[bgvram_addr][7:0]  <= oEdb[7:0];
-			bgvram_dout_r <= bgvram[bgvram_addr];
+			if (we_hi) begin bgvram_hi[bgvram_addr] <= oEdb[15:8]; bgvram_dout_r[15:8] <= oEdb[15:8]; end
+			else       bgvram_dout_r[15:8] <= bgvram_hi[bgvram_addr];
+			if (we_lo) begin bgvram_lo[bgvram_addr] <= oEdb[7:0];  bgvram_dout_r[7:0]  <= oEdb[7:0];  end
+			else       bgvram_dout_r[7:0]  <= bgvram_lo[bgvram_addr];
 			bgvram_addr_r <= bgvram_addr;
 		end
 		assign bgvram_ready = (bgvram_addr_r == bgvram_addr); // see mainram_ready
@@ -533,7 +577,9 @@ module raphero_core #(
 	// ------------------------------------------------------------------
 	// TX tilemap VRAM (2048 x 16)
 	// ------------------------------------------------------------------
-	reg [15:0] txvram [0:2047];
+	// Lane arrays + true-dual-port CPU port, as mainram above (NMK-10).
+	reg [7:0] txvram_hi [0:2047];
+	reg [7:0] txvram_lo [0:2047];
 	wire [10:0] txvram_addr = byte_addr[11:1];
 	wire [15:0] txvram_dout;
 	reg  [15:0] txvram_dout_r;
@@ -542,18 +588,21 @@ module raphero_core #(
 	if (!HW_ROMS) begin : g_txvram_cpu_sim
 		always @(posedge clk_sys) begin
 			if (sel_txvram & cpu_write) begin
-				if (~UDSn) txvram[txvram_addr][15:8] <= oEdb[15:8];
-				if (~LDSn) txvram[txvram_addr][7:0]  <= oEdb[7:0];
+				if (~UDSn) txvram_hi[txvram_addr] <= oEdb[15:8];
+				if (~LDSn) txvram_lo[txvram_addr] <= oEdb[7:0];
 			end
 		end
-		assign txvram_dout = txvram[txvram_addr];
+		assign txvram_dout = {txvram_hi[txvram_addr], txvram_lo[txvram_addr]};
 		assign txvram_ready = 1'b1;
 	end else begin : g_txvram_cpu_hw
 		reg [10:0] txvram_addr_r;
+		wire       we_hi = sel_txvram & cpu_write & ~UDSn;
+		wire       we_lo = sel_txvram & cpu_write & ~LDSn;
 		always @(posedge clk_sys) begin
-			if (sel_txvram & cpu_write & ~UDSn) txvram[txvram_addr][15:8] <= oEdb[15:8];
-			if (sel_txvram & cpu_write & ~LDSn) txvram[txvram_addr][7:0]  <= oEdb[7:0];
-			txvram_dout_r <= txvram[txvram_addr];
+			if (we_hi) begin txvram_hi[txvram_addr] <= oEdb[15:8]; txvram_dout_r[15:8] <= oEdb[15:8]; end
+			else       txvram_dout_r[15:8] <= txvram_hi[txvram_addr];
+			if (we_lo) begin txvram_lo[txvram_addr] <= oEdb[7:0];  txvram_dout_r[7:0]  <= oEdb[7:0];  end
+			else       txvram_dout_r[7:0]  <= txvram_lo[txvram_addr];
 			txvram_addr_r <= txvram_addr;
 		end
 		assign txvram_ready = (txvram_addr_r == txvram_addr); // see mainram_ready
@@ -655,25 +704,41 @@ module raphero_core #(
 	wire [10:0] vid_txvram_addr;
 	wire [15:0] vid_txvram_dout;
 	wire [9:0]  vid_palette_addr;
-	wire [15:0] vid_palette_dout = palette[vid_palette_addr];
+	wire [15:0] vid_palette_dout;
 	wire [9:0]  vid_spr_palette_addr;
-	wire [15:0] vid_spr_palette_dout = palette[vid_spr_palette_addr];
+	wire [15:0] vid_spr_palette_dout;
+	generate
+	if (!HW_ROMS) begin : g_vidpal_sim
+		assign vid_palette_dout     = palette[vid_palette_addr];
+		assign vid_spr_palette_dout = palette[vid_spr_palette_addr];
+	end else begin : g_vidpal_hw
+		// Registered reads — video_macross2.sv's HW_ROMS=1 palette-tap
+		// contract (one clock behind the address); see the palette block.
+		reg [15:0] vid_palette_dout_r, vid_spr_palette_dout_r;
+		always @(posedge clk_sys) begin
+			vid_palette_dout_r     <= palette[vid_palette_addr];
+			vid_spr_palette_dout_r <= palette[vid_spr_palette_addr];
+		end
+		assign vid_palette_dout     = vid_palette_dout_r;
+		assign vid_spr_palette_dout = vid_spr_palette_dout_r;
+	end
+	endgenerate
 	wire [14:0] vid_mainram_addr;
 	wire [15:0] vid_mainram_dout;
 	wire        vid_mainram_ready;
 	generate
 	if (!HW_ROMS) begin : g_vidram_read_sim
-		assign vid_bgvram_dout  = bgvram[vid_bgvram_addr];
-		assign vid_txvram_dout  = txvram[vid_txvram_addr];
-		assign vid_mainram_dout = mainram[vid_mainram_addr];
+		assign vid_bgvram_dout  = {bgvram_hi[vid_bgvram_addr],   bgvram_lo[vid_bgvram_addr]};
+		assign vid_txvram_dout  = {txvram_hi[vid_txvram_addr],   txvram_lo[vid_txvram_addr]};
+		assign vid_mainram_dout = {mainram_hi[vid_mainram_addr], mainram_lo[vid_mainram_addr]};
 		assign vid_mainram_ready = 1'b1;
 	end else begin : g_vidram_read_hw
 		reg [15:0] vid_bgvram_dout_r, vid_txvram_dout_r, vid_mainram_dout_r;
 		reg [14:0] vid_mainram_addr_r;
 		always @(posedge clk_sys) begin
-			vid_bgvram_dout_r   <= bgvram[vid_bgvram_addr];
-			vid_txvram_dout_r   <= txvram[vid_txvram_addr];
-			vid_mainram_dout_r  <= mainram[vid_mainram_addr];
+			vid_bgvram_dout_r   <= {bgvram_hi[vid_bgvram_addr],   bgvram_lo[vid_bgvram_addr]};
+			vid_txvram_dout_r   <= {txvram_hi[vid_txvram_addr],   txvram_lo[vid_txvram_addr]};
+			vid_mainram_dout_r  <= {mainram_hi[vid_mainram_addr], mainram_lo[vid_mainram_addr]};
 			vid_mainram_addr_r  <= vid_mainram_addr;
 		end
 		assign vid_bgvram_dout   = vid_bgvram_dout_r;
@@ -687,8 +752,8 @@ module raphero_core #(
 	generate
 	if (!HW_ROMS) begin : g_dbgram_sim
 		assign dbg_pal_data = palette[dbg_pal_addr];
-		assign dbg_bgvram_data = bgvram[dbg_bgvram_addr[14:0]];
-		assign dbg_txvram_data = txvram[dbg_txvram_addr];
+		assign dbg_bgvram_data = {bgvram_hi[dbg_bgvram_addr[14:0]], bgvram_lo[dbg_bgvram_addr[14:0]]};
+		assign dbg_txvram_data = {txvram_hi[dbg_txvram_addr], txvram_lo[dbg_txvram_addr]};
 	end else begin : g_dbgram_hw
 		assign dbg_pal_data = 16'd0;
 		assign dbg_bgvram_data = 16'd0;

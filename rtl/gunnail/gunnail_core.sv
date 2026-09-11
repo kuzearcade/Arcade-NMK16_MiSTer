@@ -496,7 +496,16 @@ module gunnail_core #(
 	// ------------------------------------------------------------------
 	// Main work RAM (32768 x 16, plain — gunnail_map has no address swap)
 	// ------------------------------------------------------------------
-	reg [15:0] mainram [0:32767];
+	// Two 8-bit lane arrays with the shared 68000/MCU port coded as a
+	// true-dual-port read/write port (its read register takes the byte
+	// being written, otherwise the array): Quartus 17 then infers ONE
+	// M10K set in BIDIR_DUAL_PORT mode (port A here, port B the video
+	// read) instead of a simple-dual-port set plus a second full copy
+	// for the video read, which the old-data read-during-write of a
+	// 16-bit array with lane writes forced on every dual-read RAM (NMK-10;
+	// raphero_core.sv has the isolated synthesis test's story).
+	reg [7:0] mainram_hi [0:32767];
+	reg [7:0] mainram_lo [0:32767];
 	wire [14:0] mainram_addr_cpu = byte_addr[15:1];
 	reg  [15:0] mainram_dout;
 	wire        mainram_ready;
@@ -506,16 +515,16 @@ module gunnail_core #(
 	if (!HW_ROMS) begin : g_mainram_sim
 		always @(posedge clk_sys) begin
 			if (prot_wr & prot_sel_mainram & prot_cen) begin
-				if (~prot_addr[0]) mainram[prot_addr[15:1]][15:8] <= prot_wdata;
-				else                mainram[prot_addr[15:1]][7:0]  <= prot_wdata;
+				if (~prot_addr[0]) mainram_hi[prot_addr[15:1]] <= prot_wdata;
+				else                mainram_lo[prot_addr[15:1]] <= prot_wdata;
 			end else if (sel_mainram & cpu_write & ~sprite_dma_busy) begin
-				if (~UDSn) mainram[mainram_addr_cpu][15:8] <= oEdb[15:8];
-				if (~LDSn) mainram[mainram_addr_cpu][7:0]  <= oEdb[7:0];
+				if (~UDSn) mainram_hi[mainram_addr_cpu] <= oEdb[15:8];
+				if (~LDSn) mainram_lo[mainram_addr_cpu] <= oEdb[7:0];
 			end
 		end
-		always @(*) mainram_dout = mainram[mainram_addr_cpu];
+		always @(*) mainram_dout = {mainram_hi[mainram_addr_cpu], mainram_lo[mainram_addr_cpu]};
 		assign mainram_ready      = 1'b1;
-		assign prot_mainram_dout  = mainram[prot_addr[15:1]];
+		assign prot_mainram_dout  = {mainram_hi[prot_addr[15:1]], mainram_lo[prot_addr[15:1]]};
 		assign prot_mainram_ready = 1'b1;
 		assign mainram_prot_grant = 1'b1;
 	end else begin : g_mainram_hw
@@ -524,10 +533,15 @@ module gunnail_core #(
 		reg  [14:0] port_addr_r;
 		reg         port_src_r;
 		wire        prot_w = grant & prot_wr & ~prot_wr_done;
+		wire        we_hi = (prot_w & ~prot_addr[0]) | (~grant & sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy);
+		wire        we_lo = (prot_w &  prot_addr[0]) | (~grant & sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy);
+		wire [7:0]  wd_hi = prot_w ? prot_wdata : oEdb[15:8];
+		wire [7:0]  wd_lo = prot_w ? prot_wdata : oEdb[7:0];
 		always @(posedge clk_sys) begin
-			if ((prot_w & ~prot_addr[0]) | (~grant & sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy)) mainram[port_addr][15:8] <= prot_w ? prot_wdata : oEdb[15:8];
-			if ((prot_w &  prot_addr[0]) | (~grant & sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy)) mainram[port_addr][7:0]  <= prot_w ? prot_wdata : oEdb[7:0];
-			mainram_dout <= mainram[port_addr];
+			if (we_hi) begin mainram_hi[port_addr] <= wd_hi; mainram_dout[15:8] <= wd_hi; end
+			else       mainram_dout[15:8] <= mainram_hi[port_addr];
+			if (we_lo) begin mainram_lo[port_addr] <= wd_lo; mainram_dout[7:0]  <= wd_lo; end
+			else       mainram_dout[7:0]  <= mainram_lo[port_addr];
 			port_addr_r  <= port_addr;
 			port_src_r   <= grant;
 		end
@@ -586,7 +600,9 @@ module gunnail_core #(
 	// ------------------------------------------------------------------
 	// BG tilemap VRAM (8192 x 16)
 	// ------------------------------------------------------------------
-	reg [15:0] bgvram [0:8191];
+	// Lane arrays + true-dual-port shared port, as mainram above (NMK-10).
+	reg [7:0] bgvram_hi [0:8191];
+	reg [7:0] bgvram_lo [0:8191];
 	wire [12:0] bgvram_addr = byte_addr[13:1];
 	reg  [15:0] bgvram_dout;
 	wire        bgvram_ready;
@@ -596,16 +612,16 @@ module gunnail_core #(
 	if (!HW_ROMS) begin : g_bgvram_sim
 		always @(posedge clk_sys) begin
 			if (prot_wr & prot_sel_bgvram & prot_cen) begin
-				if (~prot_addr[0]) bgvram[prot_addr[13:1]][15:8] <= prot_wdata;
-				else                bgvram[prot_addr[13:1]][7:0]  <= prot_wdata;
+				if (~prot_addr[0]) bgvram_hi[prot_addr[13:1]] <= prot_wdata;
+				else                bgvram_lo[prot_addr[13:1]] <= prot_wdata;
 			end else if (sel_bgvram & cpu_write) begin
-				if (~UDSn) bgvram[bgvram_addr][15:8] <= oEdb[15:8];
-				if (~LDSn) bgvram[bgvram_addr][7:0]  <= oEdb[7:0];
+				if (~UDSn) bgvram_hi[bgvram_addr] <= oEdb[15:8];
+				if (~LDSn) bgvram_lo[bgvram_addr] <= oEdb[7:0];
 			end
 		end
-		always @(*) bgvram_dout = bgvram[bgvram_addr];
+		always @(*) bgvram_dout = {bgvram_hi[bgvram_addr], bgvram_lo[bgvram_addr]};
 		assign bgvram_ready      = 1'b1;
-		assign prot_bgvram_dout  = bgvram[prot_addr[13:1]];
+		assign prot_bgvram_dout  = {bgvram_hi[prot_addr[13:1]], bgvram_lo[prot_addr[13:1]]};
 		assign prot_bgvram_ready = 1'b1;
 		assign bgvram_prot_grant = 1'b1;
 	end else begin : g_bgvram_hw
@@ -614,10 +630,15 @@ module gunnail_core #(
 		reg  [12:0] port_addr_r;
 		reg         port_src_r;
 		wire        prot_w = grant & prot_wr & ~prot_wr_done;
+		wire        we_hi = (prot_w & ~prot_addr[0]) | (~grant & sel_bgvram & cpu_write & ~UDSn);
+		wire        we_lo = (prot_w &  prot_addr[0]) | (~grant & sel_bgvram & cpu_write & ~LDSn);
+		wire [7:0]  wd_hi = prot_w ? prot_wdata : oEdb[15:8];
+		wire [7:0]  wd_lo = prot_w ? prot_wdata : oEdb[7:0];
 		always @(posedge clk_sys) begin
-			if ((prot_w & ~prot_addr[0]) | (~grant & sel_bgvram & cpu_write & ~UDSn)) bgvram[port_addr][15:8] <= prot_w ? prot_wdata : oEdb[15:8];
-			if ((prot_w &  prot_addr[0]) | (~grant & sel_bgvram & cpu_write & ~LDSn)) bgvram[port_addr][7:0]  <= prot_w ? prot_wdata : oEdb[7:0];
-			bgvram_dout <= bgvram[port_addr];
+			if (we_hi) begin bgvram_hi[port_addr] <= wd_hi; bgvram_dout[15:8] <= wd_hi; end
+			else       bgvram_dout[15:8] <= bgvram_hi[port_addr];
+			if (we_lo) begin bgvram_lo[port_addr] <= wd_lo; bgvram_dout[7:0]  <= wd_lo; end
+			else       bgvram_dout[7:0]  <= bgvram_lo[port_addr];
 			port_addr_r <= port_addr;
 			port_src_r  <= grant;
 		end
@@ -631,7 +652,9 @@ module gunnail_core #(
 	// ------------------------------------------------------------------
 	// TX tilemap VRAM (2048 x 16, mirror bit ignored)
 	// ------------------------------------------------------------------
-	reg [15:0] txvram [0:2047];
+	// Lane arrays + true-dual-port shared port, as mainram above (NMK-10).
+	reg [7:0] txvram_hi [0:2047];
+	reg [7:0] txvram_lo [0:2047];
 	wire [10:0] txvram_addr = byte_addr[11:1];
 	reg  [15:0] txvram_dout;
 	wire        txvram_ready;
@@ -641,16 +664,16 @@ module gunnail_core #(
 	if (!HW_ROMS) begin : g_txvram_sim
 		always @(posedge clk_sys) begin
 			if (prot_wr & prot_sel_txvram & prot_cen) begin
-				if (~prot_addr[0]) txvram[prot_addr[11:1]][15:8] <= prot_wdata;
-				else                txvram[prot_addr[11:1]][7:0]  <= prot_wdata;
+				if (~prot_addr[0]) txvram_hi[prot_addr[11:1]] <= prot_wdata;
+				else                txvram_lo[prot_addr[11:1]] <= prot_wdata;
 			end else if (sel_txvram & cpu_write) begin
-				if (~UDSn) txvram[txvram_addr][15:8] <= oEdb[15:8];
-				if (~LDSn) txvram[txvram_addr][7:0]  <= oEdb[7:0];
+				if (~UDSn) txvram_hi[txvram_addr] <= oEdb[15:8];
+				if (~LDSn) txvram_lo[txvram_addr] <= oEdb[7:0];
 			end
 		end
-		always @(*) txvram_dout = txvram[txvram_addr];
+		always @(*) txvram_dout = {txvram_hi[txvram_addr], txvram_lo[txvram_addr]};
 		assign txvram_ready      = 1'b1;
-		assign prot_txvram_dout  = txvram[prot_addr[11:1]];
+		assign prot_txvram_dout  = {txvram_hi[prot_addr[11:1]], txvram_lo[prot_addr[11:1]]};
 		assign prot_txvram_ready = 1'b1;
 		assign txvram_prot_grant = 1'b1;
 	end else begin : g_txvram_hw
@@ -659,10 +682,15 @@ module gunnail_core #(
 		reg  [10:0] port_addr_r;
 		reg         port_src_r;
 		wire        prot_w = grant & prot_wr & ~prot_wr_done;
+		wire        we_hi = (prot_w & ~prot_addr[0]) | (~grant & sel_txvram & cpu_write & ~UDSn);
+		wire        we_lo = (prot_w &  prot_addr[0]) | (~grant & sel_txvram & cpu_write & ~LDSn);
+		wire [7:0]  wd_hi = prot_w ? prot_wdata : oEdb[15:8];
+		wire [7:0]  wd_lo = prot_w ? prot_wdata : oEdb[7:0];
 		always @(posedge clk_sys) begin
-			if ((prot_w & ~prot_addr[0]) | (~grant & sel_txvram & cpu_write & ~UDSn)) txvram[port_addr][15:8] <= prot_w ? prot_wdata : oEdb[15:8];
-			if ((prot_w &  prot_addr[0]) | (~grant & sel_txvram & cpu_write & ~LDSn)) txvram[port_addr][7:0]  <= prot_w ? prot_wdata : oEdb[7:0];
-			txvram_dout <= txvram[port_addr];
+			if (we_hi) begin txvram_hi[port_addr] <= wd_hi; txvram_dout[15:8] <= wd_hi; end
+			else       txvram_dout[15:8] <= txvram_hi[port_addr];
+			if (we_lo) begin txvram_lo[port_addr] <= wd_lo; txvram_dout[7:0]  <= wd_lo; end
+			else       txvram_dout[7:0]  <= txvram_lo[port_addr];
 			port_addr_r <= port_addr;
 			port_src_r  <= grant;
 		end
@@ -746,25 +774,43 @@ module gunnail_core #(
 	wire [10:0] vid_txvram_addr;
 	wire [15:0] vid_txvram_dout;
 	wire [9:0]  vid_palette_addr;
-	wire [15:0] vid_palette_dout = palette[vid_palette_addr];
+	wire [15:0] vid_palette_dout;
 	wire [9:0]  vid_spr_palette_addr;
-	wire [15:0] vid_spr_palette_dout = palette[vid_spr_palette_addr];
+	wire [15:0] vid_spr_palette_dout;
+	generate
+	if (!HW_ROMS) begin : g_vidpal_sim
+		assign vid_palette_dout     = palette[vid_palette_addr];
+		assign vid_spr_palette_dout = palette[vid_spr_palette_addr];
+	end else begin : g_vidpal_hw
+		// Registered reads — video_macross2.sv's HW_ROMS=1 palette-tap
+		// contract (one clock behind the address), so the palette infers
+		// as block RAM on every port (NMK-10; the CPU/MCU port above
+		// already was).
+		reg [15:0] vid_palette_dout_r, vid_spr_palette_dout_r;
+		always @(posedge clk_sys) begin
+			vid_palette_dout_r     <= palette[vid_palette_addr];
+			vid_spr_palette_dout_r <= palette[vid_spr_palette_addr];
+		end
+		assign vid_palette_dout     = vid_palette_dout_r;
+		assign vid_spr_palette_dout = vid_spr_palette_dout_r;
+	end
+	endgenerate
 	wire [14:0] vid_mainram_addr;
 	wire [15:0] vid_mainram_dout;
 	wire        vid_mainram_ready;
 	generate
 	if (!HW_ROMS) begin : g_vidram_read_sim
-		assign vid_bgvram_dout  = bgvram[vid_bgvram_addr[12:0]];
-		assign vid_txvram_dout  = txvram[vid_txvram_addr];
-		assign vid_mainram_dout = mainram[vid_mainram_addr];
+		assign vid_bgvram_dout  = {bgvram_hi[vid_bgvram_addr[12:0]], bgvram_lo[vid_bgvram_addr[12:0]]};
+		assign vid_txvram_dout  = {txvram_hi[vid_txvram_addr],       txvram_lo[vid_txvram_addr]};
+		assign vid_mainram_dout = {mainram_hi[vid_mainram_addr],     mainram_lo[vid_mainram_addr]};
 		assign vid_mainram_ready = 1'b1;
 	end else begin : g_vidram_read_hw
 		reg [15:0] vid_bgvram_dout_r, vid_txvram_dout_r, vid_mainram_dout_r;
 		reg [14:0] vid_mainram_addr_r;
 		always @(posedge clk_sys) begin
-			vid_bgvram_dout_r  <= bgvram[vid_bgvram_addr[12:0]];
-			vid_txvram_dout_r  <= txvram[vid_txvram_addr];
-			vid_mainram_dout_r <= mainram[vid_mainram_addr];
+			vid_bgvram_dout_r  <= {bgvram_hi[vid_bgvram_addr[12:0]], bgvram_lo[vid_bgvram_addr[12:0]]};
+			vid_txvram_dout_r  <= {txvram_hi[vid_txvram_addr],       txvram_lo[vid_txvram_addr]};
+			vid_mainram_dout_r <= {mainram_hi[vid_mainram_addr],     mainram_lo[vid_mainram_addr]};
 			vid_mainram_addr_r <= vid_mainram_addr;
 		end
 		assign vid_bgvram_dout   = vid_bgvram_dout_r;
@@ -777,8 +823,8 @@ module gunnail_core #(
 	generate
 	if (!HW_ROMS) begin : g_dbgram_sim
 		assign dbg_pal_data = palette[dbg_pal_addr];
-		assign dbg_bgvram_data = bgvram[dbg_bgvram_addr[12:0]];
-		assign dbg_txvram_data = txvram[dbg_txvram_addr];
+		assign dbg_bgvram_data = {bgvram_hi[dbg_bgvram_addr[12:0]], bgvram_lo[dbg_bgvram_addr[12:0]]};
+		assign dbg_txvram_data = {txvram_hi[dbg_txvram_addr], txvram_lo[dbg_txvram_addr]};
 	end else begin : g_dbgram_hw
 		assign dbg_pal_data = 16'd0;
 		assign dbg_bgvram_data = 16'd0;

@@ -150,9 +150,9 @@ module video_macross2 #(
 	output [10:0] txvram_addr,
 	input  [15:0] txvram_data,
 	output [9:0]  palette_addr,     // tile-plane palette tap (live, per-pixel)
-	input  [15:0] palette_data,
+	input  [15:0] palette_data,     // HW_ROMS=0: combinational; HW_ROMS=1: registered read, one clk_sys behind palette_addr (see the composite stage)
 	output [9:0]  spr_palette_addr, // sprite-plane palette tap (read-time only)
-	input  [15:0] spr_palette_data,
+	input  [15:0] spr_palette_data, // same contract as palette_data
 	output reg [14:0] mainram_addr,
 	input      [15:0] mainram_data,
 	// HW_ROMS=1 only: real block until the wrapper's registered mainram
@@ -628,9 +628,25 @@ module video_macross2 #(
 	// a registered read would never produce new data there, and
 	// simulation has no real-BRAM constraint to satisfy in the first
 	// place.
+	//
+	// Palette taps at HW_ROMS=1 (2026-09-10, NMK-10): palette_data and
+	// spr_palette_data are the wrapper's REGISTERED reads of palette_addr
+	// / spr_palette_addr — the word arrives one clk_sys after the address
+	// — so the 1024 x 16 palette can live in block RAM instead of 16K
+	// flip-flops behind three 1024:1 asynchronous read muxes (raphero_core
+	// alone: ~16K registers and ~9K ALMs of mux, the bulk of its "own"
+	// logic in the fitter's entity report). The composite therefore has
+	// two register stages here: stage 1 (one clock after rd_x) holds the
+	// plane entry, the TX/BG flags and the tile palette word; stage 2 adds
+	// the sprite palette word, whose address only exists at stage 1.
+	// rd_rgb is two clk_sys behind rd_x — still inside the 5-clk_sys pixel
+	// period, and the framework (and every *_hw testbench) samples rd_rgb
+	// at the ce_pix clock at the END of that period. HW_ROMS=0 is
+	// untouched: combinational taps, zero latency, as before.
 	wire       tx_opaque_al;
 	wire [23:0] tile_rgb_al;
 	wire       rd_in_range_al;
+	wire       spr_valid_al;
 	wire [9:0] spr_entry;
 	generate
 	if (!HW_ROMS) begin : g_composite_sim
@@ -639,30 +655,50 @@ module video_macross2 #(
 		assign tx_opaque_al   = tx_opaque;
 		assign tile_rgb_al    = tile_rgb;
 		assign rd_in_range_al = rd_in_range;
+		assign spr_valid_al   = spr_entry[9];
 	end else begin : g_composite_hw
+		// Stage 1: plane entry (registered read), TX/BG flags, and the
+		// tile palette word — palette_data already IS one clock behind
+		// palette_addr, i.e. aligned with these registers.
 		reg [9:0] spr_entry_r;
 		always @(posedge clk_sys) spr_entry_r <= sprite_plane[rd_addr + (disp_buf ? PLANE_PX : 0)];
 		reg        tx_opaque_r;
-		reg [23:0] tile_rgb_r;
 		reg        rd_in_range_r;
+		reg        bg_hit_r, tx_hit_r;
 		always @(posedge clk_sys) begin
 			tx_opaque_r   <= tx_opaque;
-			tile_rgb_r    <= tile_rgb;
 			rd_in_range_r <= rd_in_range;
+			bg_hit_r      <= bg_hit;
+			tx_hit_r      <= tx_hit;
 		end
-		assign spr_entry      = rd_in_range_r ? spr_entry_r : 10'd0;
-		assign tx_opaque_al   = tx_opaque_r;
-		assign tile_rgb_al    = tile_rgb_r;
-		assign rd_in_range_al = rd_in_range_r;
+		wire [23:0] tile_rgb_s1 = (DBG_MISS_PAINT && !bg_hit_r) ? 24'hFF00FF :
+		                          (DBG_MISS_PAINT && !tx_hit_r) ? 24'h00FFFF :
+		                          decode_rgb(palette_data);
+		assign spr_entry = rd_in_range_r ? spr_entry_r : 10'd0; // -> spr_palette_addr
+		// Stage 2: the sprite palette word arrives; hold the tile side
+		// one more clock to meet it.
+		reg        tx_opaque_r2;
+		reg        rd_in_range_r2;
+		reg        spr_valid_r2;
+		reg [23:0] tile_rgb_r2;
+		always @(posedge clk_sys) begin
+			tx_opaque_r2   <= tx_opaque_r;
+			rd_in_range_r2 <= rd_in_range_r;
+			spr_valid_r2   <= spr_entry[9];
+			tile_rgb_r2    <= tile_rgb_s1;
+		end
+		assign tx_opaque_al   = tx_opaque_r2;
+		assign tile_rgb_al    = tile_rgb_r2;
+		assign rd_in_range_al = rd_in_range_r2;
+		assign spr_valid_al   = spr_valid_r2;
 	end
 	endgenerate
-	wire        spr_valid = spr_entry[9];
 
 	assign spr_palette_addr = SPR_PAL_BASE + {1'd0, spr_entry[8:0]};
 	wire [23:0] spr_rgb = decode_rgb(spr_palette_data);
 
 	// Composite, top to bottom: TX (opaque) > sprite (opaque) > BG.
-	assign rd_rgb = !rd_in_range_al ? 24'h0 : (tx_opaque_al ? tile_rgb_al : (spr_valid ? spr_rgb : tile_rgb_al));
+	assign rd_rgb = !rd_in_range_al ? 24'h0 : (tx_opaque_al ? tile_rgb_al : (spr_valid_al ? spr_rgb : tile_rgb_al));
 
 	// ------------------------------------------------------------------
 	// Sprite draw FSM — unchanged from video_macross.sv's own, except
