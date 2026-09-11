@@ -307,9 +307,25 @@ but not proven), `infra` (build/test/doc health).
 
 ## Not shipped (for completeness)
 
-### NMK-14 · `gunnailb_core.sv` (sim-only) still has the unqualified Z80 read mux
-- **Severity:** bug (sim-only, no RBF) · **Status:** open
+### NMK-14 · `gunnailb_core.sv` (sim-only) had the unqualified Z80 read mux
+- **Severity:** bug (sim-only, no RBF) · **Status:** fixed (2026-09-10)
 - **Ref:** "The second bug the first one exposed: the Z80 read mux"
 - The three hardware cores qualify every memory select with
-  `z80_mem_re`; the bootleg's core does not. Fix before any Family E
-  hardware build.
+  `z80_mem_re`; the bootleg's core did not. Fixed the same way: the
+  `sel_z80_rom`/`sel_z80_bank`/`sel_z80_ram` arms of the read mux are
+  now `z80_mem_re & sel_z80_*`, so an `in a,(n)` (which drives A on
+  A15..A8) can no longer be answered with a ROM/bank/RAM byte instead of
+  the YM2203 status or sound-latch port.
+- Evidence (`sim/rtl/gunnailb`, `make run`, 300 M clk_sys cycles, same
+  timeline before/after; the 68000 side is identical in both runs —
+  13,198,403 instructions, 345,205 writes, last PC $00C35C, 3 NMIs):
+
+  | metric | before | after |
+  |---|---|---|
+  | Z80 instructions | 7,442,532 | 4,093,349 |
+  | Z80 writes to YM2203 | 9 | 563 |
+  | last Z80 fetch PC | $0AA5 | $0570 |
+
+  Before the fix the bootleg's Seibu-style driver spun in its YM2203
+  busy-wait reading program ROM (9 FM writes in 422 frames); after it,
+  the driver runs its normal sequencer loop and programs the chip.

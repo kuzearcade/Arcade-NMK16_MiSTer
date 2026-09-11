@@ -651,9 +651,13 @@ module gunnailb_core #(
 	// ------------------------------------------------------------------
 	reg [7:0] z80_rdata;
 	always @(*) begin
-		if (sel_z80_rom)        z80_rdata = audiocpu_rom[z80_a[14:0]];
-		else if (sel_z80_bank)  z80_rdata = audiocpu_rom[z80_bank_phys[16:0]];
-		else if (sel_z80_ram)   z80_rdata = z80_ram[z80_a[12:0]];
+		// Memory selects are qualified with z80_mem_re (NMK-14): during an
+		// I/O cycle the address bus still carries the port number in A[7:0]
+		// with stale/undefined upper bits, so an unqualified sel_z80_* could
+		// shadow the YM / soundlatch port reads below.
+		if (z80_mem_re & sel_z80_rom)        z80_rdata = audiocpu_rom[z80_a[14:0]];
+		else if (z80_mem_re & sel_z80_bank)  z80_rdata = audiocpu_rom[z80_bank_phys[16:0]];
+		else if (z80_mem_re & sel_z80_ram)   z80_rdata = z80_ram[z80_a[12:0]];
 		else if (z80_io_re & sel_io_ym) z80_rdata = ym_chip_dout;
 		else if (z80_io_soundlatch_re)  z80_rdata = soundlatch_data;
 		else                     z80_rdata = 8'hFF;

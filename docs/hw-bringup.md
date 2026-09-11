@@ -1184,8 +1184,9 @@ traffic left the cache in a state where the chain terminated; the new
 one's did not. Fixed by qualifying every memory select in the read mux
 with `z80_mem_re` (the write decodes already were). This bug was
 present in every build of both games; MAME reads the real status.
-`rtl/gunnailb/gunnailb_core.sv` (sim-only) has the same unqualified mux
-and is not yet fixed.
+`rtl/gunnailb/gunnailb_core.sv` (sim-only) had the same unqualified mux;
+it was fixed the same way as NMK-14 (see `docs/known-issues.md` for the
+before/after sim counts).
 
 ### The third bug: OKI2 was reading the BG tiles
 
