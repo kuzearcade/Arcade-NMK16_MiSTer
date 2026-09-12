@@ -34,7 +34,7 @@ SOURCES := $(CORE_DIR)/$(TOP).sv $(MACROSS2_DIR)/video_macross2.sv $(NMK214_DIR)
            $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
            $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache1_byte.sv \
            $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv \
-           $(RTL_DIR)/nmk112/nmk112.sv $(RTL_DIR)/third_party_gen/t80/T80s.v
+           $(RTL_DIR)/nmk112/nmk112.sv $(RTL_DIR)/third_party_gen/t80/T80s.v $(RTL_DIR)/third_party/jt51/hdl/jt51.v
 
 # Per-game table: game id (gunnail_core.sv G_*), NMK004 external program,
 # protection ROM, second tile ROM, bioship's tilemap ROM.
@@ -59,6 +59,36 @@ SEL_nouryokup := 19
 SEL_tharrier := 20
 SEL_vandykeb := 21
 SEL_mustangb3 := 22
+# Afega (Family H): ids 23-43, see gunnail_core.sv; hex from `tools/gen_gunnail_mra.py --simroms <set> ../<set>/roms`
+AFEGA_SETS := stagger1 redhawk redhawki redhawks redhawksa redhawkg redhawke redhawkk redhawkc redhawkb grdnstrm grdnstrmv grdnstrmj grdnstrmk redfoxwp2 redfoxwp2a grdnstrmg grdnstrmau bubl2000 bubl2000a hotbubl hotbubla popspops mangchi spec2k spec2kh firehawk
+AFEGA_8BPP := grdnstrm grdnstrmv grdnstrmj grdnstrmk redfoxwp2 redfoxwp2a grdnstrmg grdnstrmau bubl2000 bubl2000a hotbubl hotbubla popspops mangchi spec2k spec2kh firehawk
+SEL_stagger1 := 23
+SEL_redhawke := 23
+SEL_redhawkk := 23
+SEL_redhawkc := 23
+SEL_redhawk  := 24
+SEL_redhawki := 25
+SEL_redhawks := 26
+SEL_redhawksa := 27
+SEL_redhawkg := 28
+SEL_redhawkb := 29
+SEL_grdnstrm := 30
+SEL_grdnstrmk := 31
+SEL_grdnstrmv := 31
+SEL_grdnstrmj := 32
+SEL_grdnstrmg := 33
+SEL_grdnstrmau := 34
+SEL_redfoxwp2 := 35
+SEL_redfoxwp2a := 36
+SEL_popspops := 37
+SEL_mangchi  := 38
+SEL_bubl2000 := 39
+SEL_bubl2000a := 39
+SEL_hotbubl  := 39
+SEL_firehawk := 40
+SEL_spec2k   := 41
+SEL_spec2kh  := 42
+SEL_hotbubla := 43
 SEL := $(SEL_$(GAME))
 # ROM hex directory: sim/rtl/<game>/roms, except bjtwin and cactus (sim/rtl/bjtwin/roms)
 ifneq ($(filter $(GAME),bjtwin cactus),)
@@ -71,11 +101,11 @@ endif
 ifeq ($(GAME),hachamfb)
 EXT := ../tlcs90/roms/hachamf_ext.hex
 endif
-ifneq ($(filter $(GAME),bjtwin bjtwinp sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3),)
+ifneq ($(filter $(GAME),bjtwin bjtwinp sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3 $(AFEGA_SETS)),)
 EXT :=
 endif
 AUDIOCPU :=
-ifneq ($(filter $(GAME),tharrier mustangb3),)
+ifneq ($(filter $(GAME),tharrier mustangb3 $(AFEGA_SETS)),)
 AUDIOCPU := $(R)_audiocpu.hex
 endif
 OKI2 := $(R)_oki2.hex
@@ -87,7 +117,7 @@ ifneq ($(filter $(GAME),gunnail macross hachamf tdragon1 bjtwin sabotenb nouryok
 PROT := $(R)_prot.hex
 endif
 BG2 :=
-ifneq ($(filter $(GAME),bioship strahl),)
+ifneq ($(filter $(GAME),bioship strahl $(AFEGA_8BPP)),)
 BG2 := $(R)_bg2tile.hex
 endif
 TILEROM :=
@@ -103,7 +133,7 @@ all: run
 $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gc.cpp $(FX68K_DIR)/fx68k.sv
 	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --top-module $(TOP) $(EXTRA_VFLAGS) \
 		--Mdir $(OBJ_DIR) \
-		-y $(FX68K_DIR) -y $(TLCS90_DIR) -y $(NMK214_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl \
+		-y $(FX68K_DIR) -y $(TLCS90_DIR) -y $(NMK214_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl -y $(RTL_DIR)/third_party/jt51/hdl \
 		-GSIM_DSW=1 -GROM_FILE=\"$(R)_maincpu.hex\" \
 		-GNMK004_BOOT_FILE=\"../tlcs90/roms/nmk004_boot.hex\" \
 		-GNMK004_EXT_FILE=\"$(EXT)\" \

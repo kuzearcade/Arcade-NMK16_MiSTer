@@ -104,13 +104,20 @@ localparam CONF_STR = {
 wire        forced_scandoubler;
 wire        direct_video;
 wire  [1:0] buttons;
-wire  [4:0] game_sel;      // runtime game select, from the .mra <switches> third byte (below)
+wire  [5:0] game_sel;      // runtime game select, from the .mra <switches> third byte (below)
 wire        lowres;        // from the core: the 256-px lowres window (every game but gunnail)
 // The vertical (ROT270) games: gunnail, macross, vandyke, acrobatm,
 // tdragon/tdragon1, the Bombjack Twin sets (14-16), tharrier, vandykeb.
 // The others are ROT0 and never rotated.
-wire        game_vertical = (game_sel == 5'd0) | (game_sel == 5'd1) | (game_sel == 5'd5) | (game_sel == 5'd6) | (game_sel == 5'd8) | (game_sel == 5'd10) |
-                            (game_sel == 5'd14) | (game_sel == 5'd15) | (game_sel == 5'd16) | (game_sel == 5'd20) | (game_sel == 5'd21);
+wire        game_vertical = (game_sel == 6'd0) | (game_sel == 6'd1) | (game_sel == 6'd5) | (game_sel == 6'd6) | (game_sel == 6'd8) | (game_sel == 6'd10) |
+                            (game_sel == 6'd14) | (game_sel == 6'd15) | (game_sel == 6'd16) | (game_sel == 6'd20) | (game_sel == 6'd21) |
+                            // Afega ROT270 sets: stagger1/redhawk(e/k/c), grdnstrmk/v/j/g, redfoxwp2/a, spec2k
+                            (game_sel == 6'd23) | (game_sel == 6'd24) | (game_sel == 6'd31) | (game_sel == 6'd32) | (game_sel == 6'd33) |
+                            (game_sel == 6'd35) | (game_sel == 6'd36) | (game_sel == 6'd41);
+// MAME ORIENTATION_FLIP_Y sets (grdnstrm, grdnstrmau, firehawk, spec2kh): the
+// board draws upside down for a monitor mounted that way; the picture is
+// read out bottom-up (rd_y mirrored) so it displays upright, as MAME does.
+wire        game_flip_y = (game_sel == 6'd30) | (game_sel == 6'd34) | (game_sel == 6'd40) | (game_sel == 6'd42);
 wire [127:0] status;
 wire  [10:0] ps2_key;
 wire [31:0] joystick_0, joystick_1;
@@ -285,7 +292,7 @@ end
 // mustang and tharrier read ONE 16-bit DSW port at 0x080004 (SW2 in the
 // low byte, SW1 in the high byte), so their second switch byte rides in
 // dsw1's high half; every other board reads two byte-wide ports.
-wire        game_mustang = (game_sel == 5'd3) | (game_sel == 5'd12) | (game_sel == 5'd20) | (game_sel == 5'd22); // mustang, mustangs, tharrier, mustangb3: one 16-bit DSW port
+wire        game_mustang = (game_sel == 6'd3) | (game_sel == 6'd12) | (game_sel == 6'd20) | (game_sel == 6'd22) | (game_sel >= 6'd23); // mustang, mustangs, tharrier, mustangb3 and every Afega board: one 16-bit DSW port
 wire [15:0] dsw1_i = {game_mustang ? dip_sw[1] : 8'hFF, dip_sw[0]};
 wire [15:0] dsw2_i = {8'hFF, dip_sw[1]};
 // Game select: the <switches> third byte (gunnail_core.sv's game table:
@@ -295,7 +302,7 @@ wire [15:0] dsw2_i = {8'hFF, dip_sw[1]};
 // 17 sabotenb/nouryoku, 18 cactus, 19 nouryokup, 20 tharrier,
 // 21 vandykeb). An .mra with only two switch bytes leaves it at the idle
 // 0xFF, which is gunnail.
-assign game_sel = (dip_sw[2] == 8'hFF) ? 5'd0 : dip_sw[2][4:0];
+assign game_sel = (dip_sw[2] == 8'hFF) ? 6'd0 : dip_sw[2][5:0];
 
 // ------------------------------------------------------------------
 // SDRAM — single physical rtl/sdram.sv instance, 4 ports. The
@@ -339,7 +346,8 @@ wire signed [15:0] audio_l, audio_r;
 // 256-px one (the truncated subtraction underflows to >= the width during
 // blanking, which video_macross2.sv's rd_in_range reads as "not visible").
 wire [8:0] rd_x_screen = hcount_core[8:0] - (lowres ? 9'd92 : 9'd28);
-wire [7:0] rd_y_screen = vcount_core[7:0] - 8'd16;
+wire [7:0] rd_y_raw    = vcount_core[7:0] - 8'd16;
+wire [7:0] rd_y_screen = game_flip_y ? (8'd223 - rd_y_raw) : rd_y_raw; // out-of-range (blanking) values stay >= 224 either way
 
 // VTIMING_FILE: nmk_irq.sv's V-PROMs are baked in at synthesis via
 // $readmemh, not downloaded: a 1024-line file of four 256-byte tables —

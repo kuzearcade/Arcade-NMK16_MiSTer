@@ -2842,6 +2842,146 @@ undeciphered sprite ROMs. One harness lesson: MiSTer takes ~15 s to
 bring a new core up, so anything that reads /tmp/CORENAME or takes a
 screenshot earlier sees the previous set.
 
+## The Afega boards on the Gunnail rbf (2026-09-13, Family H)
+
+All 27 Afega-hardware sets (`afega_state` in nmk16.cpp: Stagger I / Red
+Hawk, Guardian Storm / Hong Hu Zhanji II, Bubble 2000 / Hot Bubble,
+Pop's Pop's, Mang-Chi, Spectrum 2000, Fire Hawk) run as game ids 23-43
+of `gunnail_core.sv`, one id per distinct configuration; sets that differ
+only in ROM contents share one (stagger1 with redhawke/k/c, grdnstrmk
+with grdnstrmv, bubl2000 with bubl2000a/hotbubl). Six-bit game ids now:
+the `.mra` third switches byte, `Gunnail.sv`'s `game_sel`, the hw-sim
+top's `GAME_SEL`.
+
+### What the mode muxes
+
+- **68000 at 12 MHz on `afega_map`** (`M_AFEGA`): IN0/IN1, one 16-bit
+  DSW port at +4 (the mustang shape: SW2 in the low byte), the
+  `afega_unknown_r` word at 0x080012 (0x0100), the sound latch at
+  0x08001F, four scroll words at 0x08C000 mirrored at 0x084000, a
+  768-entry palette at 0x088000, BG VRAM at 0x090000, TX VRAM at
+  0x09C000, and 64 KB of `mainram_strange` RAM reached at both 0x0C0000
+  and 0x0F0000. The map has `global_mask(0xfffff)`: the 68000's upper
+  address lines are not decoded and the whole map repeats every 1 MB —
+  stagger1's initial stack pointer is 0x3C8000, the 0x0C0000 mirror. The
+  first build compared 24-bit addresses and every set whose program uses
+  a mirror booted to a black screen while the three Red Hawk sets that
+  don't were already pixel-exact; the decode masks the address first
+  now. `firehawk_map` (`M_FIREHAWK`) is the same map at +0x200000 with a
+  1 MB program, main RAM at 0x3C0000/0x3F0000 and a 4 MB mask. Fixed-
+  scanline interrupts (`irq_hacky`).
+- **Program ROM address scrambling** (`decryptcode`): MAME un-permutes
+  address bits 17..13 of the image once at init; the core permutes the
+  68000's address per fetch instead (`afega_decrypt`, ten tables: redhawk,
+  redhawki, redhawksa, redhawkg, grdnstrm/popspops, grdnstrmg/j,
+  grdnstrmau, redfoxwp2a, bubl2000/mangchi/hotbubl, spec2k) so the .mra
+  streams the raw files. The ROM cache and its sim array grew to 1 MB
+  for firehawk.
+- **Video**: lowres, gfx_macross bases (BG 0, sprites 0x100, TX 0x200),
+  `get_sprite_flip` (attribute bits 8/9), the sprite table at main RAM
+  +0x8000. Four `screen_update` variants select how the scroll words
+  feed the layers (`afega_vid`): afega/bubl2000 (BG x = scroll0[1] -
+  0x100, y = scroll0[0]; TX x/y = scroll1[1]/[0] — the TX layer gained
+  its own x scroll for this), redhawki (BG from scroll1's low bytes, no
+  TX), redhawkb (BG y + 0x100) and firehawk/grdnstrm-horizontal (BG y =
+  scroll1[1] + 0x100). From grdnstrm on the BG is `tilelayout_8bpp`: the
+  ROM region's two halves each hold a col_2x2 4bpp tile, low nibble from
+  the first half, high from the second, one 256-colour bank, the whole
+  VRAM word as the tile code. video_macross2.sv's layer B (bioship's and
+  strahl's second BG) supplies the high nibble: pointed at the region's
+  second half, sharing layer A's VRAM read and scroll, its nibble
+  concatenated into layer A's palette index (`bg_8bpp`) instead of
+  drawn as a layer. Sets with no 8x8 ROM (region ERASEFF) get `tx_off`,
+  popspops (no sprite ROM) `spr_off`; redhawkb's packed_lsb tiles and
+  sprites reuse powerinsc's `tile_lsb`, its active-high inputs are
+  inverted in the read mux. MAME's ORIENTATION_FLIP_Y sets (grdnstrm,
+  grdnstrmau, firehawk, spec2kh) draw upside down for their monitors:
+  Gunnail.sv reads the picture out bottom-up (`game_flip_y` mirrors
+  rd_y) so they display upright, as MAME does.
+- **Sound**: the tharrier Z80 board block now has three memory maps.
+  `afega_sound_map`: ROM 0-0xEFFF, RAM 0xF000-0xF7FF, the latch at
+  0xF800, a **YM2151** at 0xF808/9 (jotego's jt51, vendored — deps.lock,
+  files_gunnail.qip; 4 MHz cen, cen_p1 = cen/2, a one-clock write
+  strobe since the chip samples wr_n every clock) and one OKIM6295 at
+  0xF80A (4 MHz/4 = 1 MHz, pin 7 HIGH: every fourth 4 MHz pulse, `ss`
+  set). The Z80's INT is the latch's data-pending flag OR the YM's IRQ
+  (INPUT_MERGER_ANY_HIGH); the flag sets on the 68000's write and clears
+  on the Z80's read. `firehawk_sound_map` (firehawk, spec2k, spec2kh):
+  RAM 0xF000-0xFFFF with the latch at 0xFFF0, the oki2 bank byte at
+  0xFFF2 (0xFE/0xFF = bank 0/1 of an 0x80000 ROM), the two OKIs at
+  0xFFF8/0xFFFA, no YM. Mix: YM (l+r)/2 x 1/8 (MAME 0.15), OKI x 2.75
+  (MAME 0.70 of the 16-bit scale).
+- **SDRAM layouts**: maincpu, Z80 (the NMK004 slot), [fgtile], bgtile,
+  [sprites], oki1, [oki2], eleven per-id cases; a missing 8x8 or sprite
+  region simply points its (unused) base at the next region.
+
+### .mra generation
+
+`tools/gen_gunnail_mra.py` carries the 27 sets with DIP tables per
+INPUT_PORTS_START (stagger1, redhawkb — everything inverted, defaults
+00 — grdnstrm/grdnstrk, popspops, bubl2000/bubl2000a, mangchi, firehawk,
+spec2k). Two conventions: program and sprite byte pairs put the ODD chip
+on even stream addresses (`map="01"`, the core's `^1` sprite fetch and
+word rebuild), 8bpp BG regions are plain files in MAME region order
+(hotbubl's ROM_START lists them out of order). Split clone zips omit
+the files identical to the parent's, so the generator substitutes the
+parent's file name for such a part (looked up by CRC — `resolve_name`);
+`--simroms <set> <dir>` writes the reference sim's hex files from the
+same tables (maincpu words in region order, bg2tile = the second half
+of an 8bpp region).
+
+### Verification
+
+Reference sims (`sim/rtl/gunnail_mg`, `run_afega_one.sh <set>`) against
+MAME exact-frame snapshots (`-norotate`: the FLIP_Y sets' frames are
+upside down in both), `$SP/mg_cmp.py`, frames 20-168 and 150-449:
+
+| configuration | identical | the rest |
+|---|---|---|
+| stagger1 (23) | 149 + 300 | |
+| redhawk (24) | 149 + 300 | |
+| redhawki (25) | 149 + 300 | |
+| redhawkb (29) | 149 + 300 | |
+| grdnstrm (30) | 146 + 300 | 34-37: three frames at a screen change |
+| grdnstrmk (31) | 149 + 300 | |
+| popspops (37) | 149 + 300 | |
+| mangchi (38) | 148 + 300 | 20 |
+| bubl2000 (39) | 149 + 300 | |
+| firehawk (40) | 148 + 299 | 156 (2 %) |
+| spec2k (41) | 148 + 298 | 26, 176, 185 (under 1.5 %) |
+
+Three bugs found on the way, each of which black-screened or garbled
+whole groups of sets: the 24-bit address decode against the map's 1 MB
+global mask (stagger1's stack pointer 0x3C8000 went nowhere while the
+Red Hawk sets, whose programs never use a mirror, were already exact);
+the 8bpp nibble order (a Python reconstruction of MAME's frame from
+MAME's own VRAM, palette and the ROM files — `$SP/vram_dump.lua` — is
+what settled it: with the first half as the LOW nibble it reproduced
+the garbled sim frame, with it as the HIGH nibble 51,200 of 57,344
+pixels of MAME's frame, the rest sprites); and, in the HW_ROMS=0 sim
+path only, layer B's tile ROM index truncated to strahl's 512 KB
+(`bg2tile_rom[addr[18:0]]`), which only showed on tiles past 512 KB —
+grdnstrm's and mangchi's attract tiles sit below it, so those matched
+while popspops/bubl2000/spec2k/firehawk drew posterized photos.
+bubl2000's tile codes run past its 12288-tile halves (0xF538): MAME
+wraps modulo the element count, hence `bg_code_mod12k`.
+
+Hardware-path sims (`sim/rtl/gunnail_mg_hw`, the .mra's own stream):
+stagger1 158 of 160 drawn frames identical to the reference, firehawk
+ROM audit 10,997,661 words / 0 wrong, OKI audits clean.
+
+Board (Gunnail build 12: 26,862 ALMs / 64 %, +1.6 ns on clk_sys —
+build 9 without the address mask was the first to fit the YM2151 and
+the second BG pipeline together): the eleven configurations above load
+through their .mra, draw their attract sequences with the 8bpp
+backgrounds right and play sound; audio against MAME captures
+(`tools/audio_compare.py`, 60 s): stagger1 0.992 mean band correlation
+(+1.1 dB), grdnstrmk 0.980 (+1.2 dB). The horizontal FLIP_Y sets show
+upright. Pop's Pop's needed the board script to double-quote the .mra
+name (apostrophe). The sixteen ROM-only clones of those configurations
+(redhawks/sa/g/e/k/c, grdnstrmv/j/g/au, redfoxwp2/a, bubl2000a,
+hotbubl/a, spec2kh) were not loaded on the board.
+
 ## Status
 
 Three RBFs run on the DE10-Nano and are tracked in `releases/`:

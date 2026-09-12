@@ -121,7 +121,7 @@ module gunnail_mg_hw_top #(
 	gunnail_core #(.HW_ROMS(1), .VTIMING_FILE(VTIMING_FILE),
 	               .ROM_FILE(ROM_FILE),
 	               .OKI1_ROM_FILE(OKI1_ROM_FILE), .OKI2_ROM_FILE(OKI2_ROM_FILE)) core_inst (
-		.clk_sys(clk_sys), .reset(reset), .game_sel(GAME_SEL[4:0]), .lowres_o(lowres_o),
+		.clk_sys(clk_sys), .reset(reset), .game_sel(GAME_SEL[5:0]), .lowres_o(lowres_o),
 		.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
 		.ioctl_index(16'd0),
 		.sd0_addr(p0_addr), .sd0_wrl(p0_wrl), .sd0_wrh(p0_wrh), .sd0_din(p0_din), .sd0_dout(p0_dout), .sd0_dout_pair(p0_dout_pair), .sd0_req(p0_req), .sd0_ack(p0_ack),
