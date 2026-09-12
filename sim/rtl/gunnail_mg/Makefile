@@ -10,6 +10,7 @@
 #   TB_DUMP_PPM=1 make GAME=strahl run
 # Games: macross blkheart mustang bioship vandyke acrobatm strahl tdragon hachamf tdragon1 gunnail
 #        hachamfb bjtwin bjtwinp sabotenb nouryoku cactus nouryokup tharrier vandykeb
+#        the Afega sets (AFEGA_SETS) and Family E (FAME_SETS); pass the .mra DIP defaults as TB_DSW1/TB_DSW2
 
 GAME   ?= blkheart
 CYCLES ?= 300000000
@@ -34,7 +35,8 @@ SOURCES := $(CORE_DIR)/$(TOP).sv $(MACROSS2_DIR)/video_macross2.sv $(NMK214_DIR)
            $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
            $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache1_byte.sv \
            $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv \
-           $(RTL_DIR)/nmk112/nmk112.sv $(RTL_DIR)/third_party_gen/t80/T80s.v $(RTL_DIR)/third_party/jt51/hdl/jt51.v
+           $(RTL_DIR)/nmk112/nmk112.sv $(RTL_DIR)/third_party_gen/t80/T80s.v $(RTL_DIR)/third_party/jt51/hdl/jt51.v \
+           $(RTL_DIR)/seibu/seibu_sound.sv $(RTL_DIR)/third_party/jtopl/hdl/jtopl2.v
 
 # Per-game table: game id (gunnail_core.sv G_*), NMK004 external program,
 # protection ROM, second tile ROM, bioship's tilemap ROM.
@@ -89,6 +91,17 @@ SEL_firehawk := 40
 SEL_spec2k   := 41
 SEL_spec2kh  := 42
 SEL_hotbubla := 43
+# Family E (2026-09-14): ids 44-51
+FAME_SETS := mustangb mustangb2 acrobatmbl hachamfb2 tdragonb tdragonb3 strahljbl gunnailb tomagic
+SEL_mustangb := 44
+SEL_mustangb2 := 44
+SEL_acrobatmbl := 45
+SEL_hachamfb2 := 46
+SEL_tdragonb := 47
+SEL_tdragonb3 := 48
+SEL_strahljbl := 49
+SEL_gunnailb := 50
+SEL_tomagic  := 51
 SEL := $(SEL_$(GAME))
 # ROM hex directory: sim/rtl/<game>/roms, except bjtwin and cactus (sim/rtl/bjtwin/roms)
 ifneq ($(filter $(GAME),bjtwin cactus),)
@@ -101,11 +114,11 @@ endif
 ifeq ($(GAME),hachamfb)
 EXT := ../tlcs90/roms/hachamf_ext.hex
 endif
-ifneq ($(filter $(GAME),bjtwin bjtwinp sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3 $(AFEGA_SETS)),)
+ifneq ($(filter $(GAME),bjtwin bjtwinp sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3 $(AFEGA_SETS) $(FAME_SETS)),)
 EXT :=
 endif
 AUDIOCPU :=
-ifneq ($(filter $(GAME),tharrier mustangb3 $(AFEGA_SETS)),)
+ifneq ($(filter $(GAME),tharrier mustangb3 $(AFEGA_SETS) $(FAME_SETS)),)
 AUDIOCPU := $(R)_audiocpu.hex
 endif
 OKI2 := $(R)_oki2.hex
@@ -117,7 +130,7 @@ ifneq ($(filter $(GAME),gunnail macross hachamf tdragon1 bjtwin sabotenb nouryok
 PROT := $(R)_prot.hex
 endif
 BG2 :=
-ifneq ($(filter $(GAME),bioship strahl $(AFEGA_8BPP)),)
+ifneq ($(filter $(GAME),bioship strahl strahljbl $(AFEGA_8BPP)),)
 BG2 := $(R)_bg2tile.hex
 endif
 TILEROM :=
@@ -133,7 +146,7 @@ all: run
 $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gc.cpp $(FX68K_DIR)/fx68k.sv
 	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --top-module $(TOP) $(EXTRA_VFLAGS) \
 		--Mdir $(OBJ_DIR) \
-		-y $(FX68K_DIR) -y $(TLCS90_DIR) -y $(NMK214_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl -y $(RTL_DIR)/third_party/jt51/hdl \
+		-y $(FX68K_DIR) -y $(TLCS90_DIR) -y $(NMK214_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl -y $(RTL_DIR)/third_party/jt51/hdl -y $(RTL_DIR)/third_party/jtopl/hdl \
 		-GSIM_DSW=1 -GROM_FILE=\"$(R)_maincpu.hex\" \
 		-GNMK004_BOOT_FILE=\"../tlcs90/roms/nmk004_boot.hex\" \
 		-GNMK004_EXT_FILE=\"$(EXT)\" \

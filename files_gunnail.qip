@@ -10,6 +10,7 @@ set_global_assignment -name SEARCH_PATH rtl/third_party/jt12/hdl
 set_global_assignment -name SEARCH_PATH rtl/third_party/jt12/jt49/hdl
 set_global_assignment -name SEARCH_PATH rtl/third_party/jt6295/hdl
 set_global_assignment -name SEARCH_PATH rtl/third_party/jt51/hdl
+set_global_assignment -name SEARCH_PATH rtl/third_party/jtopl/hdl
 
 set_global_assignment -name SYSTEMVERILOG_FILE Gunnail.sv
 set_global_assignment -name VERILOG_FILE rtl/pll.v
@@ -24,6 +25,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/tlcs90/tlcs90.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/tlcs90/nmk004_periph.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/macross2/video_macross2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/nmk112/nmk112.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/seibu/seibu_sound.sv
 set_global_assignment -name VERILOG_FILE rtl/third_party_gen/t80/T80s.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/bjtwin/video_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/nmk_irq/nmk_irq.sv
@@ -42,6 +44,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/tile_prefetch_byte.sv
 set_global_assignment -name VERILOG_FILE rtl/third_party/jt12/hdl/jt03.v
 set_global_assignment -name VERILOG_FILE rtl/third_party/jt6295/hdl/jt6295.v
 set_global_assignment -name VERILOG_FILE rtl/third_party/jt51/hdl/jt51.v
+set_global_assignment -name VERILOG_FILE rtl/third_party/jtopl/hdl/jtopl2.v
 
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/third_party/fx68k/fx68k.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/third_party/fx68k/fx68kAlu.sv

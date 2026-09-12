@@ -450,7 +450,7 @@ module mustangb_core #(
 		.z80_iack_vector(z80_iack_vector),
 		.z80_iack_active(z80_iack_active),
 		.z80_int_n(z80_int_n),
-		.m68k_mustb_we(mustb_we_pulse),
+		.m68k_mustb_we(mustb_we_pulse), .m68k_mustb_lds(1'b1), .m68k_mustb_uds(1'b1),
 		.m68k_mustb_data(mustb_data_r),
 		.ym_cs(ym_cs), .ym_we(ym_we), .ym_addr_sel(ym_addr_sel),
 		.ym_wdata(ym_wdata), .ym_rdata(ym_rdata), .ym_irq_n(ym_chip_irq_n),

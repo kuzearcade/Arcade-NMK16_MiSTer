@@ -31,7 +31,8 @@ int main(int argc, char **argv) {
 	// TB_DSW1/TB_DSW2: the .mra <switches> bytes (0xFF = every switch off); the core is built with SIM_DSW=1
 	top.dsw1_i = 0xFF00 | (std::getenv("TB_DSW1") ? strtoul(std::getenv("TB_DSW1"), nullptr, 16) : 0xFF);
 	top.dsw2_i = 0xFF00 | (std::getenv("TB_DSW2") ? strtoul(std::getenv("TB_DSW2"), nullptr, 16) : 0xFF);
-	if (game_sel == 3 || game_sel == 12 || game_sel == 20 || game_sel == 22 || game_sel >= 23) top.dsw1_i = (top.dsw2_i << 8) | (top.dsw1_i & 0xFF); // mustang/tharrier/afega: one 16-bit port, SW1 in the high byte
+	if (game_sel == 3 || game_sel == 12 || game_sel == 20 || game_sel == 22 || (game_sel >= 23 && game_sel <= 44)) top.dsw1_i = (top.dsw2_i << 8) | (top.dsw1_i & 0xFF); // mustang/tharrier/afega/mustangb: one 16-bit port, SW1 in the high byte
+	else if (game_sel == 45) top.dsw1_i = ((top.dsw1_i & 0xFF) << 8) | 0xFF; // acrobatmbl: SW1 in the high byte of the DSW1 word, DSW2 as acrobatm
 	top.in0_i = 0xFFFF; top.in1_i = 0xFFFF;
 	FILE *nmk004_trace = std::fopen("nmk004_sys.trace", "w");
 	FILE *nmk004_cyc_trace = std::fopen("nmk004_cyc.trace", "w");

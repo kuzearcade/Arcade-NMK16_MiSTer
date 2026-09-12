@@ -2982,14 +2982,171 @@ name (apostrophe). The sixteen ROM-only clones of those configurations
 (redhawks/sa/g/e/k/c, grdnstrmv/j/g/au, redfoxwp2/a, bubl2000a,
 hotbubl/a, spec2kh) were not loaded on the board.
 
+## Family E on the Gunnail rbf (2026-09-14): the Raiden-sound bootlegs, gunnailb, tomagic
+
+Nine more sets as game ids 44-51 of `gunnail_core.sv`: mustangb and
+mustangb2 (44), acrobatmbl (45), hachamfb2 (46), tdragonb (47),
+tdragonb3 (48), strahljbl (49), gunnailb (50) and Tom Tom Magic
+(tomagic, 51). Seven of them are the parents' boards (mustang, acrobatm,
+hachamf, tdragon, strahl) with the Seibu Sound System replacing the
+NMK004; gunnailb and tomagic have a macross2-style banked Z80. The
+standalone Tier 5 cores under `rtl/mustangb`, `rtl/tdragonb`,
+`rtl/acrobatmbl`, `rtl/strahljbl` and `rtl/gunnailb` were the reference
+for the port and stay as register references; `rtl/seibu/seibu_sound.sv`
+(the Seibu glue, ported from seibusound.cpp) is now instantiated by the
+shared core, and jotego's jtopl (YM3812) joins the vendored list
+(`files_gunnail.qip` SEARCH_PATH + jtopl2.v).
+
+### What the mode muxes
+
+- **68000**: the parent's map and video through the existing `g_mustang`
+  / `g_acrobatm` / `g_hachamf` / `g_tdragon` / `g_strahl` / `g_gunnail`
+  groupings (each now includes its bootleg), fixed-scanline interrupts
+  (`irq_hacky`, no V-PROM on any of these boards), clocks per machine
+  config (8 MHz mustangb/acrobatmbl/hachamfb2, 10 MHz tdragonb, 12 MHz
+  strahljbl/tomagic, gunnail's 10 MHz for gunnailb). The NMK004
+  write at +0x1F of the I/O block is the Seibu board's `main_mustb_w`
+  word write (+0x1E/0x1F, each byte lane as its strobe says) and, for
+  gunnailb/tomagic, the plain sound latch; +0x0F reads soundlatch2 on
+  gunnailb. gunnailb's OKI sits on the 68000 bus at 0x194001 (write
+  only), tomagic's at 0x094001/3 (`M_GUNNAILB`/`M_TOMAGIC` = gunnail_map
+  plus that select, the bjtwin 68000-bus OKI path reused).
+- **Protection / patches applied per fetch** (the .mra streams raw
+  files): tdragonb's program words are bitswapped (decode_tdragonb's
+  16-entry table, `tdragonb_word` on the word the 68000 reads) and its
+  BG/sprite bytes have bits 3 and 4 exchanged (video_macross2's
+  `gfx_swap34`); tomagic's sprite bytes are bit-reversed (`spr_bitrev`);
+  acrobatmbl's four patched program words (init_acrobatmbl: the jumps
+  into the PIC's RAM at 0x6C8/0x6CA/0x6D4/0x6D6 → 0x2D84 / 0x3510) are
+  substituted in the read mux; tdragonb's 0x044022 reads 0x0003,
+  tdragonb3's 0x060000-0x060021 read 0x00EE and its 0x044022 nothing
+  (both "no sprites without this"). gunnailb's GFX are gunnail's
+  NMK214-scrambled data on a board without the NMK-215: the cactus
+  config injection (0x02 / 0x0E after reset) covers it.
+- **Sound**: the Z80 block gained two memory maps. `seibu_sound_map`:
+  ROM 0000-1FFF, RAM 2000-27FF, the seibu_sound register block at
+  4000-401F (latches, RST10 = YM3812 / RST18 = the 68000, IM0 vector
+  arbitration with the vector byte driven during the acknowledge, ROM
+  bank at 4007), the OKI at 6000, the 32 KB window 8000-FFFF = the
+  0x10000 file's second half (bank 0) or first half (bank 1 — MAME's
+  ROM_COPY of 0x0000-0x7FFF to region 0x18000). gunnailb/tomagic: ROM
+  0000-7FFF, one of eight 0x4000 banks of the 0x20000 file at 8000-BFFF
+  (I/O port 0), RAM C000-DFFF, the FM chip on I/O 2/3 (gunnailb: the
+  jt03 YM2203 the NMK004 boards use, driven from the Z80 like tharrier;
+  tomagic: the YM3812), port 6 = soundlatch read / soundlatch2 write;
+  the latch's data-pending flag is the NMI (held low until the read),
+  the FM IRQ the INT. The YM3812 (jtopl2) runs at its Z80's clock
+  (14.318/4, 4, 3 MHz) with the write strobe straight from the Z80. One
+  OKI per board, pin 7 low, at 1.32 MHz (mustangb/tdragonb), 1 MHz
+  (acrobatmbl/hachamfb2/strahljbl) or 3 MHz (gunnailb/tomagic): the OKI
+  clock enable is a per-mille accumulator now (100/1000 for the 4 MHz
+  chips). Mixes per machine config: Seibu YM 1.0 + OKI 0.40 (jtopl2 +
+  OKI x 3/2), tomagic YM 0.50 + OKI 0.50, gunnailb YM2203 + OKI 0.80
+  (x 2.75).
+- **DIP switches**: acrobatmbl reads its DSW1 word with SW1 in the HIGH
+  byte ("changed from move.w to move.b") — Gunnail.sv places switch byte
+  0 there for id 45; mustangb has mustang's one 16-bit port; the rest
+  are two byte ports as their parents.
+- **SDRAM layouts**: maincpu, Z80 (the NMK004 slot), fgtile, bgtile,
+  [bg2tile], sprites, oki1 — hachamfb2's sprite pair loads each file's
+  first half only (ROM_IGNORE): the generator's `pair(..., length)`
+  emits `offset`/`length` on the interleave parts and mk_ioctl_stream
+  accepts `file@OFF/LEN` inside a `lo+hi` pair; gunnailb's bgtile is the
+  first half of its 27c160 (identical halves); acrobatmbl's c.2m the
+  same (a `slice`).
+
+### Verification
+
+Reference sims (`sim/rtl/gunnail_mg`, `run_afega_one.sh <set>`, MAME
+exact-frame snapshots, frames 20-168 and 150-449):
+
+| set (id) | identical | the rest |
+|---|---|---|
+| mustangb (44) | 149 + 300 | |
+| mustangb2 (44) | 149 + 300 | |
+| acrobatmbl (45) | 136 + 300 | 20-32: MAME's pre-init garbage while the core is still black |
+| hachamfb2 (46) | 65 + 286 | 20-103: MAME shows uninitialised VRAM (a checkerboard) until the bootleg clears it at frame 106; 189-203: hachamf's title-wipe column |
+| tdragonb (47) | 145 + 300 | 20-22 boot; 44: one 1.6 % transitional frame |
+| tdragonb3 (48) | 146 + 300 | 20-22 boot |
+| strahljbl (49) | 149 + 300 | |
+| gunnailb (50) | 139 + 300 | 20-29: MAME's pre-init garbage |
+| tomagic (51) | 143 + 300 | 20-25 boot |
+
+The sims must run with the .mra's DIP defaults (`TB_DSW1`/`TB_DSW2`):
+acrobatmbl's boot settings screen shows Demo Sounds / Language and
+differed for 140 frames until the run used FE,F7. Two bugs found:
+tomagic (and gunnailb) drew their BG from the wrong scroll source —
+the video instance keyed the per-line scroll RAM path on gunnail alone
+(`raster_scroll`), so the whole background was a flat colour (0 of 449
+frames); and the Seibu board never serviced an interrupt: seibu_sound.sv
+updated its RST18/RST10 acknowledge state on the first clk_sys of the
+acknowledge cycle, so by the time the clock-enabled T80 sampled the bus
+(~11 clk_sys later) the vector had fallen back to 0xFF (RST 38h). The
+Z80 ran, wrote the YM3812 and answered the 68000, but with INT held
+low and never taken the sequencer never advanced — the standalone Tier
+5 cores had the same flaw (their verification stopped at instruction
+cycle costs). The vector chosen at the cycle's start is latched for the
+whole cycle now; with it the mustangb reference sim's first 3.5 s of
+audio correlate 0.86 with MAME's at matching level.
+
+Three more sound bugs, found with a Verilator-only per-52 ms timeline
+of the sound board (Z80 M1 count and PC range, FM/OKI writes and
+reads, output peak and mean, interrupt acknowledges, sound commands —
+the `FAMILY_E tl` prints in gunnail_core.sv) once the board recordings
+came back silent or wrong:
+
+- **tomagic's mix sat at +19000** (clipping, a 28 Hz thump on the
+  board). Its mix term `opl_ext >>> 1` lived in a ternary chain that
+  also holds an unsigned concatenation, so Verilog evaluated the whole
+  chain unsigned and the arithmetic shift became a logical one: every
+  negative OPL sample turned into a large positive. Each mix term is a
+  signed wire of its own now. Reference audio 0.915 / +0.0 dB vs MAME
+  after the fix.
+- **gunnailb's Air Buster driver hung at 0x528**: it writes its (absent)
+  OKI at port 4 and spins until `in d,(c)` from port 4, masked with a
+  channel bit, reads zero. MAME maps port 4 `noprw` and the read
+  returns the space's unmap value 0; the core's unmapped I/O reads
+  returned 0xFF, so the driver looped forever with the YM2203's timer
+  interrupt pending and a note stuck on (a steady 3.9 kHz whistle on
+  the board). Unmapped ports read 0 on these boards now.
+- **The Seibu boards' OKI was ~6 dB low** (mustangb's OKI-heavy
+  passages 3-8 dB under MAME on the board, the FM passages within 1-2
+  dB): x3/2 → x3.
+
+Hardware-path sims (`sim/rtl/gunnail_mg_hw`): mustangb, tdragonb,
+tomagic and gunnailb ROM audits 0 wrong (5.6-13.6 M words), OKI fetch
+audits 0 unserved; their 4 s audio dumps reproduce the reference sims
+exactly (which is how tomagic's and gunnailb's faults were pinned to
+the core rather than the hardware path).
+
+Board (Gunnail build 15: 27,409 ALMs / 65 %, 53 % M10K, +0.15 ns on
+clk_sys; builds 13 and 14 were the two intermediate ones): all nine
+sets load through their .mra, draw title, story and demo play in
+native screenshots, and their 60 s attract audio against MAME
+(`tools/audio_compare.py`, `--offset-search 30`):
+
+| set | mean band corr | level diff |
+|---|---|---|
+| mustangb | 0.948 | +0.2 dB |
+| mustangb2 | 0.948 | +0.2 dB |
+| acrobatmbl | 0.978 (20-70 s window; its first 25 s are silent) | -1.7 dB |
+| hachamfb2 | 0.979 | -1.0 dB |
+| tdragonb | 0.866 | +0.0 dB |
+| tdragonb3 | 0.984 | -1.3 dB |
+| strahljbl | 0.994 (a near-silent attract) | +0.1 dB |
+| gunnailb | 0.841 (MAME's own output carries a large DC; the set is MACHINE_IMPERFECT_SOUND there) | -2.3 dB |
+| tomagic | 0.936 | -2.1 dB |
+
 ## Status
 
 Three RBFs run on the DE10-Nano and are tracked in `releases/`:
 `Macross2` (tdragon2, macross2, powerins and their clones — one
 runtime-selected core), `Raphero` (raphero, rapheroa, arcadian) and
 `Gunnail` (gunnail, gunnailp and, since 2026-09-11, the nine lowres
-NMK004 boards with their clones — 21 sets on one runtime-selected core,
-see "The nine lowres NMK004 boards on the Gunnail rbf" above). Each one boots through the `.mra` loader with its ROM image
+NMK004 boards with their clones, the Bombjack Twin and Task Force
+Harrier boards, the Afega boards and, since 2026-09-14, the Family E
+bootlegs — 71 sets on one runtime-selected core, see the sections
+above). Each one boots through the `.mra` loader with its ROM image
 matching simulation, renders its attract demo without the smearing,
 tearing or missing-sprite problems the sections above walk through,
 and is pixel-identical to MAME in native screenshots of the scenes

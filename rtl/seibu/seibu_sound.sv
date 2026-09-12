@@ -77,6 +77,8 @@ module seibu_sound (
 	// ------------------------------------------------------------
 	input         m68k_mustb_we,   // pulse: 68000 wrote 0x08001E/F
 	input  [15:0] m68k_mustb_data,
+	input         m68k_mustb_lds,  // byte lanes of that write (mem_mask): low byte -> main2sub0, high -> main2sub1
+	input         m68k_mustb_uds,
 
 	// ------------------------------------------------------------
 	// YM3812 (jtopl2) pass-through — 0x4008=addr0, 0x4009=addr1
@@ -114,8 +116,25 @@ module seibu_sound (
 	wire iack_rst18 = rst18_irq & ~rst18_service;
 	wire iack_rst10 = ~iack_rst18 & rst10_irq & ~rst10_service;
 
-	assign z80_iack_active = iack_cycle & (iack_rst18 | iack_rst10);
-	assign z80_iack_vector = iack_rst18 ? 8'hDF : iack_rst10 ? 8'hD7 : 8'h00;
+	// The acknowledge state below changes on the FIRST clk_sys of the
+	// cycle, but a clock-enabled Z80 samples its data bus many clk_sys
+	// later — so the vector chosen at the cycle's start is latched and
+	// driven for the whole cycle (2026-09-14: before this the bus had
+	// already fallen back to 0xFF / RST 38h when T80 read it, and no
+	// Seibu-board interrupt was ever serviced).
+	reg       iack_d = 1'b0;
+	reg [7:0] iack_vec_r = 8'h00;
+	reg       iack_valid_r = 1'b0;
+	wire      iack_start = iack_cycle & ~iack_d;
+	always @(posedge clk_sys) begin
+		iack_d <= iack_cycle;
+		if (iack_start) begin
+			iack_vec_r   <= iack_rst18 ? 8'hDF : iack_rst10 ? 8'hD7 : 8'h00;
+			iack_valid_r <= iack_rst18 | iack_rst10;
+		end
+	end
+	assign z80_iack_active = iack_cycle & (iack_d ? iack_valid_r : (iack_rst18 | iack_rst10));
+	assign z80_iack_vector = iack_d ? iack_vec_r : (iack_rst18 ? 8'hDF : iack_rst10 ? 8'hD7 : 8'h00);
 
 	// ------------------------------------------------------------
 	// main2sub / sub2main latches (soundlatch_r offset 0/1, main_data_w
@@ -149,8 +168,8 @@ module seibu_sound (
 			// RST18 assert: main_mustb_w always asserts, unconditionally
 			// (seibusound.cpp:328).
 			if (m68k_mustb_we) begin
-				main2sub0 <= m68k_mustb_data[7:0];
-				main2sub1 <= m68k_mustb_data[15:8];
+				if (m68k_mustb_lds) main2sub0 <= m68k_mustb_data[7:0];
+				if (m68k_mustb_uds) main2sub1 <= m68k_mustb_data[15:8];
 				rst18_irq <= 1'b1;
 			end
 
@@ -159,7 +178,7 @@ module seibu_sound (
 			// acknowledge ALSO clears rst18_irq immediately, matching
 			// seibusound.cpp:171-174 exactly; RST10's ack only raises
 			// rst10_service, cleared later by an explicit rst10_ack_w).
-			if (iack_cycle) begin
+			if (iack_start) begin
 				if (iack_rst18) begin
 					rst18_service <= 1'b1;
 					rst18_irq     <= 1'b0;

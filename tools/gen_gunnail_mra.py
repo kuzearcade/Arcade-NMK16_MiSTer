@@ -13,7 +13,9 @@ Conventions (see docs/hw-bringup.md):
     6 acrobatm, 7 strahl, 8 tdragon, 9 hachamf, 10 tdragon1, 11 hachamfp,
     12 mustangs, 13 hachamfb, 14 bjtwin, 15 bjtwinp, 16 bjtwinpa,
     17 sabotenb/nouryoku, 18 cactus, 19 nouryokup, 20 tharrier, 21 vandykeb,
-    22 mustangb3.
+    22 mustangb3, 23-43 the Afega boards (see below), 44 mustangb/mustangb2,
+    45 acrobatmbl, 46 hachamfb2, 47 tdragonb, 48 tdragonb3, 49 strahljbl,
+    50 gunnailb, 51 tomagic (Family E, 2026-09-14).
     ids are listed in bit-value order (value 0 first).
   - ROM part order = the core's per-game SDRAM layout (BASE_BYTE_* in
     gunnail_core.sv): maincpu, NMK004 program, NMK004 boot ROM
@@ -46,10 +48,12 @@ COIN8_TD1 = "Free_Play,4C_1C,1C_3C,2C_1C,1C_4C,3C_1C,1C_2C,1C_1C"       # tdrago
 COIN8_STRAHL = "5C_1C,4C_1C,3C_1C,2C_1C,1C_4C,1C_3C,1C_2C,1C_1C"
 
 # Part helpers: ("name", "crc") for a plain file; ("pair", even, odd) for a
-# ROM_LOAD16_BYTE pair (each (name, crc)); ("slice", name, crc, offset, length)
-# for a ROM_CONTINUE chunk; ("fill", nbytes) for a zero pad.
-def pair(even, odd):
-    return ("pair", even, odd)
+# ROM_LOAD16_BYTE pair (each (name, crc)), ("pair", even, odd, length) when
+# only each file's first `length` bytes are loaded (ROM_IGNORE);
+# ("slice", name, crc, offset, length) for a ROM_CONTINUE chunk; ("fill",
+# nbytes) for a zero pad.
+def pair(even, odd, length=None):
+    return ("pair", even, odd) if length is None else ("pair", even, odd, length)
 
 NMK004_BOOT = ("nmk004.bin", "8ae61a09")
 
@@ -478,6 +482,102 @@ MUSTANGB3 = dict(MUSTANG, id=22, manufacturer="bootleg (Lettering)",
     ])
 
 # ---------------------------------------------------------------------------
+# Family E (2026-09-14): the "Raiden sound" bootlegs — the parent's map and
+# video with the Seibu Sound System board (Z80 on seibu_sound_map, YM3812,
+# one OKI), the 68000 writing its sound command word at +0x1E of the I/O
+# block — plus gunnailb and tomagic (a macross2-style banked Z80 with the
+# FM chip on I/O ports 2/3, the OKI on the 68000 bus). The Seibu Z80 file
+# is 0x10000 bytes: the core maps 0000-1FFF to its start, the 8000-FFFF
+# bank window to its second half (bank 0) or first half (bank 1, MAME's
+# ROM_COPY). tdragonb's program-word and GFX-byte bitswaps, tomagic's
+# bit-reversed sprite bytes and acrobatmbl's PIC patch are applied by the
+# core per fetch; the files stream raw. Split clone zips omit the files
+# identical to the parent's — resolve_name() substitutes the parent's
+# names (mustangb's GFX, strahljbl's tiles, tdragonb3's GFX, ...).
+SEIBU_Z80 = "Z80 sound program, 0x010000 (seibu_sound_map: 0000-1FFF = the file's start, the 8000-FFFF window = its second half (bank 0) or first half (bank 1))"
+M2_Z80 = "Z80 sound program, 0x020000 (0000-7FFF fixed, 8000-BFFF = one of eight 0x4000 banks)"
+MUSTANGB = dict(MUSTANG, id=44, manufacturer="bootleg", regions=[
+    ("maincpu, 0x040000", [pair(("mustang.14", "13c6363b"), ("mustang.13", "d8ccce31"))]),
+    (SEIBU_Z80, [("mustang.16", "99ee7505")]),
+    ("fgtile, 0x020000 (mustang's)", [("90058-1", "81ccfcad")]),
+    ("bgtile, 0x080000 (mustang's)", [("90058-4", "a07a2002")]),
+    ("sprites, 0x100000 (mustang's ROM_LOAD16_BYTE pair)", [pair(("90058-8", "560bff04"), ("90058-9", "b9d72a03"))]),
+    ("oki1, 0x010000 (1.32 MHz, unbanked)", [("mustang.17", "f6f6c4bf")])])
+MUSTANGB2 = dict(MUSTANGB, manufacturer="bootleg (TAB Austria)", regions=[
+    ("maincpu, 0x040000", [pair(("05.bin", "13c6363b"), ("04.bin", "0d06f723"))]),
+    (SEIBU_Z80, [("01.bin", "90820499")]),
+    ("fgtile, 0x020000 (mustang's 90058-1 data)", [("06.bin", "81ccfcad")]),
+    ("bgtile, 0x080000 (4 files)", [("07.bin", "5f8fdfb1"), ("10.bin", "39757d6a"), ("08.bin", "b3dd5243"), ("09.bin", "c6c9752f")]),
+    ("sprites, 0x100000 (four ROM_LOAD16_BYTE pairs)", [pair(("18.bin", "d13f0722"), ("13.bin", "54773f95")), pair(("17.bin", "87c1fb43"), ("14.bin", "932d3e33")),
+                                                        pair(("16.bin", "23d03ad5"), ("15.bin", "a62b2f87")), pair(("12.bin", "42a6cfc2"), ("11.bin", "9d3bee66"))]),
+    ("oki1, 0x010000 (1.32 MHz, unbanked)", [("02.bin", "f6f6c4bf")])])
+# acrobatmbl reads its DSW1 word with SW1 in the HIGH byte ("changed from
+# move.w to move.b"): the same switch bytes, placed there by Gunnail.sv.
+ACROBATMBL = dict(ACROBATM, id=45, manufacturer="bootleg", regions=[
+    ("maincpu, 0x040000 (the PIC patch of init_acrobatmbl is applied by the core)", [pair(("4.10c", "c516dac3"), ("3.10f", "ae6d2349"))]),
+    (SEIBU_Z80, [("2.12w", "99ee7505")]),
+    ("fgtile, 0x010000 (acrobatm's 3.ic79 data)", [("10m", "d86c186e")]),
+    ("bgtile, 0x100000 (acrobatm's am-03.ic8 data)", [("a.9x", "7c12afed")]),
+    ("sprites, 0x180000 (2 plain files; c.2m's identical second half is not loaded)", [("b.2k", "5672bdaa"), ("slice", "c.2m", "a3f5a3e0", 0, 0x80000)]),
+    ("oki1, 0x010000 (1 MHz, unbanked)", [("1.14y", "f6f6c4bf")])])
+HACHAMFB2 = dict(HACHAMFB, id=46, switches="FD,FF", regions=[
+    ("maincpu, 0x040000", [pair(("10e", "45867475"), ("10c", "8c8e6a3c"))]),
+    (SEIBU_Z80, [("2.12w", "99ee7505")]),
+    ("fgtile, 0x020000", [("tile.10l", "a2c1e25d")]),
+    ("bgtile, 0x100000 (hachamf's 91076-4.101 data)", [("bg.9w", "df9653a4")]),
+    ("sprites, 0x100000 (ROM_LOAD16_BYTE pair, each file's identical halves: the first is loaded)", [pair(("b.2k", "cb213740"), ("c.2m", "4d7ddc5e"), 0x80000)]),
+    ("oki1, 0x010000 (1 MHz, unbanked)", [("1.14y", "f6f6c4bf")])])
+COIN8_TDB = "Free_Play,1C_4C,1C_3C,1C_2C,4C_1C,3C_1C,2C_1C,1C_1C"
+TDRAGONB_DIPS = [
+    ('0,1', "Lives", "1,4,2,3"), ('2', "Unused (SW1:3)", "On,Off"), ('3', "Unused (SW1:4)", "On,Off"),
+    ('4,5', "Difficulty", "Hardest,Hard,Easy,Normal"), ('6', "Unused (SW1:7)", "On,Off"), ('7', "Flip Screen", "On,Off"),
+    ('8,10', "Coin A", COIN8_TDB), ('11,13', "Coin B", COIN8_TDB), ('14', "Demo Sounds", "Off,On"), ('15', "Unused (SW2:8)", "On,Off"),
+]
+TDRAGONB = dict(id=47, year=1991, manufacturer="bootleg", rot=True, switches="FF,FF", dips=TDRAGONB_DIPS, regions=[
+    ("maincpu, 0x040000 (bitswapped words: decode_tdragonb, applied by the core per fetch)", [pair(("td_04.bin", "e8a62d3e"), ("td_03.bin", "2fa1aa04"))]),
+    (SEIBU_Z80, [("td_02.bin", "99ee7505")]),
+    ("fgtile, 0x020000", [("td_08.bin", "5144dc69")]),
+    ("bgtile, 0x100000 (2 files; bits 3/4 of every byte swapped per fetch)", [("td_06.bin", "c1be8a4d"), ("td_07.bin", "2c3e371f")]),
+    ("sprites, 0x100000 (ROM_LOAD16_BYTE pair; bits 3/4 swapped per fetch)", [pair(("td_10.bin", "bfd0ec5d"), ("td_09.bin", "b6e074eb"))]),
+    ("oki1, 0x010000 (1.32 MHz, unbanked)", [("td_01.bin", "f6f6c4bf")])])
+TDRAGONB3 = dict(TDRAGONB, id=48, regions=[
+    ("maincpu, 0x040000 (unencrypted)", [pair(("tms27c010a.19e", "659167c4"), ("tms27c010a.19c", "02f5befc"))]),
+    (SEIBU_Z80, [("d27512.4b", "99ee7505")]),
+    ("fgtile, 0x020000", [("tms27c010a.2k", "5144dc69")]),
+    ("bgtile, 0x100000 (undumpable on this PCB: tdragon's 91070.5 data)", [("unreadable.18h", "d0bde826")]),
+    ("sprites, 0x100000 (ROM_LOAD16_WORD_SWAP; tdragon's 91070.4 data)", [("upd27c8000.18f", "3eedc2fe")]),
+    ("oki1, 0x010000 (1.32 MHz, unbanked)", [("m27c512.1c", "f6f6c4bf")])])
+STRAHLJBL = dict(STRAHL, id=49, manufacturer="bootleg", regions=[
+    ("maincpu, 0x040000", [pair(("a7.u3", "3ddca4f7"), ("a8.u2", "890f74d0"))]),
+    (SEIBU_Z80, [("a6.u417", "99ee7505")]),
+    ("fgtile, 0x010000 (strahl's strahl-3.73 data)", [("cha.38", "2273b33e")]),
+    ("bgtile, 0x040000 (bgvideoram0's tiles, gfx1; strahl's str7b2r0.275 data)", [("6.2m", "5769e3e1")]),
+    ("bg2tile, 0x080000 (bgvideoram1's tiles, gfx3; strahl's str6b1w1.776 data)", [("4.4m", "bb1bb155")]),
+    ("sprites, 0x180000 (2 plain files; 5.4m = strahl's strl5-03.58 data)", [("d.8m", "09ede4d4"), ("5.4m", "a0e7d210")]),
+    ("oki1, 0x010000 (1 MHz, unbanked)", [("a5.u304", "f6f6c4bf")])])
+GUNNAILB = dict(GUNNAIL, id=50, year=1992, manufacturer="bootleg", regions=[
+    ("maincpu, 0x080000", [pair(("27c020.6d", "b9566c46"), ("27c020.6e", "6ba7c54d"))]),
+    (M2_Z80 + " (Kaneko's Air Buster sound program)", [("27c010.3b", "6e0a5df0")]),
+    ("fgtile, 0x020000", [("27c010.5g", "6d2ca620")]),
+    ("bgtile, 0x100000 (the 27c160's first half, its halves are identical; NMK214-scrambled, decoded per fetch)", [("slice", "27c160.k10", "062100a9", 0, 0x100000)]),
+    ("sprites, 0x200000 (ROM_LOAD16_WORD_SWAP, NMK214-scrambled; gunnail's 92077-7.u134 data)", [("27c160.a9", "d49169b3")]),
+    ("oki1, 0x040000 (3 MHz, unbanked, written by the 68000 at 0x194001)", [("27c020.1c", "c5f7c0d9")])])
+TOMAGIC_DIPS = [
+    ('0', "Unknown (SW1:1)", "On,Off"), ('1', "Unknown (SW1:2)", "On,Off"), ('2', "Unknown (SW1:3)", "On,Off"), ('3', "Unknown (SW1:4)", "On,Off"),
+    ('4', "Demo Sounds", "Off,On"), ('5,7', "Coin A", COIN8_FREE),
+    ('8', "Unknown (SW2:1)", "On,Off"), ('9', "Unknown (SW2:2)", "On,Off"), ('10', "Unknown (SW2:3)", "On,Off"),
+    ('11', "Unknown (SW2:4)", "On,Off"), ('12', "Unknown (SW2:5)", "On,Off"), ('13', "Unknown (SW2:6)", "On,Off"),
+    ('14,15', "Balls", "5,2,4,3"),
+]
+TOMAGIC = dict(id=51, year=1997, manufacturer="Hobbitron T.K.Trading Co. Ltd.", rot=False, switches="FF,FF", dips=TOMAGIC_DIPS, regions=[
+    ("maincpu, 0x080000", [pair(("4.bin", "5055664a"), ("3.bin", "3731ecbb"))]),
+    (M2_Z80, [("2.bin", "10359b6a")]),
+    ("fgtile, 0x020000", [("9.bin", "fcceb24b")]),
+    ("bgtile, 0x080000", [("10.bin", "14ef466c")]),
+    ("sprites, 0x200000 (two ROM_LOAD16_BYTE pairs; every byte's bits reversed per fetch: init_tomagic)", [pair(("6.bin", "83ae90ba"), ("8.bin", "1708d3fb")), pair(("5.bin", "88ef65e0"), ("7.bin", "0a297c78"))]),
+    ("oki1, 0x040000 (3 MHz, unbanked, on the 68000 bus at 0x094001/3)", [("1.bin", "02b042e3")])])
+
+# ---------------------------------------------------------------------------
 # Afega boards (Family H, 2026-09-13): gunnail_core.sv ids 23-43, one per
 # distinct configuration (decryptcode table, screen_update variant, ROM
 # sizes); every set below carries its own region list transcribed from
@@ -788,6 +888,16 @@ SETS = [
     ("spec2k",      "Spectrum 2000 (vertical, Korea)",                             10846, SPEC2K, None, {}),
     ("spec2kh",     "Spectrum 2000 (horizontal, buggy) (Europe)",                  10847, SPEC2KH, "spec2k", {}),
     ("firehawk",    "Fire Hawk (World) / Huohu Chuanshuo (China) (horizontal)",    10848, FIREHAWK, "spec2k", {}),
+    # Family E (Raiden-sound bootlegs, gunnailb, tomagic)
+    ("mustangb",    "US AAF Mustang (bootleg, set 1)",                             10781, MUSTANGB, "mustang", {}),
+    ("mustangb2",   "US AAF Mustang (TAB Austria bootleg)",                        10782, MUSTANGB2, "mustang", {}),
+    ("acrobatmbl",  "Acrobat Mission (bootleg with Raiden sounds)",                10783, ACROBATMBL, "acrobatm", {}),
+    ("hachamfb2",   "Hacha Mecha Fighter (bootleg with Raiden sounds)",            10784, HACHAMFB2, "hachamf", {}),
+    ("tdragonb",    "Thunder Dragon (bootleg with Raiden sounds, encrypted)",      10785, TDRAGONB, "tdragon", {}),
+    ("tdragonb3",   "Thunder Dragon (bootleg with Raiden sounds, unencrypted)",    10786, TDRAGONB3, "tdragon", {}),
+    ("strahljbl",   "Koutetsu Yousai Strahl (Japan, bootleg)",                     10787, STRAHLJBL, "strahl", {}),
+    ("gunnailb",    "GunNail (bootleg)",                                           10798, GUNNAILB, "gunnail", {}),
+    ("tomagic",     "Tom Tom Magic",                                               10778, TOMAGIC, None, {}),
 ]
 
 
@@ -831,9 +941,10 @@ def part_lines(parts, overrides):
                 continue
             even = overrides.get(even[0], even)
             odd = overrides.get(odd[0], odd)
+            ln = f' offset="0x0" length="0x{p[3]:X}"' if len(p) > 3 else ""
             out.append('    <interleave output="16">\n')
-            out.append(f'      <part crc="{odd[1]}" name="{resolve_name(odd[0], odd[1])}" map="01"/>\n')
-            out.append(f'      <part crc="{even[1]}" name="{resolve_name(even[0], even[1])}" map="10"/>\n')
+            out.append(f'      <part crc="{odd[1]}" name="{resolve_name(odd[0], odd[1])}"{ln} map="01"/>\n')
+            out.append(f'      <part crc="{even[1]}" name="{resolve_name(even[0], even[1])}"{ln} map="10"/>\n')
             out.append('    </interleave>\n')
         elif p[0] == "slice":
             _, n, c, off, ln = p
@@ -918,7 +1029,10 @@ def ioctl_args(setname):
                     n = overrides["pair:" + even[0]][0]; elems.append(n); ln += size(n); continue
                 even = overrides.get(even[0], even); odd = overrides.get(odd[0], odd)
                 en, on = resolve_name(even[0], even[1]), resolve_name(odd[0], odd[1])
-                elems.append(f"{on}+{en}"); ln += size(en) + size(on)
+                if len(p) > 3:
+                    elems.append(f"{on}@0x0/0x{p[3]:X}+{en}@0x0/0x{p[3]:X}"); ln += 2 * p[3]
+                else:
+                    elems.append(f"{on}+{en}"); ln += size(en) + size(on)
             elif p[0] == "slice":
                 n = overrides.get(p[1], (p[1], p[2]))[0]
                 elems.append(f"{n}@0x{p[3]:X}/0x{p[4]:X}"); ln += p[4]
@@ -959,6 +1073,8 @@ def sim_roms(setname, outdir):
         for p in parts:
             if p[0] == "pair":
                 e, o = rd(p[1][0], p[1][1]), rd(p[2][0], p[2][1])
+                if len(p) > 3:
+                    e, o = e[:p[3]], o[:p[3]]
                 b = bytearray(len(e) * 2); b[0::2] = e; b[1::2] = o; buf += b
             elif p[0] == "slice":
                 buf += rd(p[1], p[2])[p[3]:p[3] + p[4]]
@@ -983,6 +1099,8 @@ def sim_roms(setname, outdir):
         b = regions["bgtile"]
         wbytes("bgtile", b[:len(b) // 2])
         wbytes("bg2tile", b[len(b) // 2:])
+    elif "bg2tile" in regions:  # strahl-class second tile ROM (strahljbl)
+        wbytes("bg2tile", regions["bg2tile"])
     print("wrote", setname, "sim roms to", outdir, {k: hex(len(v)) for k, v in regions.items()})
 
 

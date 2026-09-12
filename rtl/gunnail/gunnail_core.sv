@@ -332,17 +332,44 @@ module gunnail_core #(
 	                 G_SPEC2KH  = 6'd42,   // spec2kh: horizontal, 0x20000 oki1
 	                 G_HOTBUBLA = 6'd43,   // hotbubla: bubl2000 with 0x80000 program files
 	                 G_AFEGA_LAST = 6'd43;
-	wire g_gunnail  = (game_sel == G_GUNNAIL) || (game_sel > G_AFEGA_LAST); // unknown ids fall back to gunnail
+	// 2026-09-14: Family E — the "Raiden sound" bootlegs (the parent's
+	// video and memory map with the Seibu Sound System board: Z80 on
+	// seibu_sound_map, YM3812, one OKI at 1.32/1 MHz, the 68000 writing a
+	// word at +0x1E of the I/O block, fixed-scanline IRQs), plus the two
+	// bootlegs with a macross2-style banked Z80 (gunnailb: YM2203 + a
+	// 68000-driven OKI; tomagic: YM3812 + a 68000-driven OKI).
+	localparam [5:0] G_MUSTANGB  = 6'd44,  // mustangb, mustangb2: mustang's map/video, 8 MHz, Z80/YM3812 at 14.318/4, OKI 1.32 MHz
+	                 G_ACROBATMBL = 6'd45, // acrobatm's map/video, 8 MHz, Z80/YM 4 MHz, OKI 1 MHz, the PIC patch (init_acrobatmbl) applied per fetch
+	                 G_HACHAMFB2 = 6'd46,  // hachamf's map, hachamfp's video (sprite pairs), acrobatmbl's clocks
+	                 G_TDRAGONB  = 6'd47,  // tdragon's map (RAM at 0x0B0000), 10 MHz, 0x044022 reads 3, program words and gfx bytes bitswapped (decode_tdragonb) per fetch
+	                 G_TDRAGONB3 = 6'd48,  // tdragonb unencrypted: 0x060000-0x060021 read 0xEE, WORD_SWAP sprites
+	                 G_STRAHLJBL = 6'd49,  // strahl's map/video, 12 MHz, Z80/YM 3 MHz, OKI 1 MHz
+	                 G_GUNNAILB  = 6'd50,  // gunnail's map/video (init_nmk = the NMK214s with the fixed config), Z80 6 MHz + YM2203 on I/O 2/3, OKI (3 MHz) at 0x194001 on the 68000 bus
+	                 G_TOMAGIC   = 6'd51,  // Tom Tom Magic: gunnail's hires video (per-line scroll), 12 MHz, Z80 3 MHz + YM3812 on I/O 2/3, OKI at 0x094001/3, bit-reversed sprite bytes
+	                 G_FAME_LAST = 6'd51;
+	wire g_gunnail  = (game_sel == G_GUNNAIL) || (game_sel > G_FAME_LAST); // unknown ids fall back to gunnail
 	wire g_macross  = (game_sel == G_MACROSS);
 	wire g_blkheart = (game_sel == G_BLKHEART);
 	wire g_mustangb3 = (game_sel == G_MUSTANGB3);
-	wire g_mustang  = (game_sel == G_MUSTANG) || (game_sel == G_MUSTANGS) || g_mustangb3; // mustang's map, scroll register and video for all three
+	wire g_mustangb = (game_sel == G_MUSTANGB);
+	wire g_acrobatmbl = (game_sel == G_ACROBATMBL);
+	wire g_hachamfb2 = (game_sel == G_HACHAMFB2);
+	wire g_tdragonb = (game_sel == G_TDRAGONB) || (game_sel == G_TDRAGONB3);
+	wire g_tdragonb3 = (game_sel == G_TDRAGONB3);
+	wire g_tdb_dec  = (game_sel == G_TDRAGONB);   // decode_tdragonb (the program words and the BG/sprite bytes); tdragonb3 is unencrypted
+	wire g_strahljbl = (game_sel == G_STRAHLJBL);
+	wire g_gunnailb = (game_sel == G_GUNNAILB);
+	wire g_tomagic  = (game_sel == G_TOMAGIC);
+	wire g_seibu    = g_mustangb | g_acrobatmbl | g_hachamfb2 | g_tdragonb | g_strahljbl; // the Seibu Sound System board (seibu_sound_map)
+	wire g_m2snd    = g_gunnailb | g_tomagic;                                            // macross2-style banked Z80 (gunnailb_sound_map / tomagic_sound_map)
+	wire g_opl      = g_seibu | g_tomagic;                                               // YM3812 (jtopl2)
+	wire g_mustang  = (game_sel == G_MUSTANG) || (game_sel == G_MUSTANGS) || g_mustangb3 || g_mustangb; // mustang's map, scroll register and video for all
 	wire g_bioship  = (game_sel == G_BIOSHIP);
 	wire g_vandyke  = (game_sel == G_VANDYKE);
-	wire g_acrobatm = (game_sel == G_ACROBATM);
-	wire g_strahl   = (game_sel == G_STRAHL);
-	wire g_tdragon  = (game_sel == G_TDRAGON);
-	wire g_hachamf  = (game_sel == G_HACHAMF) || (game_sel == G_HACHAMFP);
+	wire g_acrobatm = (game_sel == G_ACROBATM) || g_acrobatmbl;
+	wire g_strahl   = (game_sel == G_STRAHL) || g_strahljbl;
+	wire g_tdragon  = (game_sel == G_TDRAGON) || g_tdragonb;
+	wire g_hachamf  = (game_sel == G_HACHAMF) || (game_sel == G_HACHAMFP) || g_hachamfb2;
 	wire g_hachamfp = (game_sel == G_HACHAMFP);
 	wire g_tdragon1 = (game_sel == G_TDRAGON1);
 	wire g_mustangs = (game_sel == G_MUSTANGS);
@@ -370,19 +397,19 @@ module gunnail_core #(
 	                       ((game_sel == G_GRDNSTRMJ) || (game_sel == G_GRDNSTRMG)) ? 4'd6 : (game_sel == G_GRDNSTRMAU) ? 4'd7 :
 	                       (game_sel == G_REDFOXWP2A) ? 4'd8 : ((game_sel == G_MANGCHI) || (game_sel == G_BUBL2000) || (game_sel == G_HOTBUBLA)) ? 4'd9 :
 	                       ((game_sel == G_SPEC2K) || (game_sel == G_SPEC2KH)) ? 4'd10 : 4'd0;
-	wire g_z80snd   = g_tharrier | g_mustangb3 | g_afega;                // the Z80 sound boards (tharrier_sound_map / afega_sound_map / firehawk_sound_map)
+	wire g_z80snd   = g_tharrier | g_mustangb3 | g_afega | g_seibu | g_m2snd; // the Z80 sound boards (tharrier_sound_map / afega_sound_map / firehawk_sound_map / seibu_sound_map / gunnailb+tomagic)
 	wire has_nmk004 = ~(g_bjtwin | g_z80snd | g_vandykeb);             // else the NMK004 is held in reset
 
-	wire lowres          = ~(g_gunnail | g_bjtwin);                      // set_screen_lowres (gunnail and bjtwin are hires)
-	wire cpu_8mhz        = g_blkheart | g_mustang | g_tdragon | g_tdragon1; // mustangb3: XTAL(8 MHz) verified on PCB
-	wire cpu_12mhz       = g_strahl | g_afega;                           // strahl "12 MHz ?"; afega XTAL(12 MHz) verified
-	wire has_prot        = g_gunnail | g_macross | (g_hachamf & ~g_hachamfp) | g_tdragon1 | g_bjtwin_prot; // NMK-215 / NMK-113 / NMK-110 (hachamfp/hachamfb: none)
-	wire has_214         = g_gunnail | g_macross | g_bjtwin_prot | g_cactus; // base_nmk214_215: bgtile + sprites scrambled (cactus: same data, config injected below)
+	wire lowres          = ~(g_gunnail | g_bjtwin | g_m2snd);            // set_screen_lowres (gunnail, gunnailb, tomagic and bjtwin are hires)
+	wire cpu_8mhz        = g_blkheart | g_mustang | (g_tdragon & ~g_tdragonb) | g_tdragon1 | g_acrobatmbl | g_hachamfb2; // mustangb3: XTAL(8 MHz) verified on PCB; acrobatmbl/hachamfb2 8_MHz_XTAL; tdragonb 10 MHz
+	wire cpu_12mhz       = g_strahl | g_afega | g_tomagic;               // strahl "12 MHz ?"; afega XTAL(12 MHz) verified; tomagic "12? MHz"
+	wire has_prot        = g_gunnail | g_macross | (g_hachamf & ~g_hachamfp & ~g_hachamfb2) | g_tdragon1 | g_bjtwin_prot; // NMK-215 / NMK-113 / NMK-110 (hachamfp/hachamfb/hachamfb2: none)
+	wire has_214         = g_gunnail | g_macross | g_bjtwin_prot | g_cactus | g_gunnailb; // base_nmk214_215: bgtile + sprites scrambled (cactus/gunnailb: same data, config injected below)
 	wire prot_rom_16k    = g_hachamf | g_tdragon1;                       // TMP91640 (NMK-110/113): 16 KB firmware
 	wire nmi_invert      = g_bioship;                                    // nmk004_bioship_x0016_w
 	wire mainram_strange = g_macross | g_blkheart | g_mustang | g_bioship | g_vandyke | g_tharrier | g_vandykeb | g_afega; // macross_map/mustang_map/bioship_map/vandyke_map/tharrier_map/afega_map mainram_strange_w
 	wire bg2             = g_bioship | g_strahl | g_afega_8bpp;          // screen_update_strahl: two BG layers; afega 8bpp: layer B = the high nibble
-	wire irq_hacky       = g_strahl | g_cactus | g_vandykeb | g_mustangb3 | g_afega; // set_hacky_interrupt_timing (no V-PROM)
+	wire irq_hacky       = g_strahl | g_cactus | g_vandykeb | g_mustangb3 | g_afega | g_seibu | g_m2snd; // set_hacky_interrupt_timing (no V-PROM)
 	wire spr_plain       = g_bioship | g_strahl | g_acrobatm | (g_afega & ~g_afega_spr_pair); // sprite ROMs are plain ROM_LOAD byte files (the rest: WORD_SWAP / odd-first byte pairs), see video_macross2 spr_swap
 	wire [2:0] vprom_sel = (g_blkheart | g_bioship | g_vandyke) ? 3'd1 : // 98ed1c97
 	                       (g_tdragon | g_tdragon1)             ? 3'd2 : // e6ead349
@@ -392,8 +419,11 @@ module gunnail_core #(
 	// Memory maps (nmk16.cpp): the decode function below keys on these.
 	localparam [3:0] M_GUNNAIL = 4'd0, M_MACROSS = 4'd1, M_MUSTANG = 4'd2, M_BIOSHIP = 4'd3,
 	                 M_VANDYKE = 4'd4, M_ACROBATM = 4'd5, M_STRAHL = 4'd6, M_TDRAGON = 4'd7,
-	                 M_BJTWIN = 4'd8, M_THARRIER = 4'd9, M_VANDYKEB = 4'd10, M_AFEGA = 4'd11, M_FIREHAWK = 4'd12;
+	                 M_BJTWIN = 4'd8, M_THARRIER = 4'd9, M_VANDYKEB = 4'd10, M_AFEGA = 4'd11, M_FIREHAWK = 4'd12,
+	                 M_GUNNAILB = 4'd13, M_TOMAGIC = 4'd14; // gunnail_map plus the 68000-bus OKI (0x194001 / 0x094001-3)
 	wire [3:0] map_id = g_gunnail  ? M_GUNNAIL :
+	                    g_gunnailb ? M_GUNNAILB :
+	                    g_tomagic  ? M_TOMAGIC :
 	                    g_firehawk ? M_FIREHAWK :
 	                    g_afega    ? M_AFEGA :
 	                    g_bjtwin   ? M_BJTWIN :
@@ -405,7 +435,7 @@ module gunnail_core #(
 	                    g_acrobatm ? M_ACROBATM :
 	                    g_strahl   ? M_STRAHL :
 	                    (g_tdragon | g_tdragon1) ? M_TDRAGON : M_MACROSS; // macross, blkheart, hachamf
-	wire [23:0] rom_max = g_firehawk ? 24'h0FFFFF : (g_gunnail | g_macross | g_blkheart | g_bjtwin | g_afega) ? 24'h07FFFF : 24'h03FFFF;
+	wire [23:0] rom_max = g_firehawk ? 24'h0FFFFF : (g_gunnail | g_macross | g_blkheart | g_bjtwin | g_afega | g_m2snd) ? 24'h07FFFF : 24'h03FFFF;
 
 	// Video configuration (GFXDECODE bases; ROM tile counts - 1 as code
 	// masks; sprite ROM bytes / 128; m_sprdma_base / 2).
@@ -418,7 +448,14 @@ module gunnail_core #(
 		case (game_sel)
 			G_MACROSS:  begin cfg_bga_mask = 14'h3FFF; end                                  // bgtile 0x200000
 			G_BLKHEART: begin cfg_spr_units = 18'd8192; end
-			G_MUSTANG, G_MUSTANGB3: begin cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd8192; end // bgtile 0x80000
+			G_MUSTANG, G_MUSTANGB3, G_MUSTANGB: begin cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd8192; end // bgtile 0x80000
+			G_TOMAGIC:  begin cfg_bga_mask = 14'h0FFF; end                                  // bgtile 0x80000, sprites 0x200000
+			G_ACROBATMBL, G_STRAHLJBL, G_TDRAGONB, G_TDRAGONB3, G_HACHAMFB2: begin // the parents' gfx_macross/gfx_strahl configurations
+			            if (game_sel == G_ACROBATMBL) cfg_spr_units = 18'd12288;
+			            else if (game_sel == G_STRAHLJBL) begin
+			                cfg_bga_pal = 11'h300; cfg_bgb_pal = 11'h200; cfg_spr_pal = 11'h100; cfg_tx_pal = 11'h000;
+			                cfg_bga_mask = 14'h07FF; cfg_bgb_mask = 14'h0FFF; cfg_spr_units = 18'd12288; end
+			            else cfg_spr_units = 18'd8192; end
 			G_BIOSHIP:  begin // gfx_bioship: TX 0x300, bgtile (VRAM layer, gfx1) 0x100, sprites 0x200, bg2tile (ROM tilemap, gfx3) 0x000
 			            cfg_bga_pal = 11'h000; cfg_bgb_pal = 11'h100; cfg_spr_pal = 11'h200; cfg_tx_pal = 11'h300;
 			            cfg_bga_mask = 14'h0FFF; cfg_bgb_mask = 14'h0FFF; cfg_spr_units = 18'd4096; end
@@ -531,10 +568,18 @@ module gunnail_core #(
 		end
 	end
 
-	// OKIM6295 x2 at XTAL(16 MHz)/4 = 4 MHz, pin 7 low: clk_sys/10.
-	reg [3:0] oki_cen_cnt = 4'd0;
-	wire      oki_cen = (oki_cen_cnt == 4'd9);
-	always @(posedge clk_sys) oki_cen_cnt <= oki_cen ? 4'd0 : oki_cen_cnt + 4'd1;
+	// OKIM6295 x2 at XTAL(16 MHz)/4 = 4 MHz, pin 7 low: clk_sys/10 — a
+	// per-mille accumulator (100/1000 = exactly every 10th clock) so the
+	// Family E boards' slower chips fit: 1.32 MHz (mustangb/tdragonb,
+	// 33/1000), 1 MHz (acrobatmbl/hachamfb2/strahljbl), 3 MHz (gunnailb/
+	// tomagic), all pin 7 low.
+	reg  [9:0] oki_cen_acc = 10'd0;
+	reg        oki_cen = 1'b0;
+	wire [6:0] oki_cen_inc = (g_mustangb | g_tdragonb) ? 7'd33 : (g_acrobatmbl | g_hachamfb2 | g_strahljbl) ? 7'd25 : g_m2snd ? 7'd75 : 7'd100;
+	always @(posedge clk_sys) begin
+		if (oki_cen_acc + {3'd0, oki_cen_inc} >= 10'd1000) begin oki_cen_acc <= oki_cen_acc + {3'd0, oki_cen_inc} - 10'd1000; oki_cen <= 1'b1; end
+		else begin oki_cen_acc <= oki_cen_acc + {3'd0, oki_cen_inc}; oki_cen <= 1'b0; end
+	end
 	// Afega: XTAL(4 MHz)/4 = 1 MHz with pin 7 HIGH (/132) — every fourth 4 MHz pulse.
 	reg [1:0] oki_div4 = 2'd0;
 	always @(posedge clk_sys) if (oki_cen) oki_div4 <= oki_div4 + 2'd1;
@@ -696,13 +741,15 @@ module gunnail_core #(
 					decode[S_TXVRAM]  = (a[23:20] == ((m == M_FIREHAWK) ? 4'h2 : 4'h0)) && (a[19:11] == 9'h138);                              // 0x09C000-0x09C7FF
 					decode[S_MAINRAM] = (a[23:20] == ((m == M_FIREHAWK) ? 4'h3 : 4'h0)) && ((a[19:16] == 4'hC) || (a[19:16] == 4'hF));         // 0x0C0000 / 0x0F0000 (same 64 KB)
 				end
-				M_GUNNAIL: begin
+				M_GUNNAIL, M_GUNNAILB, M_TOMAGIC: begin
 					decode[S_PALETTE]    = (a >= 24'h088000) && (a <= 24'h0887FF);
 					decode[S_SCROLLRAM]  = (a >= 24'h08C000) && (a <= 24'h08C1FF);
 					decode[S_SCROLLRAMY] = (a >= 24'h08C200) && (a <= 24'h08C3FF);
 					decode[S_BGVRAM]     = (a >= 24'h090000) && (a <= 24'h093FFF);
 					decode[S_TXVRAM]     = (a >= 24'h09C000) && (a <= 24'h09DFFF);   // mirror bit 12 ignored
 					decode[S_MAINRAM]    = (a >= 24'h0F0000) && (a <= 24'h0FFFFF);
+					// the bootlegs' OKI on the 68000 bus: gunnailb_map 0x194001 (write only), tomagic_map 0x094001 (w) / 0x094003 (r)
+					decode[S_OKI0]       = (m == M_GUNNAILB) ? (a[23:1] == 23'h0CA000) : (m == M_TOMAGIC) ? (a[23:2] == 22'h025000) : 1'b0;
 				end
 				default: begin // M_MACROSS, M_MUSTANG, M_BIOSHIP, M_VANDYKE
 					decode[S_PALETTE] = (a >= 24'h088000) && (a <= 24'h0887FF);
@@ -888,6 +935,26 @@ module gunnail_core #(
 			6'd43: begin // hotbubla: bubl2000 with 0x80000 program files
 				BASE_BYTE_NMK004_EXT = 24'h080000; BASE_BYTE_FGTILE = 24'h090000; BASE_BYTE_BGTILE = 24'h0A0000; BASE_BYTE_SPRITES = 24'h3A0000; BASE_BYTE_OKI1 = 24'h420000; BASE_BYTE_OKI2 = 24'h460000;
 			end
+			// Family E (2026-09-14): maincpu, Z80 (the NMK004 slot; the Seibu file is 0x10000, gunnailb/tomagic 0x20000), fg, bg, [bg2], spr, oki1 (one chip)
+			G_MUSTANGB: begin // maincpu 0x40000, z80 0x10000, fg 0x20000, bg 0x80000, spr 0x100000 (pairs), oki 0x10000
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h050000; BASE_BYTE_BGTILE = 24'h070000; BASE_BYTE_SPRITES = 24'h0F0000; BASE_BYTE_OKI1 = 24'h1F0000; BASE_BYTE_OKI2 = 24'h200000;
+			end
+			G_ACROBATMBL: begin // maincpu 0x40000, z80 0x10000, fg 0x10000, bg 0x100000, spr 0x180000 (plain), oki 0x10000
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h050000; BASE_BYTE_BGTILE = 24'h060000; BASE_BYTE_SPRITES = 24'h160000; BASE_BYTE_OKI1 = 24'h2E0000; BASE_BYTE_OKI2 = 24'h2F0000;
+			end
+			G_HACHAMFB2, G_TDRAGONB, G_TDRAGONB3: begin // maincpu 0x40000, z80 0x10000, fg 0x20000, bg 0x100000, spr 0x100000, oki 0x10000
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h050000; BASE_BYTE_BGTILE = 24'h070000; BASE_BYTE_SPRITES = 24'h170000; BASE_BYTE_OKI1 = 24'h270000; BASE_BYTE_OKI2 = 24'h280000;
+			end
+			G_STRAHLJBL: begin // maincpu 0x40000, z80 0x10000, fg 0x10000, bg 0x40000, bg2 0x80000, spr 0x180000 (plain), oki 0x10000
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h050000; BASE_BYTE_BGTILE = 24'h060000; BASE_BYTE_BG2TILE = 24'h0A0000;
+				BASE_BYTE_SPRITES = 24'h120000; BASE_BYTE_OKI1 = 24'h2A0000; BASE_BYTE_OKI2 = 24'h2B0000;
+			end
+			G_GUNNAILB: begin // maincpu 0x80000, z80 0x20000, fg 0x20000, bg 0x100000 (the 27c160's first half), spr 0x200000 (WORD_SWAP), oki 0x40000
+				BASE_BYTE_NMK004_EXT = 24'h080000; BASE_BYTE_FGTILE = 24'h0A0000; BASE_BYTE_BGTILE = 24'h0C0000; BASE_BYTE_SPRITES = 24'h1C0000; BASE_BYTE_OKI1 = 24'h3C0000; BASE_BYTE_OKI2 = 24'h400000;
+			end
+			G_TOMAGIC: begin // maincpu 0x80000, z80 0x20000, fg 0x20000, bg 0x80000, spr 0x200000 (two pairs), oki 0x40000
+				BASE_BYTE_NMK004_EXT = 24'h080000; BASE_BYTE_FGTILE = 24'h0A0000; BASE_BYTE_BGTILE = 24'h0C0000; BASE_BYTE_SPRITES = 24'h140000; BASE_BYTE_OKI1 = 24'h340000; BASE_BYTE_OKI2 = 24'h380000;
+			end
 			default: begin // gunnail
 				BASE_BYTE_NMK004_EXT = 24'h080000; BASE_BYTE_PROT = 24'h092000; BASE_BYTE_FGTILE = 24'h094000;
 				BASE_BYTE_BGTILE = 24'h0B4000; BASE_BYTE_SPRITES = 24'h1B4000; BASE_BYTE_OKI1 = 24'h3B4000; BASE_BYTE_OKI2 = 24'h434000;
@@ -943,6 +1010,14 @@ module gunnail_core #(
 		end
 	endfunction
 	wire [23:0] rom_byte_addr = g_afega ? afega_decrypt(byte_addr, afega_dec) : byte_addr;
+	// tdragonb (decode_tdragonb, nmk16.cpp): every program word is
+	// bitswapped — decode_word's table {e,c,a,8,7,5,3,1,f,d,b,9,6,4,2,0}
+	// gives dest bit (15-i) = src bit table[i]. The .mra streams the raw
+	// files; the swap is applied to the word the 68000 reads (rom_dout_dec).
+	function automatic [15:0] tdragonb_word(input [15:0] s);
+		tdragonb_word = {s[14], s[12], s[10], s[8], s[7], s[5], s[3], s[1], s[15], s[13], s[11], s[9], s[6], s[4], s[2], s[0]};
+	endfunction
+	wire [15:0] rom_dout_dec = g_tdb_dec ? tdragonb_word(rom_dout) : rom_dout;
 	generate
 	if (!HW_ROMS) begin : g_rom_sim
 		reg [15:0] rom [0:524287]; // 1 MB: firehawk's program; every other board fills the low half or less
@@ -1626,7 +1701,7 @@ module gunnail_core #(
 	always @(posedge clk_sys) begin
 		if (g_z80snd) begin
 			if (~z80_reset_n) nmk004_to_host_latch <= 8'h00;
-			else if (z80_mem_we & sel_z80_latch) nmk004_to_host_latch <= z80_do; // tharrier: soundlatch2 (Z80 -> 68000)
+			else if ((z80_mem_we & sel_z80_latch) | (z80_io_we & sel_io_latch)) nmk004_to_host_latch <= z80_do; // tharrier: soundlatch2 (Z80 -> 68000); gunnailb: I/O port 6
 		end else if (nmk004_mcu_to_host_we & snd_cen) nmk004_to_host_latch <= nmk004_mcu_to_host;
 	end
 	assign dbg_mcu_reply_we = nmk004_mcu_to_host_we & snd_cen;
@@ -1769,7 +1844,7 @@ module gunnail_core #(
 	reg       ym_addr_latch;
 	reg [5:0] ym_wr_hold = 6'd0;
 	reg       ym_we_prev = 1'b0;
-	// Write source: the NMK004, or tharrier's Z80 (I/O ports 0/1).
+	// Write source: the NMK004, or tharrier's Z80 (I/O ports 0/1; gunnailb: ports 2/3).
 	wire       ym_we_src   = g_z80snd ? (z80_io_we & sel_io_ym) : ym_we;
 	wire [7:0] ym_dout_src = g_z80snd ? z80_do : ym_dout;
 	wire       ym_addr_src = g_z80snd ? z80_a[0] : ym_addr_sel;
@@ -1938,11 +2013,12 @@ module gunnail_core #(
 	reg [7:0] oki0_din_latch, oki1_din_latch;
 	reg [5:0] oki0_wr_hold = 6'd0, oki1_wr_hold = 6'd0;
 	reg       oki0_we_prev = 1'b0, oki1_we_prev = 1'b0;
-	wire       oki0_we_src = g_bjtwin ? (sel_oki0 & cpu_write & ~LDSn) : g_z80snd ? (z80_mem_we & sel_z80_oki0) : oki0_we;
-	wire       oki1_we_src = g_bjtwin ? (sel_oki1 & cpu_write & ~LDSn) : g_z80snd ? (z80_mem_we & sel_z80_oki1) : oki1_we;
-	wire [7:0] oki_d_src   = g_bjtwin ? oEdb[7:0] : z80_do;
-	wire [7:0] oki0_dout_src = (g_bjtwin | g_z80snd) ? oki_d_src : oki0_dout;
-	wire [7:0] oki1_dout_src = (g_bjtwin | g_z80snd) ? oki_d_src : oki1_dout;
+	wire       oki_68k     = g_bjtwin | g_m2snd; // the OKI(s) on the 68000 bus (bjtwin_map, gunnailb_map, tomagic_map)
+	wire       oki0_we_src = oki_68k ? (sel_oki0 & cpu_write & ~LDSn) : g_z80snd ? (z80_mem_we & sel_z80_oki0) : oki0_we;
+	wire       oki1_we_src = oki_68k ? (g_bjtwin & sel_oki1 & cpu_write & ~LDSn) : g_z80snd ? (z80_mem_we & sel_z80_oki1) : oki1_we;
+	wire [7:0] oki_d_src   = oki_68k ? oEdb[7:0] : z80_do;
+	wire [7:0] oki0_dout_src = (oki_68k | g_z80snd) ? oki_d_src : oki0_dout;
+	wire [7:0] oki1_dout_src = (oki_68k | g_z80snd) ? oki_d_src : oki1_dout;
 	always @(posedge clk_sys) begin
 		oki0_we_prev <= oki0_we_src;
 		if (oki0_we_src && !oki0_we_prev) begin
@@ -1991,7 +2067,23 @@ module gunnail_core #(
 	wire signed [17:0] ym51_g    = {{4{ym51_sum[16]}}, ym51_sum[16:3]};             // (l+r)/2 x 1/8
 	wire signed [17:0] oki0_ga   = (oki0_ext <<< 1) + (oki0_ext >>> 1) + (oki0_ext >>> 2);
 	wire signed [17:0] oki1_ga   = (oki1_ext <<< 1) + (oki1_ext >>> 1) + (oki1_ext >>> 2);
-	wire signed [17:0] audio_sum = g_afega ? (ym51_g + oki0_ga + oki1_ga) : ({{2{ym_snd[15]}}, ym_snd} + oki0_g + oki1_g);
+	// Family E: YM3812 1.0 + OKI 0.40 (Seibu boards: opl + OKI x 3/2);
+	// gunnailb: YM2203 (gunnail's routes) + OKI 0.80 (x 2.75); tomagic:
+	// YM3812 0.50 + OKI 0.50 (opl/2 + OKI x 2).
+	wire signed [17:0] opl_ext   = {{2{opl_snd[15]}}, opl_snd};
+	wire signed [17:0] oki0_gs   = oki0_ext + (oki0_ext <<< 1); // x3: the Seibu boards' OKI (route 0.40) measured ~6 dB low at x3/2 on the board (mustangb/acrobatmbl vs MAME)
+	// Every term is a signed wire of its own: an unsigned operand (a
+	// concatenation) anywhere in the ternary chain makes Verilog evaluate
+	// the whole expression unsigned, and an arithmetic shift inside it
+	// becomes a logical one (tomagic's OPL/2 pinned the mix at +19000).
+	wire signed [17:0] opl_half  = opl_ext >>> 1;
+	wire signed [17:0] oki0_g2   = oki0_ext <<< 1;
+	wire signed [17:0] ym03_ext  = {{2{ym_snd[15]}}, ym_snd};
+	wire signed [17:0] audio_sum = g_afega ? (ym51_g + oki0_ga + oki1_ga) :
+	                               g_seibu ? (opl_ext + oki0_gs) :
+	                               g_tomagic ? (opl_half + oki0_g2) :
+	                               g_gunnailb ? (ym03_ext + oki0_ga) :
+	                               (ym03_ext + oki0_g + oki1_g);
 	wire signed [15:0] audio_mix =
 		(audio_sum > 18'sd32767)  ? 16'sd32767  :
 		(audio_sum < -18'sd32768) ? -16'sd32768 :
@@ -2146,6 +2238,18 @@ module gunnail_core #(
 	wire sel_mb3_prot = g_mustangb3 & (byte_addr[23:1] == 23'h040003);
 	wire [15:0] mb3_prot_val = ((last_fetch_pc >= 24'h000410) && (last_fetch_pc < 24'h000418)) ? 16'h9000 :
 	                           ((last_fetch_pc >= 24'h000648) && (last_fetch_pc < 24'h000650)) ? 16'h548D : 16'h0000;
+	// Family E (2026-09-14) protection reads and the acrobatmbl ROM patch:
+	//   tdragonb_prot_r: 0x044022 reads 0x0003 ("no sprites without this");
+	//   tdragonb3: that read is unmapped (MAME's unmap value 0) and
+	//   0x060000-0x060021 read 0x00EE ("no sprites in attract mode without
+	//   this", routine at PC 0x260); init_acrobatmbl patches the two jumps
+	//   into the PIC's RAM at 0x6C6/0x6D2 (rom[0x6c8/2] = 0, [0x6ca/2] =
+	//   0x2d84, [0x6d4/2] = 0, [0x6d6/2] = 0x3510) — applied to the word
+	//   the 68000 reads, the .mra streams the raw file.
+	wire sel_tdb_prot  = g_tdragonb & (byte_addr[23:1] == 23'h022011);
+	wire sel_tdb3_ee   = g_tdragonb3 & (byte_addr[23:6] == 18'h01800) & (byte_addr[5:1] <= 5'd16); // words 0x060000-0x060020
+	wire sel_ambl_patch = g_acrobatmbl & ((byte_addr[23:1] == 23'h000364) || (byte_addr[23:1] == 23'h000365) || (byte_addr[23:1] == 23'h00036A) || (byte_addr[23:1] == 23'h00036B));
+	wire [15:0] ambl_patch_val = (byte_addr[23:1] == 23'h000365) ? 16'h2D84 : (byte_addr[23:1] == 23'h00036B) ? 16'h3510 : 16'h0000;
 	wire th_pc_8aa = (last_fetch_pc >= 24'h0008A4) && (last_fetch_pc < 24'h0008AC);
 	wire th_pc_8ce = (last_fetch_pc >= 24'h0008C8) && (last_fetch_pc < 24'h0008D0);
 	reg  [3:0]  th_prot_count;
@@ -2175,9 +2279,22 @@ module gunnail_core #(
 	// registers at 0xF600/0xF700, the YM2203 on I/O ports 0/1 (its IRQ
 	// is the Z80's INT). Held in reset on every other board.
 	// ------------------------------------------------------------------
+	// Family E (2026-09-14): the Seibu Sound System board (seibu_sound_map:
+	// ROM 0000-1FFF, RAM 2000-27FF, the seibu_sound register block at
+	// 4000-401F (rtl/seibu/seibu_sound.sv: latches, IM0 vector
+	// arbitration RST10 = YM3812 / RST18 = the 68000's word write at +0x1E,
+	// ROM bank), OKI at 6000, the 32 KB bank window 8000-FFFF = file
+	// 0x8000-0xFFFF (bank 0) or 0x0000-0x7FFF (bank 1: MAME's ROM_COPY));
+	// and the macross2-style board of gunnailb/tomagic (ROM 0000-7FFF,
+	// 0x4000 bank window 8000-BFFF from the 0x20000 file, RAM C000-DFFF,
+	// I/O: 00 bank, 02/03 the FM chip (gunnailb YM2203 = jt03, tomagic
+	// YM3812 = jtopl2), 06 soundlatch read / soundlatch2 write; the latch's
+	// data-pending flag is the NMI, the FM chip's IRQ the INT).
 	reg [16:0] z80_acc = 17'd0;
 	reg        z80_cen = 1'b0;
-	wire [16:0] z80_inc = g_afega ? 17'd10000 : g_mustangb3 ? 17'd8949 : 17'd12288; // afega XTAL(4 MHz); mustangb3: 14.31818/4 = 3.5795 MHz; tharrier 4.9152 MHz (/40 MHz, per 100000)
+	wire [16:0] z80_inc = g_afega ? 17'd10000 : (g_mustangb3 | g_mustangb | g_tdragonb) ? 17'd8949 :
+	                      (g_acrobatmbl | g_hachamfb2) ? 17'd10000 : (g_strahljbl | g_tomagic) ? 17'd7500 : g_gunnailb ? 17'd15000 : 17'd12288;
+	                      // afega XTAL(4 MHz); mustangb3/mustangb/tdragonb: 14.31818/4 = 3.5795 MHz; acrobatmbl/hachamfb2 4 MHz; strahljbl/tomagic 3 MHz; gunnailb 6 MHz; tharrier 4.9152 MHz (/40 MHz, per 100000)
 	always @(posedge clk_sys) begin
 		if (z80_acc + z80_inc >= 17'd100000) begin z80_acc <= z80_acc + z80_inc - 17'd100000; z80_cen <= 1'b1; end
 		else begin z80_acc <= z80_acc + z80_inc; z80_cen <= 1'b0; end
@@ -2185,58 +2302,171 @@ module gunnail_core #(
 	wire [15:0] z80_a;
 	wire [7:0]  z80_do;
 	reg  [7:0]  z80_di;
-	wire        z80_mreq_n, z80_iorq_n, z80_rd_n, z80_wr_n;
+	wire        z80_mreq_n, z80_iorq_n, z80_rd_n, z80_wr_n, z80_m1_n;
 	wire        z80_reset_n = ~reset & g_z80snd;
 	wire        z80_mem_we = ~z80_mreq_n & ~z80_wr_n;
 	wire        z80_mem_re = ~z80_mreq_n & ~z80_rd_n;
 	wire        z80_io_we  = ~z80_iorq_n & ~z80_wr_n;
-	// Three memory maps: tharrier_sound_map (mustangb3 too), afega_sound_map
-	// (ROM 0-EFFF, RAM F000-F7FF, latch F800, YM2151 F808/9, OKI F80A) and
+	wire        z80_io_re  = ~z80_iorq_n & ~z80_rd_n;
+	// Five memory maps: tharrier_sound_map (mustangb3 too), afega_sound_map
+	// (ROM 0-EFFF, RAM F000-F7FF, latch F800, YM2151 F808/9, OKI F80A),
 	// firehawk_sound_map (RAM F000-FFFF with the latch at FFF0, the oki2
 	// bank byte at FFF2, OKIs at FFF8 (chip 2) / FFFA (chip 1)); the
-	// firehawk registers sit inside its RAM range and win on reads.
-	wire        sel_z80_rom      = g_afega ? (z80_a < 16'hF000) : (z80_a < 16'hC000);
-	wire        sel_z80_ram      = g_afega ? (g_fh_snd ? (z80_a >= 16'hF000) : ((z80_a >= 16'hF000) && (z80_a < 16'hF800)))
+	// firehawk registers sit inside its RAM range and win on reads;
+	// seibu_sound_map and the gunnailb/tomagic banked map (see above).
+	wire        sel_z80_rom      = g_seibu ? ((z80_a < 16'h2000) || z80_a[15]) : g_afega ? (z80_a < 16'hF000) : (z80_a < 16'hC000);
+	wire        sel_z80_ram      = g_seibu ? ((z80_a >= 16'h2000) && (z80_a < 16'h2800)) :
+	                               g_m2snd ? ((z80_a >= 16'hC000) && (z80_a < 16'hE000)) :
+	                               g_afega ? (g_fh_snd ? (z80_a >= 16'hF000) : ((z80_a >= 16'hF000) && (z80_a < 16'hF800)))
 	                                       : ((z80_a >= 16'hC000) && (z80_a < 16'hC800));
-	wire        sel_z80_latch    = g_afega ? (z80_a == (g_fh_snd ? 16'hFFF0 : 16'hF800)) : (z80_a == 16'hF000);
-	wire        sel_z80_oki0     = g_afega ? (z80_a == (g_fh_snd ? 16'hFFFA : 16'hF80A)) : (z80_a == 16'hF400);
-	wire        sel_z80_oki1     = g_afega ? (g_fh_snd && (z80_a == 16'hFFF8)) : (z80_a == 16'hF500);
-	wire        sel_z80_okibank0 = ~g_afega & (z80_a == 16'hF600);
-	wire        sel_z80_okibank1 = ~g_afega & (z80_a == 16'hF700);
+	wire        sel_z80_latch    = g_afega ? (z80_a == (g_fh_snd ? 16'hFFF0 : 16'hF800)) : ~g_seibu & ~g_m2snd & (z80_a == 16'hF000);
+	wire        sel_z80_oki0     = g_seibu ? (z80_a == 16'h6000) : g_m2snd ? 1'b0 : g_afega ? (z80_a == (g_fh_snd ? 16'hFFFA : 16'hF80A)) : (z80_a == 16'hF400);
+	wire        sel_z80_oki1     = g_afega ? (g_fh_snd && (z80_a == 16'hFFF8)) : ~g_seibu & ~g_m2snd & (z80_a == 16'hF500);
+	wire        sel_z80_okibank0 = ~g_afega & ~g_seibu & ~g_m2snd & (z80_a == 16'hF600);
+	wire        sel_z80_okibank1 = ~g_afega & ~g_seibu & ~g_m2snd & (z80_a == 16'hF700);
 	wire        sel_z80_ym51     = g_afega & ~g_fh_snd & (z80_a[15:1] == 15'h7C04);   // F808 (address) / F809 (data)
 	wire        sel_z80_fhbank   = g_fh_snd & (z80_a == 16'hFFF2);                     // spec2k_oki1_banking_w
-	wire        sel_io_ym        = (z80_a[7:1] == 7'd0);
+	wire        sel_z80_seibu    = g_seibu & (z80_a[15:5] == 11'h200);                 // 4000-401F
+	wire        sel_io_ym        = g_m2snd ? (g_gunnailb & (z80_a[7:1] == 7'd1)) : ~g_seibu & (z80_a[7:1] == 7'd0); // the jt03: tharrier ports 0/1, gunnailb 2/3
+	wire        sel_io_opl       = g_tomagic & (z80_a[7:1] == 7'd1);                   // tomagic: YM3812 on ports 2/3
+	wire        sel_io_bank      = g_m2snd & (z80_a[7:0] == 8'h00);                    // macross2_audiobank_w
+	wire        sel_io_latch     = g_m2snd & (z80_a[7:0] == 8'h06);                    // soundlatch (r) / soundlatch2 (w)
+	// Program ROM byte address within the audiocpu region
+	wire        seibu_bank_sel;
+	reg  [2:0]  m2_bank = 3'd0;
+	wire [16:0] z80_rom_phys = g_seibu ? {z80_a[15] & ~seibu_bank_sel, z80_a[14:0]} :
+	                           (g_m2snd & z80_a[15]) ? {m2_bank, z80_a[13:0]} : {1'b0, z80_a};
 	wire [7:0]  z80_rom_dout;
 	wire        z80_rom_ready;
 	wire        z80_wait_n = ~(sel_z80_rom & z80_mem_re & ~z80_rom_ready);
-	// INT: the YM2203's IRQ (tharrier/mustangb3); afega: the sound latch's
-	// data-pending flag OR the YM2151's IRQ (INPUT_MERGER_ANY_HIGH);
-	// firehawk: the latch alone. data_pending: set by the 68000's write,
-	// cleared by the Z80's read of the latch.
+	// INT: the YM2203's IRQ (tharrier/mustangb3/gunnailb); afega: the sound
+	// latch's data-pending flag OR the YM2151's IRQ (INPUT_MERGER_ANY_HIGH);
+	// firehawk: the latch alone; Seibu: the board's RST10/RST18 arbitration;
+	// tomagic: the YM3812's IRQ. data_pending: set by the 68000's write,
+	// cleared by the Z80's read of the latch (gunnailb/tomagic: it is the NMI).
 	reg  z80_latch_pending = 1'b0;
-	wire ym51_irq_n;
-	wire z80_int_n = g_afega ? ~(z80_latch_pending | (~g_fh_snd & ~ym51_irq_n)) : ym_chip_irq_n;
+	wire ym51_irq_n, opl_irq_n, seibu_int_n;
+	wire z80_int_n = g_afega ? ~(z80_latch_pending | (~g_fh_snd & ~ym51_irq_n)) : g_seibu ? seibu_int_n : g_tomagic ? opl_irq_n : ym_chip_irq_n;
+	wire z80_nmi_n = g_m2snd ? ~z80_latch_pending : 1'b1;
 	T80s z80_cpu (
 		.RESET_n(z80_reset_n), .CLK(clk_sys), .CEN(z80_cen), .WAIT_n(z80_wait_n),
-		.INT_n(z80_int_n), .NMI_n(1'b1), .BUSRQ_n(1'b1), .OUT0(1'b0),
-		.DI(z80_di), .M1_n(), .MREQ_n(z80_mreq_n), .IORQ_n(z80_iorq_n), .RD_n(z80_rd_n), .WR_n(z80_wr_n),
+		.INT_n(z80_int_n), .NMI_n(z80_nmi_n), .BUSRQ_n(1'b1), .OUT0(1'b0),
+		.DI(z80_di), .M1_n(z80_m1_n), .MREQ_n(z80_mreq_n), .IORQ_n(z80_iorq_n), .RD_n(z80_rd_n), .WR_n(z80_wr_n),
 		.RFSH_n(), .HALT_n(), .BUSAK_n(), .A(z80_a), .DO(z80_do)
 	);
-	reg [7:0] z80_ram [0:4095]; // 2 KB (tharrier: C000-C7FF, afega: F000-F7FF) or firehawk's 4 KB F000-FFFF
+	reg [7:0] z80_ram [0:8191]; // 2 KB (tharrier: C000-C7FF, afega: F000-F7FF, seibu: 2000-27FF), firehawk's 4 KB F000-FFFF or gunnailb/tomagic's 8 KB C000-DFFF
 	reg [7:0] z80_ram_q;
 	always @(posedge clk_sys) begin
-		if (z80_mem_we & sel_z80_ram) z80_ram[z80_a[11:0]] <= z80_do;
-		z80_ram_q <= z80_ram[z80_a[11:0]];
+		if (z80_mem_we & sel_z80_ram) z80_ram[z80_a[12:0]] <= z80_do;
+		z80_ram_q <= z80_ram[z80_a[12:0]];
 	end
 	reg [7:0] soundlatch_data; // 68000 -> Z80 (tharrier: 0x08001F)
-	wire      soundlatch_we = g_z80snd & sel_nmk004_w & cpu_write & ~LDSn;
+	wire      soundlatch_we = g_z80snd & ~g_seibu & sel_nmk004_w & cpu_write & ~LDSn;
 	always @(posedge clk_sys) begin
 		if (reset) soundlatch_data <= 8'h00;
 		else if (soundlatch_we) soundlatch_data <= oEdb[7:0];
 		if (~z80_reset_n)                        z80_latch_pending <= 1'b0;
 		else if (soundlatch_we)                  z80_latch_pending <= 1'b1;
 		else if (z80_mem_re & sel_z80_latch)     z80_latch_pending <= 1'b0;
+		else if (z80_io_re & sel_io_latch)       z80_latch_pending <= 1'b0;
+		if (~z80_reset_n) m2_bank <= 3'd0;
+		else if (z80_io_we & sel_io_bank) m2_bank <= z80_do[2:0];
 	end
+	// Seibu Sound System glue (main_mustb_w: the 68000's word write at
+	// +0x1E/0x1F of the I/O block, each byte lane as its strobe says).
+	wire [7:0]  seibu_z80_din;
+	wire        seibu_iack_active;
+	wire [7:0]  seibu_iack_vector;
+	wire        seibu_ym_we;
+	wire        seibu_ym_a0;
+	wire [7:0]  seibu_ym_wdata;
+	wire [7:0]  opl_dout;
+	// The data lanes are captured through the 68000's write cycle (each
+	// lane as its strobe says, the other keeps its previous value: MAME's
+	// mem_mask) and handed over as a one-clock strobe on the cycle's
+	// trailing edge — a level would re-assert RST18 after an acknowledge
+	// landing inside the write.
+	wire        mustb_we_level = g_seibu & sel_nmk004_w & cpu_write;
+	reg         mustb_we_d = 1'b0;
+	reg  [15:0] mustb_data_r = 16'h0000;
+	always @(posedge clk_sys) begin
+		mustb_we_d <= mustb_we_level;
+		if (mustb_we_level) begin
+			if (~LDSn) mustb_data_r[7:0]  <= oEdb[7:0];
+			if (~UDSn) mustb_data_r[15:8] <= oEdb[15:8];
+		end
+	end
+	seibu_sound seibu (
+		.clk_sys(clk_sys), .reset(reset | ~g_seibu),
+		.z80_addr(z80_a), .z80_dout(z80_do), .z80_sel(sel_z80_seibu), .z80_we(z80_mem_we), .z80_re(z80_mem_re),
+		.z80_din(seibu_z80_din), .z80_m1_n(z80_m1_n), .z80_iorq_n(z80_iorq_n),
+		.z80_iack_vector(seibu_iack_vector), .z80_iack_active(seibu_iack_active), .z80_int_n(seibu_int_n),
+		.m68k_mustb_we(mustb_we_d & ~mustb_we_level), .m68k_mustb_data(mustb_data_r), .m68k_mustb_lds(1'b1), .m68k_mustb_uds(1'b1),
+		.ym_cs(), .ym_we(seibu_ym_we), .ym_addr_sel(seibu_ym_a0), .ym_wdata(seibu_ym_wdata), .ym_rdata(opl_dout), .ym_irq_n(opl_irq_n),
+		.bank_sel(seibu_bank_sel)
+	);
+`ifdef VERILATOR
+	// Family E bring-up counters (sim only)
+	reg [31:0] fe_m1 = 0, fe_mustb = 0, fe_seibu_wr = 0, fe_opl_wr = 0, fe_oki_wr = 0, fe_iack = 0, fe_int_low = 0;
+	reg [15:0] fe_pc_max = 0;
+	always @(posedge clk_sys) begin
+		if (z80_cen & ~z80_m1_n & ~z80_mreq_n & g_seibu) begin fe_m1 <= fe_m1 + 1; if (z80_a > fe_pc_max) fe_pc_max <= z80_a; end
+		if (mustb_we_d & ~mustb_we_level) fe_mustb <= fe_mustb + 1;
+		if (z80_cen & z80_mem_we & sel_z80_seibu) fe_seibu_wr <= fe_seibu_wr + 1;
+		if (z80_cen & seibu_ym_we) fe_opl_wr <= fe_opl_wr + 1;
+		if (z80_cen & z80_mem_we & sel_z80_oki0 & g_seibu) fe_oki_wr <= fe_oki_wr + 1;
+		if (z80_cen & seibu_iack_active) fe_iack <= fe_iack + 1;
+		if (z80_cen & ~seibu_int_n) fe_int_low <= fe_int_low + 1;
+	end
+	reg [15:0] fe_opl_peak = 0, fe_oki_peak = 0, fe_opl_mean_hi = 0;
+	wire [15:0] fe_opl_abs = opl_snd[15] ? -opl_snd : opl_snd;
+	wire [13:0] fe_oki_abs = oki1_snd[13] ? -oki1_snd : oki1_snd;
+	always @(posedge clk_sys) begin
+		if (fe_opl_abs > fe_opl_peak) fe_opl_peak <= fe_opl_abs;
+		if ({2'd0, fe_oki_abs} > fe_oki_peak) fe_oki_peak <= {2'd0, fe_oki_abs};
+		if (fe_tick == 26'h3FFFFFF) begin fe_opl_peak <= 0; fe_oki_peak <= 0; end
+	end
+	reg [15:0] fe_opl_pk2 = 0; reg [15:0] fe_opl_wr2 = 0, fe_oki_wr2 = 0, fe_iack2 = 0, fe_cmd2 = 0, fe_ym_wr2 = 0, fe_nmi2 = 0, fe_oki_pk2 = 0;
+	reg signed [39:0] fe_opl_sum = 0, fe_oki_sum = 0;
+	reg fe_lp_d = 0, fe_okiwe_d = 0, fe_ymwe_d = 0;
+	reg [15:0] fe_pc_lo = 16'hFFFF, fe_pc_hi = 0, fe_ymrd2 = 0;
+	always @(posedge clk_sys) begin
+		fe_lp_d <= z80_latch_pending; fe_okiwe_d <= oki0_we_src; fe_ymwe_d <= ym_we_src;
+		if (fe_opl_abs > fe_opl_pk2) fe_opl_pk2 <= fe_opl_abs;
+		if ({2'd0, fe_oki_abs} > fe_oki_pk2) fe_oki_pk2 <= {2'd0, fe_oki_abs};
+		fe_opl_sum <= fe_opl_sum + {{24{opl_snd[15]}}, opl_snd};
+		fe_oki_sum <= fe_oki_sum + {{26{oki1_snd[13]}}, oki1_snd};
+		if (z80_cen & opl_we) fe_opl_wr2 <= fe_opl_wr2 + 1;
+		if (oki0_we_src & ~fe_okiwe_d) fe_oki_wr2 <= fe_oki_wr2 + 1;
+		if (ym_we_src & ~fe_ymwe_d) fe_ym_wr2 <= fe_ym_wr2 + 1;
+		if (z80_latch_pending & ~fe_lp_d) fe_nmi2 <= fe_nmi2 + 1;
+		if (z80_cen & seibu_iack_active) fe_iack2 <= fe_iack2 + 1;
+		if ((mustb_we_d & ~mustb_we_level) | (soundlatch_we & ~fe_lp_d)) fe_cmd2 <= fe_cmd2 + 1;
+		if (z80_cen & ~z80_m1_n & ~z80_mreq_n) begin if (z80_a < fe_pc_lo) fe_pc_lo <= z80_a; if (z80_a > fe_pc_hi) fe_pc_hi <= z80_a; end
+		if (z80_cen & z80_io_re & sel_io_ym) fe_ymrd2 <= fe_ymrd2 + 1;
+		if (fe_tick[20:0] == 21'h1FFFFF && (g_seibu | g_m2snd)) begin
+			$display("FAMILY_E tl %0d: opl peak %0d mean %0d, opl wr %0d, ym wr %0d rd %0d, oki wr %0d peak %0d mean %0d, iack %0d, nmi %0d, cmd %0d, bank %0d/%0d, int_n %0d, pc %04x-%04x, ym st %02x", fe_tick[25:21], fe_opl_pk2, fe_opl_sum >>> 21, fe_opl_wr2, fe_ym_wr2, fe_ymrd2, fe_oki_wr2, fe_oki_pk2, fe_oki_sum >>> 21, fe_iack2, fe_nmi2, fe_cmd2, seibu_bank_sel, m2_bank, z80_int_n, fe_pc_lo, fe_pc_hi, ym_chip_dout);
+			fe_opl_pk2 <= 0; fe_opl_wr2 <= 0; fe_oki_wr2 <= 0; fe_iack2 <= 0; fe_cmd2 <= 0; fe_ym_wr2 <= 0; fe_nmi2 <= 0; fe_oki_pk2 <= 0; fe_opl_sum <= 0; fe_oki_sum <= 0; fe_pc_lo <= 16'hFFFF; fe_pc_hi <= 0; fe_ymrd2 <= 0;
+		end
+	end
+	reg [25:0] fe_tick = 0;
+	always @(posedge clk_sys) begin fe_tick <= fe_tick + 1; if (g_seibu && fe_tick == 26'h3FFFFFF) $display("FAMILY_E: z80 m1 %0d (pc max %04x), 68k sound cmds %0d, seibu reg writes %0d, opl writes %0d, oki writes %0d, iacks %0d, int-low cens %0d, opl peak %0d, oki peak %0d",
+		fe_m1, fe_pc_max, fe_mustb, fe_seibu_wr, fe_opl_wr, fe_oki_wr, fe_iack, fe_int_low, fe_opl_peak, fe_oki_peak); end
+	final if (g_seibu) $display("FAMILY_E: z80 m1 %0d (pc max %04x), 68k sound cmds %0d, seibu reg writes %0d, opl writes %0d, oki writes %0d, iacks %0d, int-low cens %0d",
+		fe_m1, fe_pc_max, fe_mustb, fe_seibu_wr, fe_opl_wr, fe_oki_wr, fe_iack, fe_int_low);
+`endif
+	// YM3812 (jtopl2) — the same clock as its Z80 (14.318/4, 4, 3 MHz),
+	// written straight from the Z80's own strobe (the standalone Tier 5
+	// cores did the same: at a shared cen the strobe is at least one cen
+	// wide and a repeated identical register write is harmless).
+	wire opl_we   = g_seibu ? seibu_ym_we : (z80_io_we & sel_io_opl);
+	wire opl_a0   = g_seibu ? seibu_ym_a0 : z80_a[0];
+	wire signed [15:0] opl_snd;
+	jtopl2 opl_chip (
+		.rst(reset | ~g_opl), .clk(clk_sys), .cen(z80_cen),
+		.din(z80_do), .addr(opl_a0), .cs_n(~opl_we), .wr_n(~opl_we),
+		.dout(opl_dout), .irq_n(opl_irq_n), .snd(opl_snd), .sample()
+	);
 	// spec2k_oki1_banking_w: 0xFE = bank 0, 0xFF = bank 1 of the 0x80000 oki2 ROM
 	reg fh_oki2_bank = 1'b0;
 	always @(posedge clk_sys) begin
@@ -2272,7 +2502,12 @@ module gunnail_core #(
 		.left(ym51_l), .right(ym51_r), .xleft(), .xright()
 	);
 	always @(*) begin
-		if (~z80_iorq_n)        z80_di = ym_chip_dout;
+		if (~z80_iorq_n) begin
+			if (g_seibu)         z80_di = seibu_iack_active ? seibu_iack_vector : 8'hFF; // IM0: the RST vector on the bus during the acknowledge
+			else if (g_m2snd)    z80_di = sel_io_latch ? soundlatch_data : sel_io_opl ? opl_dout : sel_io_ym ? ym_chip_dout : 8'h00; // unmapped ports read 0 (MAME's unmap value): gunnailb's Air Buster driver spins at 0x528 until port 4 (its absent OKI, noprw) reads no busy channel
+			else                 z80_di = ym_chip_dout;
+		end
+		else if (sel_z80_seibu) z80_di = seibu_z80_din;
 		else if (sel_z80_rom)   z80_di = z80_rom_dout;
 		else if (sel_z80_latch) z80_di = soundlatch_data;
 		else if (sel_z80_oki0)  z80_di = oki1_chip_dout;
@@ -2285,14 +2520,14 @@ module gunnail_core #(
 	if (!HW_ROMS) begin : g_z80_rom_sim
 		reg [7:0] z80_rom [0:131071]; // firehawk's audiocpu region is 0x20000 (only the first 0xF000 bytes are mapped)
 		initial if (AUDIOCPU_FILE != "") $readmemh(AUDIOCPU_FILE, z80_rom);
-		assign z80_rom_dout  = z80_rom[{1'b0, z80_a}];
+		assign z80_rom_dout  = z80_rom[z80_rom_phys];
 		assign z80_rom_ready = 1'b1;
 		assign p1_addr[7] = 24'd0; assign p1_req[7] = 1'b0;
 	end else begin : g_z80_rom_hw
 		oki_rom_cache z80_cache_inst (
 			.base_word(BASE_WORD_NMK004),
 			.clk(clk_sys), .reset(reset),
-			.byte_addr({6'd0, z80_a}), .data(z80_rom_dout), .ready(z80_rom_ready), .stall(),
+			.byte_addr({5'd0, z80_rom_phys}), .data(z80_rom_dout), .ready(z80_rom_ready), .stall(),
 			.sd_addr(p1_addr[7]), .sd_req(p1_req[7]), .sd_busy(p1_busy[7]), .sd_valid(p1_valid[7]), .sd_dout(p1_dout[7]), .sd_dout_pair(p1_dout_pair[7])
 		);
 	end
@@ -2316,15 +2551,20 @@ module gunnail_core #(
 			if (cac_cnt == 3'd5) begin cac_we <= 1'b1; cac_data <= CACTUS_CFG_BG; end
 		end
 	end
-	wire       vid_cfg_we   = g_cactus ? cac_we   : (nmk214_cfg_we & has_214);
-	wire [7:0] vid_cfg_data = g_cactus ? cac_data : nmk214_cfg_data;
+	// gunnailb (2026-09-14): gunnail's scrambled GFX data with no NMK-215
+	// (init_gunnailb = decode_gfx, the same tables as cactus): same injection.
+	wire       vid_cfg_we   = (g_cactus | g_gunnailb) ? cac_we   : (nmk214_cfg_we & has_214);
+	wire [7:0] vid_cfg_data = (g_cactus | g_gunnailb) ? cac_data : nmk214_cfg_data;
 
 	// ------------------------------------------------------------------
 	// 68000 read-data mux
 	// ------------------------------------------------------------------
 	reg [15:0] rdata;
 	always @(*) begin
-		if (sel_rom)          rdata = rom_dout;
+		if (sel_ambl_patch)   rdata = ambl_patch_val;
+		else if (sel_rom)     rdata = rom_dout_dec;
+		else if (sel_tdb_prot) rdata = g_tdragonb3 ? 16'h0000 : 16'h0003;
+		else if (sel_tdb3_ee) rdata = 16'h00EE;
 		else if (sel_mainram) rdata = mainram_dout;
 		else if (sel_palette) rdata = palette_dout;
 		else if (sel_bgvram)  rdata = bgvram_dout;
@@ -2415,7 +2655,7 @@ module gunnail_core #(
 		.BG2_LAYER(1)
 	) video (
 		.clk_sys(clk_sys), .reset(reset),
-		.lowres(lowres), .raster_scroll(g_gunnail), .cfg_rt(1'b1),
+		.lowres(lowres), .raster_scroll(g_gunnail | g_m2snd), .cfg_rt(1'b1), // gunnailb/tomagic: gunnail's per-line scroll RAM (VIDEO_START gunnail)
 		.bga_pal_base_i(cfg_bga_pal), .bgb_pal_base_i(cfg_bgb_pal), .spr_pal_base_i(cfg_spr_pal), .tx_pal_base_i(cfg_tx_pal),
 		.bga_code_mask_i(cfg_bga_mask), .bgb_code_mask_i(cfg_bgb_mask), .spr_units_i(cfg_spr_units),
 		.sprdma_word_base(cfg_sprdma_word), .nmk214_en(has_214), .spr_swap(~spr_plain),
@@ -2437,6 +2677,7 @@ module gunnail_core #(
 		.spr_flip_en(g_tharrier | g_afega), .spr_lag1(g_bjtwin), .vis_start(vt_line_start & (vt_vcount == 10'd16)),
 		.bg_bank(bgbank_reg),
 		.game_powerins(1'b0), .tile_lsb(g_redhawkb), .bg_8bpp(g_afega_8bpp), .bg_code_mod12k((game_sel == G_BUBL2000) || (game_sel == G_HOTBUBLA)), .tx_xscroll(g_afega ? afega_txx : 9'd0), .tx_off(g_afega & g_afega_tx_off), .spr_off(g_afega_spr_off),
+		.gfx_swap34(g_tdb_dec), .spr_bitrev(g_tomagic),
 		.base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE_A), .base_word_sprites(BASE_WORD_SPRITES),
 		.tilerambank(2'd0),
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),

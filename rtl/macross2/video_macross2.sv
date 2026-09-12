@@ -192,6 +192,15 @@ module video_macross2 #(
 	input  [8:0] tx_xscroll,
 	input        tx_off,
 	input        spr_off,
+	// Family E bootlegs (2026-09-14, Gunnail rbf): static byte bitswaps
+	// MAME applies to the raw GFX ROMs once at init, applied here to every
+	// fetched tile byte before the nibble extraction instead (the .mra
+	// streams the raw files): gfx_swap34 = decode_tdragonb's
+	// {7,6,5,3,4,2,1,0} (bits 3 and 4 exchanged) on the BG and sprite
+	// ROMs; spr_bitrev = init_tomagic's bitswap<8>(0..7) (the byte's bits
+	// reversed) on the sprite ROM.
+	input        gfx_swap34,
+	input        spr_bitrev,
 	// HW_ROMS=1: the three ROM regions' SDRAM word offsets (byte offset /
 	// 2), runtime so a shared RBF can serve .mra layouts that differ per
 	// game (tdragon2_core.sv muxes them on game_powerins). Unused at
@@ -587,6 +596,11 @@ module video_macross2 #(
 	function automatic [3:0] tile_nibble(input [7:0] byte_val, input col_odd);
 		tile_nibble = col_odd ? byte_val[3:0] : byte_val[7:4];
 	endfunction
+	// The Family E static ROM bitswaps (see the gfx_swap34/spr_bitrev ports).
+	function automatic [7:0] gfx_xform(input [7:0] b, input swap34, input bitrev);
+		gfx_xform = bitrev ? {b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]} :
+		            swap34 ? {b[7], b[6], b[5], b[3], b[4], b[2], b[1], b[0]} : b;
+	endfunction
 
 	// fgtile (TX layer) byte address — code*32 + row*4 + (col>>1). See
 	// g_video_rom_sim/g_video_rom_hw above for the actual byte lookup
@@ -628,7 +642,7 @@ module video_macross2 #(
 	endfunction
 
 	function automatic [3:0] bg_tile_pixel_nib(input [7:0] byte_val, input integer col_local);
-		bg_tile_pixel_nib = tile_nibble(byte_val, col_local[0] ^ tile_lsb);
+		bg_tile_pixel_nib = tile_nibble(gfx_xform(byte_val, gfx_swap34, 1'b0), col_local[0] ^ tile_lsb);
 	endfunction
 
 	// ------------------------------------------------------------------
@@ -1367,7 +1381,7 @@ module video_macross2 #(
 							// skip the whole tile: behave as if its last pixel was just done
 							px_eff = 15; py_eff = 15; advance = 1'b1;
 						end else if (sprites_ready) begin
-							s_pix_nib = tile_nibble(sprites_byte, s_px_src[0] ^ tile_lsb); // source column (mirrored when flipped)
+							s_pix_nib = tile_nibble(gfx_xform(sprites_byte, gfx_swap34, spr_bitrev), s_px_src[0] ^ tile_lsb); // source column (mirrored when flipped)
 							sx = (s_pixel_x_base + s_px) & spr_wrap_mask; // wrap per pixel: a sprite straddling the
 							sy = (s_pixel_y_base + s_py) & spr_wrap_mask; // top/left edge shows its visible part
 							plot_addr = sy * SCREEN_W + sx;
