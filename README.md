@@ -33,20 +33,21 @@ the built core.
 ## Status
 
 Three cores run on real hardware and match MAME frame by frame in the
-scenes that can be compared. 53 game sets ship as `releases/*.mra`
+scenes that can be compared. 80 game sets ship as `releases/*.mra`
 files, one per MAME set:
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
 | `Macross2` | 68000 + Z80 sound, YM2203, 2x OKIM6295 with NMK112 banking; hi-res and Power Instinct's 320-px board as runtime modes, plus the bootleg boards' variants (vblank-only interrupts, a Z80 without its YM2203, a 68000-driven OKI, nibble-swapped tiles) | Thunder Dragon 2 (tdragon2, tdragon2a), Big Bang (bigbang, bigbanga), Thunder Dragon 3 (tdragon3h — plays tdragon2's soundtrack, which MAME leaves silent), Super Spacefortress Macross II (macross2, macross2g, macross2k), Power Instinct / Gouketsuji Ichizoku (powerins, powerinsj, powerinspu, powerinspj, powerinsa, powerinsb, powerinsc — powerinsc's sprites draw wrong, as in MAME: their ROM format is undeciphered) |
 | `Raphero` | Bare TLCS-90 sound CPU, 14 MHz 68000 | Rapid Hero (raphero, rapheroa), Arcadia (arcadian) |
-| `Gunnail` | NMK004 sound MCU, YM2203, 2x OKIM6295; NMK-215/113/110 protection MCUs with dual NMK214; hi-res per-line scroll (GunNail), the nine lowres NMK004 boards, the Bombjack Twin boards (no sound CPU, 68000-driven OKIs with NMK112, one 8x8 two-ROM tile layer) and Task Force Harrier's Z80 + YM2203 sound board with its MCU simulation, all as runtime game modes | GunNail (gunnail, gunnailp), Super Spacefortress Macross (macross), Black Heart (blkheart, blkheartj), US AAF Mustang (mustang, mustangs, mustangb3), Bio-ship Paladin / Space Battle Ship Gomorrah (bioship, sbsgomo), Vandyke (vandyke, vandykejal, vandykejal2, vandykeb), Acrobat Mission (acrobatm), Koutetsu Yousai Strahl (strahl, strahlj, strahlja), Thunder Dragon (tdragon, tdragon1), Hacha Mecha Fighter (hachamf, hachamfa, hachamfp, hachamfb), Bombjack Twin (bjtwin, bjtwina, bjtwinp, bjtwinpa), Saboten Bombers / Cactus (sabotenb, sabotenba, cactus), Nouryoku Koujou Iinkai (nouryoku, nouryokup), Task Force Harrier (tharrier, tharrieru) |
+| `Gunnail` | NMK004 sound MCU, YM2203, 2x OKIM6295; NMK-215/113/110 protection MCUs with dual NMK214; hi-res per-line scroll (GunNail), the nine lowres NMK004 boards, the Bombjack Twin boards (no sound CPU, 68000-driven OKIs with NMK112, one 8x8 two-ROM tile layer) Task Force Harrier's Z80 + YM2203 sound board with its MCU simulation, and the Afega boards (12 MHz 68000 with address-scrambled program ROMs decoded per fetch, Z80 + YM2151 + OKI or twin-OKI sound, an 8bpp background layer), all as runtime game modes | GunNail (gunnail, gunnailp), Super Spacefortress Macross (macross), Black Heart (blkheart, blkheartj), US AAF Mustang (mustang, mustangs, mustangb3), Bio-ship Paladin / Space Battle Ship Gomorrah (bioship, sbsgomo), Vandyke (vandyke, vandykejal, vandykejal2, vandykeb), Acrobat Mission (acrobatm), Koutetsu Yousai Strahl (strahl, strahlj, strahlja), Thunder Dragon (tdragon, tdragon1), Hacha Mecha Fighter (hachamf, hachamfa, hachamfp, hachamfb), Bombjack Twin (bjtwin, bjtwina, bjtwinp, bjtwinpa), Saboten Bombers / Cactus (sabotenb, sabotenba, cactus), Nouryoku Koujou Iinkai (nouryoku, nouryokup), Task Force Harrier (tharrier, tharrieru), Stagger I / Red Hawk (stagger1, redhawk, redhawki, redhawks, redhawksa, redhawkg, redhawke, redhawkk, redhawkc, redhawkb), Guardian Storm / Hong Hu Zhanji II (grdnstrm, grdnstrmv, grdnstrmj, grdnstrmk, grdnstrmg, grdnstrmau, redfoxwp2, redfoxwp2a), Bubble 2000 / Hot Bubble (bubl2000, bubl2000a, hotbubl, hotbubla), Pop's Pop's (popspops), Mang-Chi (mangchi), Spectrum 2000 (spec2k, spec2kh), Fire Hawk (firehawk) |
 
 Every parent set has been loaded on a DE10-Nano through its `.mra`,
 drawn its title and attract sequence in native screenshots and played
 sound; the clones share their parent's hardware and differ only in ROM
-contents (hachamfa, strahlja, vandykejal2, bjtwina and sabotenba have
-not been run on the board yet). Each core is pixel-identical to MAME in simulation for the
+contents (hachamfa, strahlja, vandykejal2, bjtwina, sabotenba and the
+Afega clone sets other than the eleven configurations listed in
+`docs/hw-bringup.md` have not been run on the board yet). Each core is pixel-identical to MAME in simulation for the
 whole attract sequence that timing allows, and pixel-identical in
 hardware screenshots of static scenes (`docs/hw-bringup.md` has the
 per-game results). Audio is compared band by band against MAME
@@ -69,11 +70,13 @@ game modes of the Gunnail rbf (`rtl/gunnail/gunnail_core.sv`'s game
 table; their original single-game sims under `rtl/<game>/` remain as
 register references). tharrierb (Lettering bootleg) needs an M68705
 core and is not included.
-The hardware path (SDRAM ROM caches, clock-domain crossing, wait
-states, OKI fetch stalls, the `.mra` loader layout) is shared, so
-bringing the remaining games to hardware is mostly wiring and
-verification rather than new design. The Afega derivatives (Family H)
-and the early boards (Family G) are not started.
+Family H (the 27 Afega-hardware sets) went to hardware on 2026-09-13,
+also as Gunnail-rbf game modes, with jotego's jt51 (YM2151) vendored for
+their sound board. The hardware path (SDRAM ROM caches, clock-domain
+crossing, wait states, OKI fetch stalls, the `.mra` loader layout) is
+shared, so bringing the remaining games (the Raiden-sound bootlegs, the
+Comad boards, the Afega hacks of Mustang) to hardware is mostly wiring
+and verification rather than new design.
 
 `docs/known-issues.md` is the tracked list of open bugs, limitations
 and verification gaps in the released cores (stable IDs, status per

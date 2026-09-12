@@ -47,6 +47,17 @@ SEL_nouryokup := 19
 SEL_tharrier := 20
 SEL_vandykeb := 21
 SEL_mustangb3 := 22
+SEL_stagger1 := 23
+SEL_redhawk  := 24
+SEL_redhawki := 25
+SEL_redhawkb := 29
+SEL_grdnstrm := 30
+SEL_grdnstrmk := 31
+SEL_popspops := 37
+SEL_mangchi  := 38
+SEL_bubl2000 := 39
+SEL_firehawk := 40
+SEL_spec2k   := 41
 SEL := $(SEL_$(GAME))
 
 SOURCES := $(TOP).sv $(CORE_DIR)/gunnail_core.sv $(MACROSS2_DIR)/video_macross2.sv \
@@ -54,7 +65,7 @@ SOURCES := $(TOP).sv $(CORE_DIR)/gunnail_core.sv $(MACROSS2_DIR)/video_macross2.
            $(NMK112_DIR)/nmk112.sv $(BJTWIN_DIR)/video_timing.sv $(BJTWIN_DIR)/nmk_irq_hacky.sv $(NMK_IRQ_DIR)/nmk_irq.sv \
            $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
            $(RTL_DIR)/sdram.sv $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv \
-           $(RTL_DIR)/third_party_gen/t80/T80s.v $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv $(RTL_DIR)/rom_cache1_byte.sv $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(MODEL_DIR)/sdram_model.sv
+           $(RTL_DIR)/third_party_gen/t80/T80s.v $(RTL_DIR)/third_party/jt51/hdl/jt51.v $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv $(RTL_DIR)/rom_cache1_byte.sv $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(MODEL_DIR)/sdram_model.sv
 
 .PHONY: all roms run clean
 
@@ -71,7 +82,7 @@ $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gunnail_mg_hw.cpp $(FX68K_DIR)/fx68k.sv roms/$
 		--Mdir $(OBJ_DIR) +define+SIMULATION +define+OKI_CACHE_DIAG \
 		-GGAME_SEL=$(SEL) -GVTIMING_FILE=\"../../../roms/gunnail_multi_vtiming.hex\" \
 		-GROM_FILE=\"$(R)_maincpu.hex\" -GOKI1_ROM_FILE=\"$(R)_oki1.hex\" -GOKI2_ROM_FILE=\"$(R)_oki2.hex\" \
-		-y $(FX68K_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl \
+		-y $(FX68K_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl -y $(RTL_DIR)/third_party/jt51/hdl \
 		$(SOURCES) $(FX68K_DIR)/fx68k.sv $(FX68K_DIR)/fx68kAlu.sv $(FX68K_DIR)/uaddrPla.sv \
 		tb_gunnail_mg_hw.cpp \
 		-o V$(TOP)

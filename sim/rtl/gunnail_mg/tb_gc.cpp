@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
 	// TB_DSW1/TB_DSW2: the .mra <switches> bytes (0xFF = every switch off); the core is built with SIM_DSW=1
 	top.dsw1_i = 0xFF00 | (std::getenv("TB_DSW1") ? strtoul(std::getenv("TB_DSW1"), nullptr, 16) : 0xFF);
 	top.dsw2_i = 0xFF00 | (std::getenv("TB_DSW2") ? strtoul(std::getenv("TB_DSW2"), nullptr, 16) : 0xFF);
-	if (game_sel == 3 || game_sel == 12) top.dsw1_i = (top.dsw2_i << 8) | (top.dsw1_i & 0xFF); // mustang: one 16-bit port, SW1 in the high byte
+	if (game_sel == 3 || game_sel == 12 || game_sel == 20 || game_sel == 22 || game_sel >= 23) top.dsw1_i = (top.dsw2_i << 8) | (top.dsw1_i & 0xFF); // mustang/tharrier/afega: one 16-bit port, SW1 in the high byte
 	top.in0_i = 0xFFFF; top.in1_i = 0xFFFF;
 	FILE *nmk004_trace = std::fopen("nmk004_sys.trace", "w");
 	FILE *nmk004_cyc_trace = std::fopen("nmk004_cyc.trace", "w");
@@ -320,6 +320,14 @@ int main(int argc, char **argv) {
 	std::printf("tb_gc: rendered %u video frame(s), wrote gunnail_video.trace\n", frame_count);
 	std::printf("tb_gc: 68000 executed %llu instructions, wrote gunnail_68k.trace\n", (unsigned long long)m68k_instrs);
 
+	if (std::getenv("TB_DUMP_STATE") != nullptr) { // palette + BG VRAM words at the end of the run, for MAME probes
+		FILE *sf = std::fopen(std::getenv("TB_DUMP_STATE"), "w");
+		std::fprintf(sf, "PAL");
+		for (int i = 0; i < 1024; i++) { top.dbg_pal_addr = i; top.eval(); std::fprintf(sf, " %04X", top.dbg_pal_data); }
+		std::fprintf(sf, "\nBGVRAM");
+		for (int i = 0; i < 8192; i++) { top.dbg_bgvram_addr = i; top.eval(); std::fprintf(sf, " %04X", top.dbg_bgvram_data); }
+		std::fprintf(sf, "\n"); std::fclose(sf);
+	}
 	if (std::getenv("TB_DUMP_VRAM") != nullptr) {
 		int nonzero_pal = 0, nonzero_bg = 0, nonzero_tx = 0;
 		for (int i = 0; i < 1024; i++) { top.dbg_pal_addr = i; top.eval(); if (top.dbg_pal_data) nonzero_pal++; }

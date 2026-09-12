@@ -477,6 +477,239 @@ MUSTANGB3 = dict(MUSTANG, id=22, manufacturer="bootleg (Lettering)",
         ("oki2, 0x020000 (unbanked)", [("u12.bin", "0a28eaca")]),
     ])
 
+# ---------------------------------------------------------------------------
+# Afega boards (Family H, 2026-09-13): gunnail_core.sv ids 23-43, one per
+# distinct configuration (decryptcode table, screen_update variant, ROM
+# sizes); every set below carries its own region list transcribed from
+# its ROM_START. One 16-bit DSW port at 0x080004: bits 0-7 = SW2 (switch
+# byte 0), bits 8-15 = SW1 (byte 1), as mustang. The program ROM pairs are
+# streamed raw (the core un-scrambles the address lines per fetch); 8bpp
+# BG regions are their two 4bpp halves back to back (region order). The
+# generator substitutes the parent's file name for a part a split clone
+# zip omits (looked up by CRC) — see resolve_name().
+COIN_AFEGA = "4C_1C,2C_3C,2C_1C,1C_2C,3C_1C,1C_3C,3C_2C,1C_1C"
+COIN_POPS = "4C_1C,3C_1C,2C_1C,3C_2C,2C_3C,1C_3C,1C_2C,1C_1C"
+COIN_BUBL = "Disabled,1C_4C,3C_1C,1C_2C,4C_1C,1C_3C,2C_1C,1C_1C"
+STAGGER1_DIPS = [
+    ('0', "Service Mode", "On,Off"), ('1', "Demo Sounds", "Off,On"),
+    ('2', "Unused (SW2:6)", "On,Off"), ('3', "Unused (SW2:5)", "On,Off"), ('4', "Unused (SW2:4)", "On,Off"), ('5', "Unused (SW2:3)", "On,Off"),
+    ('6,7', "Lives", "1,5,2,3"), ('8,9', "Flip Screen", "On,Vertically,Horizontally,Off"), ('10', "Unused (SW1:6)", "On,Off"),
+    ('11,12', "Difficulty", "Hardest,Easy,Hard,Normal"), ('13,15', "Coinage", COIN_AFEGA)]
+REDHAWKB_DIPS = [  # "probably just redhawk but inverted" — every switch reads active high, defaults 0
+    ('0', "Unused (SW2:8)", "Off,On"), ('1', "Demo Sounds", "On,Off"),
+    ('2', "Unused (SW2:6)", "Off,On"), ('3', "Unused (SW2:5)", "Off,On"), ('4', "Unused (SW2:4)", "Off,On"), ('5', "Unused (SW2:3)", "Off,On"),
+    ('6,7', "Lives", "3,2,5,1"), ('8,9', "Flip Screen", "Off,Horizontally,Vertically,On"), ('10', "Unused (SW1:6)", "Off,On"),
+    ('11,12', "Difficulty", "Normal,Hard,Easy,Hardest"), ('13,15', "Coinage", "1C_1C,3C_2C,1C_3C,3C_1C,1C_2C,2C_1C,2C_3C,4C_1C")]
+GRDNSTRM_DIPS = [
+    ('0', "Service Mode", "On,Off"), ('1', "Demo Sounds", "Off,On"), ('2', "Free Play", "On,Off"), ('3', "Bombs", "3,2"),
+    ('4', "Unused (SW1:4)", "On,Off"), ('5', "Unused (SW1:3)", "On,Off"), ('6,7', "Lives", "1,5,2,3"),
+    ('8', "Mirror Screen", "On,Off"), ('9', "Flip Screen", "On,Off"), ('10', "Unused (SW2:6)", "On,Off"),
+    ('11,12', "Difficulty", "Hardest,Easy,Hard,Normal"), ('13,15', "Coinage", COIN_AFEGA)]
+GRDNSTRK_DIPS = [d if d[0] not in ('8', '9') else (d[0], "Flip Screen" if d[0] == '8' else "Mirror Screen", "On,Off") for d in GRDNSTRM_DIPS]
+POPSPOPS_DIPS = [
+    ('0', "Service Mode", "On,Off"), ('1', "Demo Sounds", "Off,On"), ('2', "Unknown (tells the answers)", "On,Off"),
+    ('3', "Unknown (SW:4)", "On,Off"), ('4', "Unknown (SW:5)", "On,Off"), ('5', "Unknown (SW:6)", "On,Off"), ('6', "Free Play", "On,Off"),
+    ('7', "Unknown (SW:8)", "On,Off"), ('8', "Unknown (SW:9)", "On,Off"), ('9', "Unknown (SW:10)", "On,Off"), ('10', "Unknown (SW:11)", "On,Off"),
+    ('11,12', "Difficulty", "Hardest,Hard,Easy,Normal"), ('13,15', "Coinage", COIN_POPS)]
+BUBL2000_DIPS = [
+    ('0', "Unused (SW2:8)", "On,Off"), ('1', "Unused (SW2:7)", "On,Off"), ('2,3', "Difficulty", "Hardest,Hard,Easy,Normal"),
+    ('4', "Unused (SW2:4)", "On,Off"), ('5', "Unused (SW2:3)", "On,Off"), ('6,7', "Free Credit", "1500k,1000k,500k,800k"),
+    ('8', "Unused (SW1:8)", "On,Off"), ('9', "Demo Sounds", "Off,On"), ('10,12', "Coin B", COIN_BUBL), ('13,15', "Coin A", COIN_BUBL)]
+BUBL2000A_DIPS = [
+    ('0', "Unused (SW1:8)", "On,Off"), ('1', "Unused (SW1:7)", "On,Off"), ('2,4', "Coin B", COIN_BUBL), ('5,7', "Coin A", COIN_BUBL),
+    ('8', "Unused (SW2:8)", "On,Off"), ('9', "Unused (SW2:7)", "On,Off"), ('10,11', "Difficulty", "Hardest,Hard,Easy,Normal"),
+    ('12', "Unused (SW2:4)", "On,Off"), ('13', "Unused (SW2:3)", "On,Off"), ('14,15', "Free Credit", "1500k,1000k,500k,800k")]
+MANGCHI_DIPS = [
+    ('0', "DSWS", "On,Off"), ('1', "Demo Sounds", "Off,On"), ('2', "Unknown (SW:3)", "On,Off"), ('3,4', "Vs Rounds", "5,4,3,2"),
+    ('5', "Unknown (SW:6)", "On,Off"), ('6', "Free Play", "On,Off"), ('7', "Unknown (SW:8)", "On,Off"), ('8', "Unknown (SW:9)", "On,Off"),
+    ('9', "Unknown (SW:10)", "On,Off"), ('10', "Unknown (SW:11)", "On,Off"), ('11,12', "Difficulty", "Hardest,Easy,Hard,Normal"), ('13,15', "Coinage", COIN_POPS)]
+FIREHAWK_DIPS = [
+    ('0', "Service Mode", "On,Off"), ('1,3', "Difficulty", "Hard,Hard,Hardest,Very_Easy,Easy,Easy,Very_Hard,Normal"),
+    ('4', "Demo Sounds", "Off,On"), ('5', "Number of Bombs", "3,2"), ('6,7', "Lives", "1,4,2,3"), ('8', "Unknown (SW2:8)", "On,Off"),
+    ('9', "Region", "China,World"), ('10', "Free Play", "On,Off"), ('11,12', "Continue Coins", "4 Coins,2 Coins,3 Coins,1 Coin"),
+    ('13,15', "Coinage", COIN_AFEGA)]
+SPEC2K_DIPS = [
+    ('0', "Service Mode", "On,Off"), ('1', "Demo Sounds", "Off,On"), ('2', "Free Play", "On,Off"), ('3', "Number of Bombs", "3,2"),
+    ('4', "Copyright Notice", "Off,On"), ('5', "Unknown (SW1:3)", "On,Off"), ('6,7', "Lives", "1,5,2,3"),
+    ('8', "Unknown (SW2:8)", "On,Off"), ('9', "Unknown (SW2:7)", "On,Off"), ('10', "Unknown (SW2:6)", "On,Off"),
+    ('11,12', "Difficulty", "Hardest,Easy,Hard,Normal"), ('13,15', "Coinage", COIN_AFEGA)]
+
+def afega(id, year, manufacturer, rot, dips, regions, switches="FF,FF", bg8=False):
+    return dict(id=id, year=year, manufacturer=manufacturer, rot=rot, switches=switches, dips=dips, regions=regions, afega=True, bg8=bg8)
+
+Z80 = "Z80 sound program, 0x010000"
+RH = lambda *a: afega(*a)  # noqa
+STAGGER1 = afega(23, 1998, "Afega", True, STAGGER1_DIPS, [
+    ("maincpu, 0x040000 (address-scrambled: none)", [pair(("2.bin", "8555929b"), ("3.bin", "5b0b63ac"))]),
+    (Z80, [("1.bin", "5d8cf28e")]),
+    ("bgtile, 0x080000 (4bpp)", [("4.bin", "46463d36")]),
+    ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("7.bin", "048f7683"), ("6.bin", "051d4a77"))]),
+    ("oki1, 0x040000", [("5", "e911ce33")])])
+REDHAWKE = afega(23, 1997, "Afega (Excellent Co. license)", True, STAGGER1_DIPS, [
+    ("maincpu, 0x040000", [pair(("rhawk2.bin", "6d2e23b4"), ("rhawk3.bin", "5e0d6188"))]),
+    (Z80, [("1.bin", "5d8cf28e")]),
+    ("bgtile, 0x080000 (4bpp)", [("rhawk4.bin", "d79aa288")]),
+    ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("rhawk7.bin", "0264ef54"), ("rhawk6.bin", "3f980ab6"))]),
+    ("oki1, 0x040000", [("5", "e911ce33")])])
+REDHAWKK = afega(23, 1997, "Afega", True, STAGGER1_DIPS, [
+    ("maincpu, 0x040000", [pair(("2", "8c02e81d"), ("3", "ab3597ee"))]),
+    (Z80, [("1", "5d8cf28e")]),
+    ("bgtile, 0x080000 (4bpp)", [("4", "6255d6a1")]),
+    ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("7", "f4fa8211"), ("6", "6a0b8224"))]),
+    ("oki1, 0x040000", [("5", "e911ce33")])])
+REDHAWKC = afega(23, 1997, "Afega (Zhuojia Co. license)", True, STAGGER1_DIPS, [
+    ("maincpu, 0x040000", [pair(("afega_2.bin", "34356a0f"), ("afega_3.bin", "cbaa0229"))]),
+    (Z80, [("afega_1.bin", "5d8cf28e")]),
+    ("bgtile, 0x080000 (4bpp)", [("afega_4.bin", "d6427b8a")]),
+    ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("afega_7.bin", "45d000e6"), ("afega_6.bin", "5a505a56"))]),
+    ("oki1, 0x040000", [("afega_5.bin", "e911ce33")])])
+REDHAWK = afega(24, 1997, "Afega (New Vision Ent. license)", True, STAGGER1_DIPS, [
+    ("maincpu, 0x040000 (address lines 13-17 scrambled: init_redhawk, decoded per fetch)", [pair(("2", "3ef5f326"), ("3", "9b3a10ef"))]),
+    (Z80, [("1.bin", "5d8cf28e")]),
+    ("bgtile, 0x080000 (4bpp)", [("4", "d6427b8a")]),
+    ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("7", "66a8976d"), ("6", "61560164"))]),
+    ("oki1, 0x040000", [("5", "e911ce33")])])
+REDHAWKI = afega(25, 1997, "Afega (Hae Dong Corp license)", False, STAGGER1_DIPS, [
+    ("maincpu, 0x040000 (init_redhawki scramble)", [pair(("rhit-2.bin", "30cade0e"), ("rhit-3.bin", "37dbb3c2"))]),
+    (Z80, [("1.bin", "5d8cf28e")]),
+    ("bgtile, 0x080000 (4bpp)", [("rhit-4.bin", "aafb3cc4")]),
+    ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("rhit-7.bin", "bcb367c7"), ("rhit-6.bin", "7cbd5c60"))]),
+    ("oki1, 0x040000", [("5", "e911ce33")])])
+REDHAWKS = afega(26, 1997, "Afega (Hae Dong Corp license)", False, STAGGER1_DIPS, [
+    ("maincpu, 0x040000", [pair(("2.bin", "8b427ef8"), ("3.bin", "117e3813"))]),
+    (Z80, [("1.bin", "5d8cf28e")]),
+    ("bgtile, 0x080000 (4bpp)", [("4.bin", "03a8d952")]),
+    ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("7.bin", "5c5b5fa1"), ("6.bin", "aa6564e6"))]),
+    ("oki1, 0x040000", [("5.bin", "e911ce33")])])
+REDHAWKSA = afega(27, 1997, "Afega (Hae Dong Corp license)", False, STAGGER1_DIPS, [
+    ("maincpu, 0x040000 (init_redhawksa scramble)", [pair(("2.bin", "0e428cbb"), ("3.bin", "e944627f"))]),
+    (Z80, [("1.bin", "5d8cf28e")]),
+    ("bgtile, 0x080000 (4bpp)", [("4.bin", "aafb3cc4")]),
+    ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("7.bin", "1a8c8560"), ("6.bin", "533cb5f2"))]),
+    ("oki1, 0x040000", [("5.bin", "e911ce33")])])
+REDHAWKG = afega(28, 1997, "Afega", False, STAGGER1_DIPS, [
+    ("maincpu, 0x040000 (init_redhawkg scramble)", [pair(("2.bin", "ccd459eb"), ("3.bin", "483802fd"))]),
+    (Z80, [("1.bin", "5d8cf28e")]),
+    ("bgtile, 0x080000 (4bpp)", [("4.bin", "aafb3cc4")]),
+    ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("7.bin", "a28c8454"), ("6.bin", "710c9e3c"))]),
+    ("oki1, 0x040000", [("5", "e911ce33")])])
+REDHAWKB = afega(29, 1997, "bootleg (Vince)", False, REDHAWKB_DIPS, [
+    ("maincpu, 0x040000", [pair(("rhb-1.bin", "e733ea07"), ("rhb-2.bin", "f9fa5684"))]),
+    (Z80, [("1.bin", "5d8cf28e")]),
+    ("bgtile, 0x080000 (4bpp, packed_lsb)", [("rhb-5.bin", "d0eaf6f2")]),
+    ("sprites, 0x100000 (two plain files, packed_lsb)", [("rhb-3.bin", "0318d68b"), ("rhb-4.bin", "ba21c1ef")]),
+    ("oki1, 0x040000", [("5", "e911ce33")])], switches="00,00")
+GS_BG = ("bgtile, 0x400000 (8bpp: two 4bpp halves)", [("afega_af1-b2.uc8", "d68588c2"), ("afega_af1-b1.uc3", "f8b200a8")])
+GRDNSTRM = afega(30, 1998, "Afega (Apples Industries license)", False, GRDNSTRM_DIPS, [
+    ("maincpu, 0x080000", [pair(("afega4.u112", "2244713a"), ("afega5.u107", "5815c806"))]),
+    (Z80, [("afega7.u92", "5d8cf28e")]),
+    ("fgtile, 0x010000", [("afega1.u4", "9e7ef086")]), GS_BG,
+    ("sprites, 0x200000 (plain)", [("afega3.uc13", "0218017c")]),
+    ("oki1, 0x040000", [("afega1.u95", "e911ce33")])], bg8=True)
+GRDNSTRMK = afega(31, 1998, "Afega", True, GRDNSTRK_DIPS, [
+    ("maincpu, 0x080000 (init_grdnstrm scramble)", [pair(("gst-04.u112", "922c931a"), ("gst-05.u107", "d22ca2dc"))]),
+    (Z80, [("afega7.u92", "5d8cf28e")]),
+    ("fgtile, 0x010000", [("gst-03.u4", "a1347297")]), GS_BG,
+    ("sprites, 0x200000 (plain)", [("afega_af1-sp.uc13", "7d4d4985")]),
+    ("oki1, 0x040000", [("afega1.u95", "e911ce33")])], bg8=True)
+GRDNSTRMV = afega(31, 1998, "Afega (Apples Industries license)", True, GRDNSTRK_DIPS, [
+    ("maincpu, 0x080000 (init_grdnstrm scramble)", [pair(("afega2.u112", "16d41050"), ("afega3.u107", "05920a99"))]),
+    (Z80, [("afega7.u92", "5d8cf28e")]),
+    ("fgtile, 0x010000", [("afega1.u4", "9e7ef086")]), GS_BG,
+    ("sprites, 0x200000 (plain)", [("afega6.uc13", "9b54ff84")]),
+    ("oki1, 0x040000", [("afega1.u95", "e911ce33")])], bg8=True)
+GRDNSTRMJ = afega(32, 1998, "Afega", True, GRDNSTRK_DIPS, [
+    ("maincpu, 0x080000 (init_grdnstrmg scramble)", [pair(("afega_3.u112", "e51a35fb"), ("afega_4.u107", "cb10aa54"))]),
+    (Z80, [("afega7.u92", "5d8cf28e")]),
+    ("fgtile, 0x010000", [("gst-03.u4", "a1347297")]), GS_BG,
+    ("sprites, 0x200000 (plain)", [("afega_af1-sp.uc13", "7d4d4985")]),
+    ("oki1, 0x040000", [("afega1.u95", "e911ce33")])], bg8=True)
+GRDNSTRMG = afega(33, 1998, "Afega", True, GRDNSTRK_DIPS, [
+    ("maincpu, 0x080000 (init_grdnstrmg scramble; uc9 = even MAME offsets)", [pair(("gs6_c2.uc9", "ea363e4d"), ("gs5_c1.uc1", "c0263e4a"))]),
+    (Z80, [("gs1_s1.uc14", "5d8cf28e")]),
+    ("fgtile, 0x010000", [("gs3_t1.uc2", "88c423ef")]),
+    ("bgtile, 0x200000 (8bpp: two 4bpp halves, four files)", [("gs10_cr5.uc15", "2c8c23e3"), ("gs4_cr7.uc19", "c3f6c908"), ("gs8_cr1.uc6", "dc0125f0"), ("gs9_cr3.uc12", "d8a0636b")]),
+    ("sprites, 0x200000 (two ROM_LOAD16_BYTE pairs)", [pair(("gs7_br1.uc3", "e6794265"), ("gs8_br3.uc10", "7b42a57a")), pair(("gs9_br2.uc4", "4d2c220b"), ("gs10_br4.uc11", "1d3b57e1"))]),
+    ("oki1, 0x040000", [("gs2_s2.uc18", "e911ce33")])], bg8=True)
+GRDNSTRMAU = afega(34, 1998, "Afega", False, GRDNSTRM_DIPS, [
+    ("maincpu, 0x080000 (init_grdnstrmau scramble)", [pair(("uc9_27c020.10", "548932b4"), ("uc1_27c020.9", "269e2fbc"))]),
+    (Z80, [("uc14_27c512.8", "5d8cf28e")]),
+    ("fgtile, 0x010000", [("uc2_27c512.9", "b38d8446")]),
+    ("bgtile, 0x200000 (8bpp: two 4bpp halves, four files)", [("uc15_27c040.10", "0822f7e0"), ("uc19_27c040.8", "fa078e35"), ("uc6_27c040.9", "ec288b95"), ("uc12_27c040.10", "a9ceec33")]),
+    ("sprites, 0x200000 (two ROM_LOAD16_BYTE pairs)", [pair(("uc3_27c040.8", "9fc36932"), ("uc10_27c040.9", "6e809d09")), pair(("uc4_27c040.10", "73bd6451"), ("uc11_27c040.8", "e699a3c9"))]),
+    ("oki1, 0x040000", [("uc18_27c020.9", "e911ce33")])], bg8=True)
+REDFOXWP2 = afega(35, 1998, "Afega", True, GRDNSTRK_DIPS, [
+    ("maincpu, 0x080000", [pair(("u112", "3f31600b"), ("u107", "daa44ab4"))]),
+    (Z80, [("u92", "864b55c2")]),
+    ("fgtile, 0x010000", [("u4", "19239401")]), GS_BG,
+    ("sprites, 0x200000 (plain)", [("afega_af1-sp.uc13", "7d4d4985")]),
+    ("oki1, 0x040000", [("afega1.u95", "e911ce33")])], bg8=True)
+REDFOXWP2A = afega(36, 1998, "Afega", True, GRDNSTRK_DIPS, [
+    ("maincpu, 0x080000 (init_redfoxwp2a scramble)", [pair(("afega_4.u112", "e6e6682a"), ("afega_5.u107", "2faa2ed6"))]),
+    (Z80, [("afega_1.u92", "5d8cf28e")]),
+    ("fgtile, 0x010000", [("afega_3.u4", "64608687")]), GS_BG,
+    ("sprites, 0x200000 (plain)", [("afega_af1-sp.uc13", "7d4d4985")]),
+    ("oki1, 0x040000", [("afega_2.u95", "e911ce33")])], bg8=True)
+POPSPOPS = afega(37, 1999, "Afega", False, POPSPOPS_DIPS, [
+    ("maincpu, 0x080000 (init_grdnstrm scramble)", [pair(("afega4.u112", "db191762"), ("afega5.u107", "17e0c48b"))]),
+    (Z80, [("afega1.u92", "5d8cf28e")]),
+    ("fgtile, 0x010000", [("afega3.u4", "f39dd5d2")]),
+    ("bgtile, 0x400000 (8bpp: two 4bpp halves); no sprite ROM on this board", [("afega6.uc8", "6d506c97"), ("afega7.uc3", "02d7f9de")]),
+    ("oki1, 0x040000", [("afega2.u95", "ecd8eeac")])], switches="FB,FF", bg8=True)
+MANGCHI = afega(38, 2000, "Afega", False, MANGCHI_DIPS, [
+    ("maincpu, 0x080000 (init_bubl2000 scramble)", [pair(("afega9.u112", "0b1517a5"), ("afega10.u107", "b1d0f33d"))]),
+    (Z80, [("sound.u92", "bec4f9aa")]),
+    ("bgtile, 0x100000 (8bpp: two 4bpp halves); no 8x8 ROM", [("afega5.uc6", "c73261e0"), ("afega4.uc1", "73940917")]),
+    ("sprites, 0x080000 (ROM_LOAD16_BYTE pair)", [pair(("afega6.uc11", "979efc30"), ("afega7.uc14", "c5cbcc38"))]),
+    ("oki1, 0x040000", [("afega2.u95", "78c8c1f9")])], bg8=True)
+BUBL_TAIL = [
+    (Z80, [("rom01.92", "5d8cf28e")]),
+    ("fgtile, 0x010000", [("rom03.4", "f4c15588")]),
+    ("bgtile, 0x300000 (8bpp: two 4bpp halves, six files)", [("rom06.6", "ac1aabf5"), ("rom07.9", "69aff769"), ("rom13.7", "3a5b7226"), ("rom04.1", "46acd054"), ("rom05.3", "37deb6a1"), ("rom12.2", "1fdc59dd")]),
+    ("sprites, 0x080000 (ROM_LOAD16_BYTE pair)", [pair(("rom08.11", "519dfd82"), ("rom09.14", "04fcb5c6"))]),
+    ("oki1, 0x040000", [("rom02.95", "859a86e5")])]
+BUBL2000 = afega(39, 1998, "Afega (Tuning license)", False, BUBL2000_DIPS,
+    [("maincpu, 0x040000 (init_bubl2000 scramble)", [pair(("rom10.112", "87f960d7"), ("rom11.107", "b386041a"))])] + BUBL_TAIL, bg8=True)
+BUBL2000A = afega(39, 1998, "Afega (Tuning license)", False, BUBL2000A_DIPS,
+    [("maincpu, 0x040000 (init_bubl2000 scramble)", [pair(("b-2000_n_v1.2.112", "da28624b"), ("b-2000_n_v1.2.107", "c766c1fb"))])] + BUBL_TAIL, bg8=True)
+HOTBUBL = afega(39, 1998, "Afega (Pandora license)", False, BUBL2000_DIPS, [
+    ("maincpu, 0x040000 (init_bubl2000 scramble; uc9 = even MAME offsets)", [pair(("afega9.c2.uc9", "4537c6d9"), ("afega8.c1.uc1", "d1e72a31"))]),
+    (Z80, [("afega8.s1.uc14", "5d8cf28e")]),
+    ("fgtile, 0x010000", [("afega9.t1.uc2", "ce683a93")]),
+    ("bgtile, 0x300000 (8bpp: two 4bpp halves, six files in region order)", [("afega10.cr5.uc15", "65bd5159"), ("afega10.cr7.uc19", "a89d9ce4"), ("afega9.cr6.uc16", "99d6523c"), ("afega8.cr1.uc6", "fc9101d2"), ("afega9.cr3.uc12", "c841a4f6"), ("afega9.cr2.uc7", "27ad6fc8")]),
+    ("sprites, 0x080000 (ROM_LOAD16_BYTE pair)", [pair(("afega10.br1.uc3", "7e132eff"), ("afega8.br3.uc10", "22707728"))]),
+    ("oki1, 0x040000", [("afega8.s2.uc18", "401c980f")])], bg8=True)
+HOTBUBLA = afega(43, 1998, "Afega (Pandora license)", False, BUBL2000_DIPS, [
+    ("maincpu, 0x080000 (init_bubl2000 scramble; 0x40000 files, halves identical; uc9 = even MAME offsets)", [pair(("7_c2.uc9", "74eb11c3"), ("6_c1.uc1", "7c65bf47"))]),
+    (Z80, [("1_s1.uc14", "5d8cf28e")]),
+    ("fgtile, 0x010000", [("2_t1.uc2", "ce683a93")]),
+    ("bgtile, 0x300000 (8bpp: two 4bpp halves, six files in region order)", [("2_cr5.uc15", "dd7e92de"), ("5_cr7.uc19", "d293f1d0"), ("5_cr6.uc16", "324429c5"), ("8_cr1.uc6", "7e2840b4"), ("10_cr3.uc12", "312c38d8"), ("9_cr2.uc7", "c5516087")]),
+    ("sprites, 0x080000 (ROM_LOAD16_BYTE pair)", [pair(("8_br1.uc3", "7e132eff"), ("9_br3.uc10", "22707728"))]),
+    ("oki1, 0x040000", [("1_s2.uc18", "401c980f")])], bg8=True)
+FIREHAWK = afega(40, 2001, "ESD", False, FIREHAWK_DIPS, [
+    ("maincpu, 0x100000 (firehawk_map; u60 = even MAME offsets)", [pair(("fhawk_p2.u60", "9f35d245"), ("fhawk_p1.u59", "d6d71a50"))]),
+    ("Z80 sound program, 0x020000", [("fhawk_s1.u40", "c6609c39")]),
+    ("bgtile, 0x400000 (8bpp: two 4bpp halves); no 8x8 ROM", [("fhawk_g1.uc6", "2ab0b06b"), ("fhawk_g2.uc5", "d11bfa20")]),
+    ("sprites, 0x200000 (plain)", [("fhawk_g3.uc2", "cae72ff4")]),
+    ("oki1, 0x040000", [("fhawk_s2.u36", "d16aaaad")]),
+    ("oki2, 0x040000", [("fhawk_s3.u41", "3fdcfac2")])], bg8=True)
+SPEC2K = afega(41, 2000, "Yona Tech", True, SPEC2K_DIPS, [
+    ("maincpu, 0x080000 (init_spec2k scramble)", [pair(("u124", "dbd6f65d"), ("u120", "be53e243"))]),
+    (Z80, [("u103", "f4e4fb10")]),
+    ("fgtile, 0x020000", [("u3", "921503b8")]),
+    ("bgtile, 0x400000 (8bpp: two 4bpp halves)", [("uc3", "1d087122"), ("uc2", "998dc05c")]),
+    ("sprites, 0x200000 (plain)", [("uc1", "3139a213")]),
+    ("oki1, 0x040000", [("u101", "d16aaaad")]),
+    ("oki2, 0x080000 (two banks, Z80 0xFFF2)", [("u106", "65d61f3a")])], bg8=True)
+SPEC2KH = afega(42, 2000, "Yona Tech", False, SPEC2K_DIPS, [
+    ("maincpu, 0x080000 (init_spec2k scramble)", [pair(("yonatech5.u124", "72ab5c05"), ("yonatech6.u120", "7e44bd9c"))]),
+    (Z80, [("yonatech1.u103", "ef5acda7")]),
+    ("fgtile, 0x020000", [("yonatech4.u3", "5626b08e")]),
+    ("bgtile, 0x400000 (8bpp: two 4bpp halves)", [("u153.bin", "a00bbf8f"), ("u152.bin", "f6423fab")]),
+    ("sprites, 0x200000 (plain)", [("u154.bin", "f77b764e")]),
+    ("oki1, 0x020000", [("yonatech2.u101", "4160f172")]),
+    ("oki2, 0x080000 (two banks, Z80 0xFFF2)", [("yonatech3.u106", "6644c404")])], bg8=True)
+
 # setname, description, GAME() line, parent spec, parent setname (for the zip
 # search list) and region overrides: {old part name: (new name, crc)}.
 SETS = [
@@ -527,8 +760,65 @@ SETS = [
     ("tharrieru",   "Task Force Harrier (US)",                                     10700, THARRIER, "tharrier",
      {"2.18b": ("u_2.18b", "78923aaa"), "3.21b": ("u_3.21b", "99cea259"), "1.13b": ("1.13b", "c7402e4a")}),
     ("vandykeb",    "Vandyke (bootleg with PIC16c57)",                             10711, VANDYKEB, "vandyke", {}),
+    # Afega (Family H)
+    ("stagger1",    "Stagger I (Japan)",                                           10815, STAGGER1, None, {}),
+    ("redhawk",     "Red Hawk (USA, Canada & South America)",                      10816, REDHAWK, "stagger1", {}),
+    ("redhawki",    "Red Hawk (horizontal, Italy)",                                10817, REDHAWKI, "stagger1", {}),
+    ("redhawks",    "Red Hawk (horizontal, Spain, set 1)",                         10818, REDHAWKS, "stagger1", {}),
+    ("redhawksa",   "Red Hawk (horizontal, Spain, set 2)",                         10819, REDHAWKSA, "stagger1", {}),
+    ("redhawkg",    "Red Hawk (horizontal, Greece)",                               10820, REDHAWKG, "stagger1", {}),
+    ("redhawke",    "Red Hawk (Excellent Co., Ltd)",                               10821, REDHAWKE, "stagger1", {}),
+    ("redhawkk",    "Red Hawk (Korea)",                                            10822, REDHAWKK, "stagger1", {}),
+    ("redhawkc",    "Red Hawk (China & Hong Kong)",                                10823, REDHAWKC, "stagger1", {}),
+    ("redhawkb",    "Red Hawk (horizontal, bootleg)",                              10824, REDHAWKB, "stagger1", {}),
+    ("grdnstrm",    "Guardian Storm (horizontal, not encrypted)",                  10826, GRDNSTRM, None, {}),
+    ("grdnstrmv",   "Guardian Storm (vertical)",                                   10827, GRDNSTRMV, "grdnstrm", {}),
+    ("grdnstrmj",   "Sen Jing - Guardian Storm (Japan)",                           10828, GRDNSTRMJ, "grdnstrm", {}),
+    ("grdnstrmk",   "Jeon Sin - Guardian Storm (Korea)",                           10829, GRDNSTRMK, "grdnstrm", {}),
+    ("redfoxwp2",   "Hong Hu Zhanji II (China, set 1)",                            10830, REDFOXWP2, "grdnstrm", {}),
+    ("redfoxwp2a",  "Hong Hu Zhanji II (China, set 2)",                            10831, REDFOXWP2A, "grdnstrm", {}),
+    ("grdnstrmg",   "Guardian Storm (Germany)",                                    10832, GRDNSTRMG, "grdnstrm", {}),
+    ("grdnstrmau",  "Guardian Storm (horizontal, Australia)",                      10833, GRDNSTRMAU, "grdnstrm", {}),
+    ("bubl2000",    "Bubble 2000",                                                 10836, BUBL2000, None, {}),
+    ("bubl2000a",   "Bubble 2000 V1.2",                                            10837, BUBL2000A, "bubl2000", {}),
+    ("hotbubl",     "Hot Bubble (Korea, with adult pictures)",                     10838, HOTBUBL, "bubl2000", {}),
+    ("hotbubla",    "Hot Bubble (Korea)",                                          10839, HOTBUBLA, "bubl2000", {}),
+    ("popspops",    "Pop's Pop's",                                                 10841, POPSPOPS, None, {}),
+    ("mangchi",     "Mang-Chi",                                                    10843, MANGCHI, None, {}),
+    ("spec2k",      "Spectrum 2000 (vertical, Korea)",                             10846, SPEC2K, None, {}),
+    ("spec2kh",     "Spectrum 2000 (horizontal, buggy) (Europe)",                  10847, SPEC2KH, "spec2k", {}),
+    ("firehawk",    "Fire Hawk (World) / Huohu Chuanshuo (China) (horizontal)",    10848, FIREHAWK, "spec2k", {}),
 ]
 
+
+_ZIP_CACHE = {}
+def _zip_index(setname, parent):
+    """{name: crc} over the set's zips (set, parent, nmk004) and {crc: name} over the parent's."""
+    key = (setname, parent)
+    if key not in _ZIP_CACHE:
+        import zipfile
+        roms = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "mame_roms")
+        names, bycrc = {}, {}
+        for z in [setname + ".zip"] + ([parent + ".zip"] if parent else []):
+            p = os.path.join(roms, z)
+            if not os.path.exists(p):
+                continue
+            for i in zipfile.ZipFile(p).infolist():
+                names.setdefault(i.filename, "%08x" % i.CRC)
+                bycrc.setdefault("%08x" % i.CRC, i.filename)
+        _ZIP_CACHE[key] = (names, bycrc)
+    return _ZIP_CACHE[key]
+
+_RESOLVE = None  # (setname, parent) of the set being generated, see main()
+def resolve_name(name, crc):
+    """A split clone zip omits the files identical to its parent's; the .mra
+    (MiSTer matches by name) then needs the PARENT's name for that file."""
+    if _RESOLVE is None:
+        return name
+    names, bycrc = _zip_index(*_RESOLVE)
+    if name in names or crc not in bycrc:
+        return name
+    return bycrc[crc]
 
 def part_lines(parts, overrides):
     out = []
@@ -542,8 +832,8 @@ def part_lines(parts, overrides):
             even = overrides.get(even[0], even)
             odd = overrides.get(odd[0], odd)
             out.append('    <interleave output="16">\n')
-            out.append(f'      <part crc="{odd[1]}" name="{odd[0]}" map="01"/>\n')
-            out.append(f'      <part crc="{even[1]}" name="{even[0]}" map="10"/>\n')
+            out.append(f'      <part crc="{odd[1]}" name="{resolve_name(odd[0], odd[1])}" map="01"/>\n')
+            out.append(f'      <part crc="{even[1]}" name="{resolve_name(even[0], even[1])}" map="10"/>\n')
             out.append('    </interleave>\n')
         elif p[0] == "slice":
             _, n, c, off, ln = p
@@ -553,7 +843,7 @@ def part_lines(parts, overrides):
             out.append(f'    <part repeat="0x{p[1]:X}">00</part>\n')
         else:
             n, c = overrides.get(p[0], p)
-            out.append(f'    <part crc="{c}" name="{n}"/>\n')
+            out.append(f'    <part crc="{c}" name="{resolve_name(n, c)}"/>\n')
     return "".join(out)
 
 
@@ -605,8 +895,10 @@ def ioctl_args(setname):
     """mk_ioctl_stream.py arguments for a set's hardware-sim download stream
     (the same layout as the .mra): region offsets from the zip member sizes."""
     import zipfile
+    global _RESOLVE
     entry = [e for e in SETS if e[0] == setname][0]
     _, _, _, spec, parent, overrides = entry
+    _RESOLVE = (setname, parent)  # parent-name substitution for split clone zips, as in the .mra
     zips = [setname + ".zip"] + ([parent + ".zip"] if parent else []) + ["nmk004.zip"]
     roms = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "mame_roms")
     zf = [zipfile.ZipFile(os.path.join(roms, z)) for z in zips]
@@ -625,25 +917,86 @@ def ioctl_args(setname):
                 if "pair:" + even[0] in overrides:
                     n = overrides["pair:" + even[0]][0]; elems.append(n); ln += size(n); continue
                 even = overrides.get(even[0], even); odd = overrides.get(odd[0], odd)
-                elems.append(f"{odd[0]}+{even[0]}"); ln += size(even[0]) + size(odd[0])
+                en, on = resolve_name(even[0], even[1]), resolve_name(odd[0], odd[1])
+                elems.append(f"{on}+{en}"); ln += size(en) + size(on)
             elif p[0] == "slice":
                 n = overrides.get(p[1], (p[1], p[2]))[0]
                 elems.append(f"{n}@0x{p[3]:X}/0x{p[4]:X}"); ln += p[4]
             elif p[0] == "fill":
                 elems.append(f"zero/0x{p[1]:X}"); ln += p[1]
             else:
-                n = overrides.get(p[0], p)[0]; elems.append(n); ln += size(n)
+                n, c = overrides.get(p[0], p); n = resolve_name(n, c); elems.append(n); ln += size(n)
         args.append(f"--region 0x{off:06X}:{','.join(elems)}")
         off += ln
     return " ".join(args)
 
 
+def sim_roms(setname, outdir):
+    """Write the HW_ROMS=0 reference-sim hex files for a set from its zips:
+    <set>_maincpu.hex (16-bit words, MAME region order), and byte hex files
+    for audiocpu, fgtile, bgtile (+ bg2tile = the second half of an 8bpp
+    region), sprites (region order), oki1, oki2. Absent regions get a
+    small all-FF file so $readmemh has something to open."""
+    import zipfile
+    global _RESOLVE
+    entry = [e for e in SETS if e[0] == setname][0]
+    _, _, _, spec, parent, overrides = entry
+    _RESOLVE = (setname, parent)
+    roms = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "mame_roms")
+    zf = [zipfile.ZipFile(os.path.join(roms, z)) for z in [setname + ".zip"] + ([parent + ".zip"] if parent else []) + ["nmk004.zip"]
+          if os.path.exists(os.path.join(roms, z))]
+    def rd(name, crc):
+        name = resolve_name(overrides.get(name, (name, crc))[0], overrides.get(name, (name, crc))[1])
+        for z in zf:
+            if name in z.namelist():
+                return z.read(name)
+        raise SystemExit(f"{name} not found for {setname}")
+    regions = {}
+    for comment, parts in spec["regions"]:
+        kind = comment.split(",")[0].split(" ")[0]
+        if kind == "Z80" or kind == "NMK004" and "external" in comment: kind = "audiocpu"
+        buf = bytearray()
+        for p in parts:
+            if p[0] == "pair":
+                e, o = rd(p[1][0], p[1][1]), rd(p[2][0], p[2][1])
+                b = bytearray(len(e) * 2); b[0::2] = e; b[1::2] = o; buf += b
+            elif p[0] == "slice":
+                buf += rd(p[1], p[2])[p[3]:p[3] + p[4]]
+            elif p[0] == "fill":
+                buf += bytes(p[1])
+            else:
+                buf += rd(p[0], p[1])
+        regions[kind] = bytes(buf)
+    os.makedirs(outdir, exist_ok=True)
+    def wbytes(kind, data):
+        with open(os.path.join(outdir, f"{setname}_{kind}.hex"), "w") as f:
+            f.write("".join("%02x\n" % b for b in data))
+    m = regions["maincpu"]
+    with open(os.path.join(outdir, f"{setname}_maincpu.hex"), "w") as f:
+        f.write("".join("%02x%02x\n" % (m[i], m[i + 1]) for i in range(0, len(m), 2)))
+    for kind in ("audiocpu", "fgtile", "bgtile", "sprites", "oki1", "oki2"):
+        data = regions.get(kind)
+        if data is None:
+            data = bytes([0xFF]) * (0x10000 if kind in ("fgtile", "audiocpu") else 0x1000)
+        wbytes(kind, data)
+    if spec.get("bg8"):
+        b = regions["bgtile"]
+        wbytes("bgtile", b[:len(b) // 2])
+        wbytes("bg2tile", b[len(b) // 2:])
+    print("wrote", setname, "sim roms to", outdir, {k: hex(len(v)) for k, v in regions.items()})
+
+
 def main():
     import sys
+    global _RESOLVE
     if len(sys.argv) > 2 and sys.argv[1] == "--ioctl":
         print(ioctl_args(sys.argv[2]))
         return
+    if len(sys.argv) > 3 and sys.argv[1] == "--simroms":
+        sim_roms(sys.argv[2], sys.argv[3])
+        return
     for setname, desc, line, spec, parent, overrides in SETS:
+        _RESOLVE = (setname, parent)
         # exFAT/FAT (the MiSTer SD card) reject '?' and '/' in file names — the
         # bjtwinp/bjtwinpa .mra files silently failed to copy with MAME's title.
         fname = desc.replace(" / ", " - ").replace("/", "-").replace("?", "") + ".mra"

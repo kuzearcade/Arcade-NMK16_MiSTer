@@ -47,7 +47,7 @@
     <!-- NMK-215 protection MCU ROM, 0x002000 (read into the MCU from SDRAM after reset) -->
     <part crc="d355a06f" name="nmk-215.bin"/>
     <!-- fgtile, 0x010000 -->
-    <part crc="aa13df7c" name="ic35.bin"/>
+    <part crc="aa13df7c" name="93087-3.bin"/>
     <!-- bgtile, 0x180000 (3 files, NMK214-scrambled) -->
     <part crc="e2d2b331" name="ic32_1.bin"/>
     <part crc="28a3a845" name="ic32_2.bin"/>
