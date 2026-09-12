@@ -58,6 +58,15 @@ SEL_mangchi  := 38
 SEL_bubl2000 := 39
 SEL_firehawk := 40
 SEL_spec2k   := 41
+SEL_mustangb := 44
+SEL_mustangb2 := 44
+SEL_acrobatmbl := 45
+SEL_hachamfb2 := 46
+SEL_tdragonb := 47
+SEL_tdragonb3 := 48
+SEL_strahljbl := 49
+SEL_gunnailb := 50
+SEL_tomagic  := 51
 SEL := $(SEL_$(GAME))
 
 SOURCES := $(TOP).sv $(CORE_DIR)/gunnail_core.sv $(MACROSS2_DIR)/video_macross2.sv \
@@ -65,7 +74,7 @@ SOURCES := $(TOP).sv $(CORE_DIR)/gunnail_core.sv $(MACROSS2_DIR)/video_macross2.
            $(NMK112_DIR)/nmk112.sv $(BJTWIN_DIR)/video_timing.sv $(BJTWIN_DIR)/nmk_irq_hacky.sv $(NMK_IRQ_DIR)/nmk_irq.sv \
            $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
            $(RTL_DIR)/sdram.sv $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv \
-           $(RTL_DIR)/third_party_gen/t80/T80s.v $(RTL_DIR)/third_party/jt51/hdl/jt51.v $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv $(RTL_DIR)/rom_cache1_byte.sv $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(MODEL_DIR)/sdram_model.sv
+           $(RTL_DIR)/third_party_gen/t80/T80s.v $(RTL_DIR)/third_party/jt51/hdl/jt51.v $(RTL_DIR)/seibu/seibu_sound.sv $(RTL_DIR)/third_party/jtopl/hdl/jtopl2.v $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv $(RTL_DIR)/rom_cache1_byte.sv $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(MODEL_DIR)/sdram_model.sv
 
 .PHONY: all roms run clean
 
@@ -82,7 +91,7 @@ $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gunnail_mg_hw.cpp $(FX68K_DIR)/fx68k.sv roms/$
 		--Mdir $(OBJ_DIR) +define+SIMULATION +define+OKI_CACHE_DIAG \
 		-GGAME_SEL=$(SEL) -GVTIMING_FILE=\"../../../roms/gunnail_multi_vtiming.hex\" \
 		-GROM_FILE=\"$(R)_maincpu.hex\" -GOKI1_ROM_FILE=\"$(R)_oki1.hex\" -GOKI2_ROM_FILE=\"$(R)_oki2.hex\" \
-		-y $(FX68K_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl -y $(RTL_DIR)/third_party/jt51/hdl \
+		-y $(FX68K_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl -y $(RTL_DIR)/third_party/jt51/hdl -y $(RTL_DIR)/third_party/jtopl/hdl \
 		$(SOURCES) $(FX68K_DIR)/fx68k.sv $(FX68K_DIR)/fx68kAlu.sv $(FX68K_DIR)/uaddrPla.sv \
 		tb_gunnail_mg_hw.cpp \
 		-o V$(TOP)

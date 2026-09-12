@@ -113,7 +113,9 @@ wire        game_vertical = (game_sel == 6'd0) | (game_sel == 6'd1) | (game_sel 
                             (game_sel == 6'd14) | (game_sel == 6'd15) | (game_sel == 6'd16) | (game_sel == 6'd20) | (game_sel == 6'd21) |
                             // Afega ROT270 sets: stagger1/redhawk(e/k/c), grdnstrmk/v/j/g, redfoxwp2/a, spec2k
                             (game_sel == 6'd23) | (game_sel == 6'd24) | (game_sel == 6'd31) | (game_sel == 6'd32) | (game_sel == 6'd33) |
-                            (game_sel == 6'd35) | (game_sel == 6'd36) | (game_sel == 6'd41);
+                            (game_sel == 6'd35) | (game_sel == 6'd36) | (game_sel == 6'd41) |
+                            // Family E ROT270 sets: acrobatmbl, tdragonb, tdragonb3, gunnailb
+                            (game_sel == 6'd45) | (game_sel == 6'd47) | (game_sel == 6'd48) | (game_sel == 6'd50);
 // MAME ORIENTATION_FLIP_Y sets (grdnstrm, grdnstrmau, firehawk, spec2kh): the
 // board draws upside down for a monitor mounted that way; the picture is
 // read out bottom-up (rd_y mirrored) so it displays upright, as MAME does.
@@ -292,8 +294,10 @@ end
 // mustang and tharrier read ONE 16-bit DSW port at 0x080004 (SW2 in the
 // low byte, SW1 in the high byte), so their second switch byte rides in
 // dsw1's high half; every other board reads two byte-wide ports.
-wire        game_mustang = (game_sel == 6'd3) | (game_sel == 6'd12) | (game_sel == 6'd20) | (game_sel == 6'd22) | (game_sel >= 6'd23); // mustang, mustangs, tharrier, mustangb3 and every Afega board: one 16-bit DSW port
-wire [15:0] dsw1_i = {game_mustang ? dip_sw[1] : 8'hFF, dip_sw[0]};
+wire        game_mustang = (game_sel == 6'd3) | (game_sel == 6'd12) | (game_sel == 6'd20) | (game_sel == 6'd22) | ((game_sel >= 6'd23) & (game_sel <= 6'd44)); // mustang, mustangs, tharrier, mustangb3, every Afega board and mustangb: one 16-bit DSW port
+// acrobatmbl reads its DSW1 word with SW1 in the HIGH byte ("changed from move.w to move.b"), DSW2 as acrobatm
+wire        game_dsw1_hi = (game_sel == 6'd45);
+wire [15:0] dsw1_i = game_dsw1_hi ? {dip_sw[0], 8'hFF} : {game_mustang ? dip_sw[1] : 8'hFF, dip_sw[0]};
 wire [15:0] dsw2_i = {8'hFF, dip_sw[1]};
 // Game select: the <switches> third byte (gunnail_core.sv's game table:
 // 0 gunnail, 1 macross, 2 blkheart, 3 mustang, 4 bioship, 5 vandyke,

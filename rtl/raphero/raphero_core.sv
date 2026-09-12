@@ -1277,7 +1277,7 @@ module raphero_core #(
 		.nmk214_cfg_we(1'b0), .nmk214_cfg_data(8'h00),
 		.scrollram_row(vid_scrollram_row), .scrollramy_row(vid_scrollramy_row),
 		.bg_bank(bgbank_reg),
-		.game_powerins(1'b0), .tile_lsb(1'b0), .bg_8bpp(1'b0), .bg_code_mod12k(1'b0), .tx_xscroll(9'd0), .tx_off(1'b0), .spr_off(1'b0), .base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE), .base_word_sprites(BASE_WORD_SPRITES),
+		.game_powerins(1'b0), .tile_lsb(1'b0), .bg_8bpp(1'b0), .bg_code_mod12k(1'b0), .tx_xscroll(9'd0), .tx_off(1'b0), .spr_off(1'b0), .gfx_swap34(1'b0), .spr_bitrev(1'b0), .base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE), .base_word_sprites(BASE_WORD_SPRITES),
 		.lowres(1'b0), .raster_scroll(1'b1), .cfg_rt(1'b0), .bga_pal_base_i(11'd0), .bgb_pal_base_i(11'd0), .spr_pal_base_i(11'd0), .tx_pal_base_i(11'd0),
 		.bga_code_mask_i(14'd0), .bgb_code_mask_i(14'd0), .spr_units_i(18'd0), .sprdma_word_base(15'h4000), .nmk214_en(1'b1), .spr_swap(1'b1), .tx_bg_mode(1'b0), .tx_yscroll(8'd0), .tx_bank_off(24'd0), .spr_flip_en(1'b0), .spr_lag1(1'b0), .vis_start(1'b0),
 		.bg2_en(1'b0), .bga_rom2(1'b0), .bgb_rom2(1'b0), .base_word_bgtile_b(23'd0), .bgvram_b_addr(), .bgvram_b_data(16'd0), .bgb_xscroll(16'd0), .bgb_yscroll(16'd0),

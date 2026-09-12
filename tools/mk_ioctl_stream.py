@@ -51,6 +51,12 @@ def main():
     zips = [zipfile.ZipFile(zp) for zp in args.zip]
 
     def read_member(fn):
+        # "file@OFF/LEN" slices are accepted here too (a ROM_LOAD16_BYTE pair
+        # whose files are only half used: hachamfb2's ROM_IGNORE sprites)
+        if "@" in fn:
+            name, rest = fn.split("@", 1)
+            off, ln = (int(v, 0) for v in rest.split("/", 1))
+            return read_member(name)[off:off + ln]
         for z in zips:
             if fn in z.namelist():
                 return z.read(fn)
