@@ -48,8 +48,13 @@ BODY = '''<misterromdescription>
        clear, SW1:6 "Unused" off = bit2 set, SW1:5 "Unused" off = bit3
        clear, Normal, 3 lives), DSW2 default 0xFF. Byte order matches
        raphero_core.sv's decode (sel_dsw1 at 0x100008, sel_dsw2 at
-       0x10000A). ids are listed in bit-value order (value 0 first). -->
-  <switches default="F5,FF">
+       0x10000A). ids are listed in bit-value order (value 0 first).
+       Third byte 0x00 is not a <dip> (no OSD entry over it): bit 6 is
+       Raphero.sv's hidden "unlock P1/P2 Autofire menu" flag (see its
+       autofire_unlock comment) — 00 keeps the menu hidden, same as
+       every other game on this rbf. Without this explicit byte the
+       core reads the idle 0xFF default and the flag reads set. -->
+  <switches default="F5,FF,00">
     <dip bits="0" name="Service Mode" ids="On,Off"/> <!-- PORT_SERVICE_DIPLOC, active low -->
     <dip bits="1" name="Language" ids="English,Japanese"/>
     <dip bits="2" name="Unused (SW1:6)" ids="On,Off"/>

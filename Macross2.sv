@@ -117,8 +117,14 @@ localparam CONF_STR = {
 	// macross2.mra declares the full 5-entry <buttons> list (see the
 	// gamepad Coin note in docs/hw-bringup.md), so a gamepad's Button 3
 	// is mapped and reaches this OR path. See the autofire block below.
-	"O[12:10],P1 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
-	"O[15:13],P2 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
+	// Hidden (h1) unless the loaded .mra's own <switches> third byte sets
+	// bit 6 (autofire_unlock below) — off by default for every game on
+	// this rbf; a specific .mra can opt in by adding that bit to its own
+	// <switches default="..."> byte 2, same mechanism as game_macross2/
+	// game_powerins. The options themselves still default to Off either
+	// way, this only controls whether the menu entries are shown at all.
+	"h1O[12:10],P1 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
+	"h1O[15:13],P2 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
 	"-;",
 	// "DIP;" is where MiSTer inserts the DIP-switch submenu it builds from
 	// the loaded .mra's <switches>/<dip> entries (releases/*.mra declare
@@ -141,6 +147,7 @@ wire        forced_scandoubler;
 wire        direct_video;
 wire        game_macross2; // runtime game select, assigned from the .mra <switches> byte below
 wire        game_powerins; // Power Instinct select, same byte bit 1 (see below)
+wire        autofire_unlock; // hidden .mra flag, same byte bit 6 (see below) — unhides P1/P2 Autofire
 wire  [1:0] buttons;
 wire [127:0] status;
 wire  [10:0] ps2_key;
@@ -164,7 +171,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({direct_video, 1'b0, game_macross2 | game_powerins | direct_video}), // [2] hides Flip screen (direct video only), [1] unused, [0] hides Orientation (macross2/powerins are horizontal; direct video)
+	.status_menumask({direct_video, autofire_unlock, game_macross2 | game_powerins | direct_video}), // [2] hides Flip screen (direct video only), [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation (macross2/powerins are horizontal; direct video)
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -478,6 +485,10 @@ wire game_tdragon3h  = dip_sw[2][2];
 wire game_pi_bootleg = dip_sw[2][3];
 wire game_pi_nosnd   = dip_sw[2][4];
 wire game_pi_gfxlsb  = dip_sw[2][5];
+// Byte 2 bit 6: hidden "unlock P1/P2 Autofire menu" flag — see the
+// status_menumask/CONF_STR h1 wiring above. Off (hidden) for every
+// current .mra, since none of them set it.
+assign autofire_unlock = dip_sw[2][6];
 wire        ce_pix_core;
 wire [9:0]  hcount_core, vcount_core;
 // hblank_core/vblank_core are declared above the autofire block (frame tick).

@@ -87,8 +87,13 @@ localparam CONF_STR = {
 	// clocked by the game's own vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3,
 	// 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1 (this game has no third button
 	// to double as a plain fire).
-	"O[12:10],P1 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
-	"O[15:13],P2 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
+	// Hidden (h1) unless the loaded .mra's own <switches> third byte sets
+	// bit 6 (autofire_unlock below, same convention as game_sel) — off by
+	// default for all 71+ sets on this rbf; a specific .mra opts in by
+	// adding that bit to its own <switches default="..."> byte 2. The
+	// options themselves still default to Off either way.
+	"h1O[12:10],P1 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
+	"h1O[15:13],P2 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
 	"-;",
 	// "DIP;" is where MiSTer inserts the DIP-switch submenu it builds from
 	// the loaded .mra's <switches>/<dip> entries. Changes arrive through
@@ -120,6 +125,7 @@ wire        game_vertical = (game_sel == 6'd0) | (game_sel == 6'd1) | (game_sel 
 // board draws upside down for a monitor mounted that way; the picture is
 // read out bottom-up (rd_y mirrored) so it displays upright, as MAME does.
 wire        game_flip_y = (game_sel == 6'd30) | (game_sel == 6'd34) | (game_sel == 6'd40) | (game_sel == 6'd42);
+wire        autofire_unlock; // hidden .mra flag, <switches> byte 2 bit 6 (below) — unhides P1/P2 Autofire
 wire [127:0] status;
 wire  [10:0] ps2_key;
 wire [31:0] joystick_0, joystick_1;
@@ -143,7 +149,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({1'b0, direct_video | ~game_vertical}), // [0] hides Orientation and Flip screen (both H0) for direct video and the horizontal games
+	.status_menumask({autofire_unlock, direct_video | ~game_vertical}), // [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation and Flip screen (both H0) for direct video and the horizontal games
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -307,6 +313,11 @@ wire [15:0] dsw2_i = {8'hFF, dip_sw[1]};
 // 21 vandykeb). An .mra with only two switch bytes leaves it at the idle
 // 0xFF, which is gunnail.
 assign game_sel = (dip_sw[2] == 8'hFF) ? 6'd0 : dip_sw[2][5:0];
+// Byte 2 bit 6: hidden "unlock P1/P2 Autofire menu" flag — see the
+// status_menumask/CONF_STR h1 wiring above. Off (hidden) for every
+// current .mra, since none of them set it, and for the idle-0xFF
+// two-byte-switches case above (gunnail.mra's own fallback path).
+assign autofire_unlock = (dip_sw[2] == 8'hFF) ? 1'b0 : dip_sw[2][6];
 
 // ------------------------------------------------------------------
 // SDRAM — single physical rtl/sdram.sv instance, 4 ports. The

@@ -83,8 +83,13 @@ localparam CONF_STR = {
 	// clocked by the game's own vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3,
 	// 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1. While enabled for a player,
 	// that player's button 3 is a plain (non-autofire) button 1.
-	"O[12:10],P1 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
-	"O[15:13],P2 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
+	// Hidden (h1) unless the loaded .mra's own <switches> third byte sets
+	// bit 6 (autofire_unlock below, same convention as Macross2.sv/
+	// Gunnail.sv) — off by default for all three games on this rbf; a
+	// specific .mra opts in by adding a third <switches> byte with that
+	// bit set. The options themselves still default to Off either way.
+	"h1O[12:10],P1 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
+	"h1O[15:13],P2 Autofire,Off,10Hz,12Hz,15Hz,20Hz,30Hz;",
 	"-;",
 	// "DIP;" is where MiSTer inserts the DIP-switch submenu it builds from
 	// the loaded .mra's <switches>/<dip> entries. Changes arrive through
@@ -99,6 +104,7 @@ localparam CONF_STR = {
 
 wire        forced_scandoubler;
 wire        direct_video;
+wire        autofire_unlock; // hidden .mra flag, <switches> byte 2 bit 6 (below) — unhides P1/P2 Autofire
 wire  [1:0] buttons;
 wire [127:0] status;
 wire  [10:0] ps2_key;
@@ -123,7 +129,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({1'b0, direct_video}), // [0] hides Orientation and Flip screen (both H0) for direct video
+	.status_menumask({autofire_unlock, direct_video}), // [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation and Flip screen (both H0) for direct video
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -276,6 +282,13 @@ end
 // MAME's Service Mode key, on top of whatever the OSD DIP setting is.
 wire [15:0] dsw1_i = {8'hFF, dip_sw[0] ^ {7'd0, kb_test_mode}};
 wire [15:0] dsw2_i = {8'hFF, dip_sw[1]};
+// Byte 2 bit 6: hidden "unlock P1/P2 Autofire menu" flag — same
+// convention as Macross2.sv/Gunnail.sv's own hidden <switches> bits.
+// This rbf's three .mra files must send an explicit third byte (even
+// though no <dip> entry ever used it before) or this reads the idle
+// 0xFF default and unhides the menu for everyone — see their own
+// <switches default="..."> header comments.
+assign autofire_unlock = dip_sw[2][6];
 
 // ------------------------------------------------------------------
 // SDRAM — single physical rtl/sdram.sv instance, 4 ports. The
