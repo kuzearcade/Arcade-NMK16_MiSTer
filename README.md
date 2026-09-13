@@ -33,8 +33,9 @@ the built core.
 ## Status
 
 Three cores run on real hardware and match MAME frame by frame in the
-scenes that can be compared. 80 game sets ship as `releases/*.mra`
-files, one per MAME set:
+scenes that can be compared. 89 game sets ship as `.mra` files under
+`releases/` (the parent of each group at the top level, its clones
+under `releases/_alternatives/_<parent>/`), one per MAME set:
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
@@ -51,7 +52,8 @@ Afega clone sets other than the eleven configurations listed in
 whole attract sequence that timing allows, and pixel-identical in
 hardware screenshots of static scenes (`docs/hw-bringup.md` has the
 per-game results). Audio is compared band by band against MAME
-captures. `SdramTest` is a hardware diagnostic, not a game.
+captures. `tools/SdramTest.mra` is a hardware diagnostic, not a game,
+and is not one of the 89.
 
 The single-game reference ports under `rtl/<game>/` with a matching
 testbench under `sim/rtl/<game>/` (the Family E bootlegs mustangb,
@@ -86,7 +88,11 @@ verification results.
 ## Using the cores
 
 1. Copy the `.rbf` from `releases/` to `_Arcade/cores/` on the MiSTer
-   SD card and the matching `.mra` files to `_Arcade/`.
+   SD card and the matching `.mra` file(s) to `_Arcade/`. Each parent
+   `.mra` sits directly under `releases/`; its clone sets (alternate
+   regions, bootlegs, revisions) are one level down, under
+   `releases/_alternatives/_<parent name>/` — grab those too if you
+   want a specific clone rather than the parent set.
 2. Place the MAME romset zips under `games/mame/`. The `.mra` files
    name the exact zips and the checksums they were generated from. ROMs
    are not included in this repository.
