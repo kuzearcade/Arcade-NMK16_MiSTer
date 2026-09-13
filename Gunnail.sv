@@ -312,7 +312,21 @@ wire [15:0] dsw2_i = {8'hFF, dip_sw[1]};
 // 17 sabotenb/nouryoku, 18 cactus, 19 nouryokup, 20 tharrier,
 // 21 vandykeb). An .mra with only two switch bytes leaves it at the idle
 // 0xFF, which is gunnail.
-assign game_sel = (dip_sw[2] == 8'hFF) ? 6'd0 : dip_sw[2][5:0];
+// game_sel is STATIC for a session: the .mra sets it once at load and it
+// never changes afterwards. It nevertheless fans out combinationally into
+// every per-game decode mux in gunnail_core/video_macross2, which makes
+// dip_sw[2] -> ... -> video_macross2's sprite_plane altsyncram write
+// enable one of the design's longest paths, and one that grows with every
+// game id added. Measured 2026-09-13 on a branch carrying five more ids:
+// that path went critical at -0.208 ns (the build stopped meeting timing)
+// and only 1 of 8 fitter seeds recovered it; registering game_sel took the
+// same seed to +0.568 ns. Registering costs nothing here — a static value
+// reaching the core one cycle after load — so it is kept as headroom for
+// future ids even though this tree currently closes at +0.382 ns.
+wire [5:0] game_sel_comb = (dip_sw[2] == 8'hFF) ? 6'd0 : dip_sw[2][5:0];
+reg  [5:0] game_sel_r = 6'd0;
+always @(posedge clk_sys) game_sel_r <= game_sel_comb;
+assign game_sel = game_sel_r;
 // Byte 2 bit 6: hidden "unlock P1/P2 Autofire menu" flag — see the
 // status_menumask/CONF_STR h1 wiring above. Off (hidden) for every
 // current .mra, since none of them set it, and for the idle-0xFF
