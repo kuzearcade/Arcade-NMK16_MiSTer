@@ -2802,6 +2802,58 @@ the bootlegs run at the parent's speed here).
   bgtile 0xD20000) so that only the region's blank final 0x60000
   spills past 16 MB; the 23-bit region bases stay as they are.
 
+  **Addendum (2026-09-13):** a second pass, using the actual dumps
+  (`mame_roms/{powerins,powerinsb,powerinsc}.zip`) rather than reading
+  the driver, re-ran the search with the parent's sprite region
+  reconstructed via its own `ROM_LOAD16_WORD_SWAP` and cross-checked
+  against powerinsb's — a 100.0% byte-for-byte match, confirming
+  powerinsb's sprites really are the parent's mask-ROM data on two
+  byte-wide EPROMs and validating the comparison method. powerinsc's
+  sprite ROMs, assembled exactly as `ROM_START(powerinsc)` currently
+  loads them, matched at 5.6% (chance level for graphics data — mostly
+  shared fill bytes). Beyond the nibble/byte/row/8x8-block re-encodings
+  the original search already ruled out, this pass additionally ruled
+  out:
+  - **Odd/even chip role swap** (which physical chip supplies the even
+    vs odd stream byte): no improvement over the 5.6% baseline.
+  - **Global bit inversion** (`~byte`, since powerinsc's ROMs are ~46%
+    0x00-filled where the parent's equivalent is ~47% 0xFF-filled —
+    consistent with a different blank-EPROM convention, not a real
+    signal): rose to 22.3%, still far from a match.
+  - **Exhaustive re-pairing**: all 120 possible pairings of the 16
+    sprite-ROM chips, × role × nibble-swap × inversion (7,680 combos),
+    each compared against all 8 of the parent's 1 MB blocks — zero
+    combos exceeded 40%.
+  - **Tile-level, order-independent check** (CRC32 per 128-byte 16x16
+    tile, so any pairing/ordering mistake can't hide a real match):
+    0.01-0.03% overlap in every variant above, against the ~100% a
+    correct decode gives (as powerinsb confirms) — the *tiles
+    themselves* aren't present under any of these transforms, not just
+    misplaced.
+  - **Address-line permutation**: swapping each adjacent pair of the 19
+    address bits (18 positions) on the strongest candidate chips, and
+    reversing the full 19-bit address, against their best-correlated
+    reference chips — no improvement beyond the ~27% noise floor the
+    global-inversion test already showed.
+
+  So this isn't a fixed bit-level transform (nibble order, byte order,
+  chip pairing/role, address-bit swap, or polarity) at all — the
+  earlier search's conclusion stands, now on firmer ground. Two
+  explanations remain, neither confirmable from static ROM comparison
+  alone: a dynamic/non-linear address descrambler (a PAL/GAL on the
+  bootleg board, the same class of problem as this project's own
+  NMK214/Afega scramblers — would need hardware bus tracing, not ROM
+  diffing, to solve), or the bootlegger independently re-ripped/
+  re-encoded the artwork through different tooling rather than
+  bit-copying the mask ROM (plausible given powerinsc's bgtile region
+  is a different size than the parent's — 0x300000 vs 0x280000 — even
+  though that region *did* decode correctly, so a size difference alone
+  doesn't rule out a working transform, but it does show the dumps
+  aren't simple layout-identical copies). Matches MAME's own upstream
+  status: `powerinsc` has shipped `MACHINE_NOT_WORKING` with
+  `// different sprites' format not implemented` for years, unsolved
+  there either.
+
 .mra conventions the three needed: program and sprite byte pairs put
 the ODD chip on even stream addresses (`map="01"`), plain tile pairs
 the EVEN chip; split clone zips omit files identical to the parent's,
