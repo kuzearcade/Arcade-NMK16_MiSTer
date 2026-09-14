@@ -65,6 +65,26 @@ fetch_file() {
 	log "done $name"
 }
 
+# A dependency vendored without a recorded upstream commit cannot be fetched.
+# Fail loudly and say what to do, rather than letting the Quartus build get as
+# far as "cannot find module jt6805" or, worse, elaborating a stub.
+check_unpinned() {
+	local name="$1" dest="$2"
+	if [ -d "$ROOT/$dest" ] && [ -n "$(ls -A "$ROOT/$dest" 2>/dev/null)" ]; then
+		log "ok $name: $dest present (UNPINNED — see deps.lock, its commit is not recorded)"
+		return 0
+	fi
+	log ""
+	log "ERROR: $name is missing from $dest and cannot be fetched."
+	log "  It is vendored WITHOUT a pinned upstream commit — see the jt680x entry"
+	log "  in deps.lock for what is known about it and the SHA-256 of every file"
+	log "  this project builds against. Obtain jotego's jt6805 (jt680x module),"
+	log "  put its hdl/ under $dest/hdl, check the hashes, and please pin it."
+	log "  Only tharrierb (Gunnail rbf) needs it; every other core builds without."
+	log ""
+	return 1
+}
+
 seed_template_skeleton() {
 	local staged="$ROOT/.bootstrap-staging/template_mister"
 	[ -d "$staged" ] || return 0
@@ -99,6 +119,7 @@ main() {
 			fi
 			;;
 		file) fetch_file "$name" "$url" "$ref" "$dest" ;;
+		UNPINNED) check_unpinned "$name" "$dest" ;;
 		*) log "unknown kind '$kind' for $name, skipping" ;;
 		esac
 	done <"$LOCK"

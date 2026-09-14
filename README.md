@@ -41,8 +41,8 @@ under `releases/_alternatives/_<parent>/`), one per MAME set:
 |---|---|---|
 | `Macross2` | 68000 + Z80 sound, YM2203, 2x OKIM6295 with NMK112 banking; hi-res and Power Instinct's 320-px board as runtime modes, plus the bootleg boards' variants (vblank-only interrupts, a Z80 without its YM2203, a 68000-driven OKI, nibble-swapped tiles) | Thunder Dragon 2 (tdragon2, tdragon2a), Big Bang (bigbang, bigbanga), Thunder Dragon 3 (tdragon3h — plays tdragon2's soundtrack, which MAME leaves silent), Super Spacefortress Macross II (macross2, macross2g, macross2k), Power Instinct / Gouketsuji Ichizoku (powerins, powerinsj, powerinspu, powerinspj, powerinsa, powerinsb) |
 | `Raphero` | Bare TLCS-90 sound CPU, 14 MHz 68000 | Rapid Hero (raphero, rapheroa), Arcadia (arcadian) |
-| `Gunnail` | NMK004 sound MCU, YM2203, 2x OKIM6295; NMK-215/113/110 protection MCUs with dual NMK214; hi-res per-line scroll (GunNail), the nine lowres NMK004 boards, the Bombjack Twin boards (no sound CPU, 68000-driven OKIs with NMK112, one 8x8 two-ROM tile layer) Task Force Harrier's Z80 + YM2203 sound board with its MCU simulation, and the Raiden-sound bootlegs (the Seibu Sound System: Z80 + YM3812 + OKI with its interrupt-vector arbitration; tdragonb's program/GFX bitswaps decoded per fetch) plus the gunnailb/tomagic banked-Z80 boards and Comad's ssmissin/airattck board (Z80 + a single OKI, no FM; decode_ssmissin's gfx bitswap applied per fetch) plus the Afega-published Mustang hacks that reuse it, Many Block's 256x240 screen with its own scroll RAM and scanline interrupt table, and tharrierb's MC68705R3 (jotego's jt6805 plus this project's peripheral wrapper), all as runtime game modes | GunNail (gunnail, gunnailp), Super Spacefortress Macross (macross), Black Heart (blkheart, blkheartj), US AAF Mustang (mustang, mustangs, mustangb3), Bio-ship Paladin / Space Battle Ship Gomorrah (bioship, sbsgomo), Vandyke (vandyke, vandykejal, vandykejal2, vandykeb), Acrobat Mission (acrobatm), Koutetsu Yousai Strahl (strahl, strahlj, strahlja), Thunder Dragon (tdragon, tdragon1), Hacha Mecha Fighter (hachamf, hachamfa, hachamfp, hachamfb), Bombjack Twin (bjtwin, bjtwina, bjtwinp, bjtwinpa), Saboten Bombers / Cactus (sabotenb, sabotenba, cactus), Nouryoku Koujou Iinkai (nouryoku, nouryokup), Task Force Harrier (tharrier, tharrieru, tharrierb — the Lettering bootleg runs its real, fully dumped MC68705R3), Many Block (manybloc), US AAF Mustang bootlegs (mustangb, mustangb2), Acrobat Mission bootleg (acrobatmbl), Hacha Mecha Fighter bootleg (hachamfb2), Thunder Dragon bootlegs (tdragonb, tdragonb3), Koutetsu Yousai Strahl bootleg (strahljbl), GunNail bootleg (gunnailb), Tom Tom Magic (tomagic), S.S. Mission (ssmissin), Air Attack (airattck, airattcka), Twin Action (twinactn), Dolmen (dolmen, dolmenk), Puzzle World (puzlwrld) |
-| `NMK16_Afega` | The Afega derivative boards: 12 MHz 68000 with address-scrambled program ROMs decoded per fetch, Z80 + YM2151 + OKI or twin-OKI sound, an 8bpp background layer. Split out of `Gunnail` on 2026-09-13 — the same `rtl/gunnail/gunnail_core.sv` built with `INCLUDE_AFEGA(1)`/`INCLUDE_NMK(0)`, so the NMK004/protection TLCS-90 cores, the YM2203 and the Seibu/YM3812 board are left out of the netlist (18,494 ALMs, 44% of the device, against 26,554 for `Gunnail`) | Stagger I / Red Hawk (stagger1, redhawk, redhawki, redhawks, redhawksa, redhawkg, redhawke, redhawkk, redhawkc, redhawkb), Guardian Storm / Hong Hu Zhanji II (grdnstrm, grdnstrmv, grdnstrmj, grdnstrmk, grdnstrmg, grdnstrmau, redfoxwp2, redfoxwp2a), Bubble 2000 / Hot Bubble (bubl2000, bubl2000a, hotbubl, hotbubla), Pop's Pop's (popspops), Mang-Chi (mangchi), Spectrum 2000 (spec2k, spec2kh), Fire Hawk (firehawk) |
+| `Gunnail` | NMK004 sound MCU, YM2203, 2x OKIM6295; NMK-215/113/110 protection MCUs with dual NMK214; hi-res per-line scroll (GunNail), the nine lowres NMK004 boards, the Bombjack Twin boards (no sound CPU, 68000-driven OKIs with NMK112, one 8x8 two-ROM tile layer), Task Force Harrier's Z80 + YM2203 sound board — with MAME's MCU simulation for the parent and a real MC68705R3 for the Lettering bootleg — and the Raiden-sound bootlegs (the Seibu Sound System: Z80 + YM3812 + OKI with its interrupt-vector arbitration; tdragonb's program/GFX bitswaps decoded per fetch) plus the gunnailb/tomagic banked-Z80 boards and Comad's ssmissin/airattck board (Z80 + a single OKI, no FM; decode_ssmissin's gfx bitswap applied per fetch) plus the Afega-published Mustang hacks that reuse it, Many Block's 256x240 screen with its own scroll RAM and scanline interrupt table, all as runtime game modes | GunNail (gunnail, gunnailp), Super Spacefortress Macross (macross), Black Heart (blkheart, blkheartj), US AAF Mustang (mustang, mustangs, mustangb3), Bio-ship Paladin / Space Battle Ship Gomorrah (bioship, sbsgomo), Vandyke (vandyke, vandykejal, vandykejal2, vandykeb), Acrobat Mission (acrobatm), Koutetsu Yousai Strahl (strahl, strahlj, strahlja), Thunder Dragon (tdragon, tdragon1), Hacha Mecha Fighter (hachamf, hachamfa, hachamfp, hachamfb), Bombjack Twin (bjtwin, bjtwina, bjtwinp, bjtwinpa), Saboten Bombers / Cactus (sabotenb, sabotenba, cactus), Nouryoku Koujou Iinkai (nouryoku, nouryokup), Task Force Harrier (tharrier, tharrieru, tharrierb — the Lettering bootleg runs its real, fully dumped MC68705R3), Many Block (manybloc), US AAF Mustang bootlegs (mustangb, mustangb2), Acrobat Mission bootleg (acrobatmbl), Hacha Mecha Fighter bootleg (hachamfb2), Thunder Dragon bootlegs (tdragonb, tdragonb3), Koutetsu Yousai Strahl bootleg (strahljbl), GunNail bootleg (gunnailb), Tom Tom Magic (tomagic), S.S. Mission (ssmissin), Air Attack (airattck, airattcka), Twin Action (twinactn), Dolmen (dolmen, dolmenk), Puzzle World (puzlwrld) |
+| `NMK16_Afega` | The Afega derivative boards: 12 MHz 68000 with address-scrambled program ROMs decoded per fetch, Z80 + YM2151 + OKI or twin-OKI sound, an 8bpp background layer. Split out of `Gunnail` on 2026-09-13 — the same `rtl/gunnail/gunnail_core.sv` built with `INCLUDE_AFEGA(1)`/`INCLUDE_NMK(0)`, so the NMK004/protection TLCS-90 cores, the YM2203 and the Seibu/YM3812 board are left out of the netlist (18,494 ALMs, 44% of the device, against 27,422 for `Gunnail`) | Stagger I / Red Hawk (stagger1, redhawk, redhawki, redhawks, redhawksa, redhawkg, redhawke, redhawkk, redhawkc, redhawkb), Guardian Storm / Hong Hu Zhanji II (grdnstrm, grdnstrmv, grdnstrmj, grdnstrmk, grdnstrmg, grdnstrmau, redfoxwp2, redfoxwp2a), Bubble 2000 / Hot Bubble (bubl2000, bubl2000a, hotbubl, hotbubla), Pop's Pop's (popspops), Mang-Chi (mangchi), Spectrum 2000 (spec2k, spec2kh), Fire Hawk (firehawk) |
 
 Every parent set has been loaded on a DE10-Nano through its `.mra`,
 drawn its title and attract sequence in native screenshots and played
@@ -67,8 +67,7 @@ went to hardware on 2026-09-11, Family A (Bombjack Twin) and Family G
 (Task Force Harrier, the Vandyke bootleg) on 2026-09-12, all as runtime
 game modes of the Gunnail rbf (`rtl/gunnail/gunnail_core.sv`'s game
 table; their original single-game sims under `rtl/<game>/` remain as
-register references). tharrierb (Lettering bootleg) needs an M68705
-core and is not included.
+register references).
 Family H (the 27 Afega-hardware sets) went to hardware on 2026-09-13,
 also as Gunnail-rbf game modes, with jotego's jt51 (YM2151) vendored for
 their sound board. The hardware path (SDRAM ROM caches, clock-domain
@@ -89,17 +88,21 @@ having cost 98K logic cells in an earlier attempt. tharrierb followed the same
 day on a real MC68705R3 — jotego's jt6805 under this project's own
 peripheral wrapper, verified against MAME's m6805 for 960,794
 instructions and 13 interrupts with zero mismatches (see
-`docs/tier7-tharrierb.md`). What is left of `nmk16.cpp` is tdragonb2 and
-firehawkv, both of which MAME itself ships `MACHINE_NOT_WORKING`.
+`docs/tier7-tharrierb.md`).
 
-Three romsets in the driver do not ship. tdragonb2 and firehawkv were
-never attempted (MAME cannot run them either — an IRQ/speed problem and
-an incomplete dump). powerinsc is ported and boots, but its sprite ROM
-format is undeciphered, so its sprites draw wrong here exactly as they
-do in MAME; its `.mra` is generated into the gitignored `.non-working/`
-rather than `releases/`, so it is never shipped or deployed by accident.
-`tools/gen_family_c_mra.py`'s `NON_WORKING` set is what routes it
-there.
+`nmk16.cpp` declares 100 romsets and 97 of them ship. **All three that
+do not are `MACHINE_NOT_WORKING` in MAME itself**, for reasons MAME
+states on its own `GAME` lines:
+
+| Set | MAME's reason | Here |
+|---|---|---|
+| `powerinsc` | *"different sprites' format not implemented"* | Ported and boots; sprites draw wrong exactly as they do in MAME, so its `.mra` is generated into the gitignored `.non-working/` instead of `releases/` and is never shipped or deployed. `tools/gen_family_c_mra.py`'s `NON_WORKING` set routes it there. |
+| `tdragonb2` | *"runs too quickly, Oki sounds terrible (IRQ problems?)"* | Not attempted — it would mean diverging from MAME's own known-broken timing. |
+| `firehawkv` | *"incomplete dump, vertical mode gfx not dumped"* | Not attempted — three `NO_DUMP` ROMs and a `BAD_DUMP` stand-in. |
+
+That count is checked rather than carried: parse every `GAME`/`GAMEL`
+line out of `nmk16.cpp` and diff the setnames against `<setname>` in
+`releases/*.mra` and `releases/_alternatives/*/*.mra`.
 
 `docs/known-issues.md` is the tracked list of open bugs, limitations
 and verification gaps in the released cores (stable IDs, status per
@@ -157,6 +160,7 @@ and the comparison tools.
 |---|---|
 | `rtl/<game>/` | Per-game core top and video module |
 | `rtl/tlcs90/` | TLCS-90 CPU core, NMK004 wrapper, NMK-215 protection wrapper |
+| `rtl/m68705/` | MC68705R3 wrapper around the vendored jt6805, plus its microcode ROM (`tharrierb`) |
 | `rtl/nmk214/`, `rtl/nmk112/`, `rtl/nmk_irq/`, `rtl/seibu/` | Shared NMK and Seibu custom logic |
 | `rtl/sdram*.sv`, `rtl/rom_cache1*.sv`, `rtl/oki_rom_cache.sv`, `rtl/tile_prefetch_byte.sv` | SDRAM controller, arbiter and ROM caches for the hardware path |
 | `rtl/third_party/` | Vendored cores (gitignored, fetched by `tools/bootstrap.sh`) |
@@ -166,12 +170,14 @@ and the comparison tools.
 | `sim/oracle/`, `sim/compare/` | MAME Lua tracer and trace comparison |
 | `tools/` | ROM builders, `.mra` generators, audio comparison, MiSTer key injection |
 | `releases/` | Current `.rbf` bitstreams and `.mra` files |
+| `.non-working/` | Gitignored: `.mra` files for sets that cannot work (see Status) |
 | `docs/` | Plan, game inventory, verification and bring-up notes |
 
 ## Third-party projects and attribution
 
 This core would not exist without the following projects. Each is
-fetched unmodified at the commit recorded in `deps.lock`.
+fetched unmodified at the commit recorded in `deps.lock` — with one
+exception, jt680x, noted under the table.
 
 | Component | Project | Author | Licence |
 |---|---|---|---|
@@ -180,12 +186,35 @@ fetched unmodified at the commit recorded in `deps.lock`.
 | Z80 (T80) | [MiSTer-devel/T80](https://github.com/MiSTer-devel/T80) | Daniel Wallner, MikeJ (fpgaarcade), Sorgelig | BSD-style, per file header |
 | YM2203 (jt12 / jt03) | [jotego/jt12](https://github.com/jotego/jt12) | Jose Tejada | GPL-3.0 |
 | YM3812 (jtopl) | [jotego/jtopl](https://github.com/jotego/jtopl) | Jose Tejada | GPL-3.0 |
-| OKIM6295 (jt6295) | [jotego/jt6295](https://github.com/jotego/jt6295) | Jose Tejada | GPL-3.0 |
+| YM2151 (jt51) | [jotego/jt51](https://github.com/jotego/jt51) | Jose Tejada | GPL-3.0 |
+| MC68705R3 / 6805 CPU (jt6805, from the jt680x module) | jotego — see the note below | Jose Tejada | GPL-3.0-or-later |
 | SDRAM controller (`rtl/sdram.sv`) | copied from [rmonic79/Arcade-Darius_MiSTer](https://github.com/rmonic79/Arcade-Darius_MiSTer) | Sorgelig | GPL-3.0 |
+
+**jt6805 is vendored but not yet pinned.** `rtl/third_party/jt680x/hdl/`
+holds the four files of jotego's 6805 CPU (`jt6805.v`, `_alu`, `_ctrl`,
+`_regs`) and `tools/bootstrap.sh` cannot fetch them: there is no
+`deps.lock` entry, because the exact upstream repository and commit were
+never recorded when the files were first brought in. They are identified
+in `deps.lock` by SHA-256 instead, and `tools/bootstrap.sh` fails with
+instructions if the directory is absent, rather than leaving you with a
+`Gunnail` build that cannot elaborate. Pinning it properly is an open
+task.
+
+jt6805 is a **microcoded** design: the HDL is jotego's, but its control
+store is not. `rtl/m68705/6805.uc` (4096 x 39 bits) and the
+`6805.vh`/`6805_param.vh` headers that decode it were written for this
+project rather than generated by jotego's own `jtframe ucode` step,
+which is not vendored here. `tools/uc6805.py` disassembles and
+reassembles that control store. `rtl/m68705/m68705_core.sv` — the
+MC68705R3 peripheral wrapper around jt6805 (ports A-D and their DDRs,
+timer, MISC/PCR/ACR/ARR, RAM and ROM, and the edge-latched external
+interrupt) — is also this project's own work. Only `tharrierb` uses any
+of it; see `docs/tier7-tharrierb.md`.
 
 The behavioural reference is [MAME](https://github.com/mamedev/mame),
 in particular `src/mame/nmk/nmk16.cpp`, `nmk16_v.cpp`, `nmk16spr.cpp`,
-`nmk214.cpp`, `nmk004.cpp`, `nmk_irq.cpp` and `cpu/tlcs90/tlcs90.cpp`,
+`nmk214.cpp`, `nmk004.cpp`, `nmk_irq.cpp`, `cpu/tlcs90/tlcs90.cpp` and
+`cpu/m6805/m6805.cpp` + `m68705.cpp`,
 by the MAME team and the contributors credited in those files. The
 TLCS-90 core, the NMK004 and NMK-215 wrappers, the NMK214 descrambler
 and the sprite and tilemap engines in this repository were written
