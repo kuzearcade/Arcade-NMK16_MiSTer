@@ -17,6 +17,12 @@
 # docs/hw-bringup.md) — literal, undecoded ROM zip bytes.
 **/roms/*.bin
 sim/oracle/traces/
+# MAME m6805 oracle for the M68705R3 sim (sim/rtl/m68705): a PC trace from
+# reset plus the MCU's own port-read sequence — same reasoning as above, it
+# is regenerated locally (see docs/tier7-tharrierb.md).
+sim/rtl/m68705/roms/*.txt
+# working copy the Makefile drops next to the executable for $readmemb
+sim/rtl/m68705/6805.uc
 sim/rtl/*/*.trace
 sim/rtl/*/*.mem
 # Undocumented debug-dump artifacts the vendored jt12/jt6295 cores
