@@ -22,6 +22,8 @@ TLCS90_DIR := ../../../rtl/tlcs90
 BJTWIN_DIR := ../../../rtl/bjtwin
 NMK_IRQ_DIR := ../../../rtl/nmk_irq
 NMK214_DIR := ../../../rtl/nmk214
+M68705_DIR := ../../../rtl/m68705
+JT680X_DIR := ../../../rtl/third_party/jt680x/hdl
 CORE_DIR := ../../../rtl/gunnail
 MACROSS2_DIR := ../../../rtl/macross2
 RTL_DIR := ../../../rtl
@@ -32,6 +34,8 @@ R := ../$(GAME)/roms/$(GAME)
 SOURCES := $(CORE_DIR)/$(TOP).sv $(MACROSS2_DIR)/video_macross2.sv $(NMK214_DIR)/nmk214.sv \
            $(TLCS90_DIR)/tlcs90.sv $(TLCS90_DIR)/nmk004_periph.sv $(TLCS90_DIR)/nmk004_core.sv $(TLCS90_DIR)/nmk_prot_core.sv \
            $(BJTWIN_DIR)/video_timing.sv $(BJTWIN_DIR)/nmk_irq_hacky.sv $(NMK_IRQ_DIR)/nmk_irq.sv \
+           $(M68705_DIR)/m68705_core.sv $(JT680X_DIR)/jt6805.v $(JT680X_DIR)/jt6805_ctrl.v \
+           $(JT680X_DIR)/jt6805_alu.v $(JT680X_DIR)/jt6805_regs.v \
            $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
            $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache1_byte.sv \
            $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv \
@@ -63,6 +67,7 @@ SEL_cactus   := 18
 SEL_nouryokup := 19
 SEL_tharrier := 20
 SEL_manybloc := 54
+SEL_tharrierb := 55
 SEL_vandykeb := 21
 SEL_mustangb3 := 22
 # Afega (Family H): ids 23-43, see gunnail_core.sv; hex from `tools/gen_gunnail_mra.py --simroms <set> ../<set>/roms`
@@ -127,11 +132,11 @@ endif
 ifeq ($(GAME),hachamfb)
 EXT := ../tlcs90/roms/hachamf_ext.hex
 endif
-ifneq ($(filter $(GAME),bjtwin bjtwinp bjtwinpa sabotenb nouryoku cactus nouryokup tharrier manybloc vandykeb mustangb3 ssmissin airattck airattcka twinactn dolmen dolmenk puzlwrld $(AFEGA_SETS) $(FAME_SETS)),)
+ifneq ($(filter $(GAME),bjtwin bjtwinp bjtwinpa sabotenb nouryoku cactus nouryokup tharrier tharrierb manybloc vandykeb mustangb3 ssmissin airattck airattcka twinactn dolmen dolmenk puzlwrld $(AFEGA_SETS) $(FAME_SETS)),)
 EXT :=
 endif
 AUDIOCPU :=
-ifneq ($(filter $(GAME),tharrier manybloc mustangb3 ssmissin airattck airattcka twinactn dolmen dolmenk puzlwrld $(AFEGA_SETS) $(FAME_SETS)),)
+ifneq ($(filter $(GAME),tharrier tharrierb manybloc mustangb3 ssmissin airattck airattcka twinactn dolmen dolmenk puzlwrld $(AFEGA_SETS) $(FAME_SETS)),)
 AUDIOCPU := $(R)_audiocpu.hex
 endif
 OKI2 := $(R)_oki2.hex
@@ -151,6 +156,12 @@ ifeq ($(GAME),bioship)
 TILEROM := $(R)_tilerom.hex
 endif
 VTIMING := ../../../roms/gunnail_multi_vtiming.hex
+# tharrierb's MC68705R3 image, plus the microcode ROM jt6805's own $$readmemb
+# wants next to the executable (it names it by a bare relative path).
+MCUROM :=
+ifeq ($(GAME),tharrierb)
+MCUROM := $(R)_mcu.hex
+endif
 
 .PHONY: all run clean
 
@@ -159,11 +170,12 @@ all: run
 $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gc.cpp $(FX68K_DIR)/fx68k.sv
 	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --top-module $(TOP) $(EXTRA_VFLAGS) \
 		--Mdir $(OBJ_DIR) \
-		-y $(FX68K_DIR) -y $(TLCS90_DIR) -y $(NMK214_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl -y $(RTL_DIR)/third_party/jt51/hdl -y $(RTL_DIR)/third_party/jtopl/hdl \
+		-I$(M68705_DIR) -y $(FX68K_DIR) -y $(TLCS90_DIR) -y $(NMK214_DIR) -y $(JT680X_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl -y $(RTL_DIR)/third_party/jt51/hdl -y $(RTL_DIR)/third_party/jtopl/hdl \
 		-GSIM_DSW=1 -GROM_FILE=\"$(R)_maincpu.hex\" \
 		-GNMK004_BOOT_FILE=\"../tlcs90/roms/nmk004_boot.hex\" \
 		-GNMK004_EXT_FILE=\"$(EXT)\" \
 		-GPROT_BOOT_FILE=\"$(PROT)\" \
+		-GM68705_ROM_FILE=\"$(MCUROM)\" \
 		-GOKI1_ROM_FILE=\"$(R)_oki1.hex\" \
 		-GOKI2_ROM_FILE=\"$(OKI2)\" \
 		-GAUDIOCPU_FILE=\"$(AUDIOCPU)\" \
@@ -176,7 +188,7 @@ $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gc.cpp $(FX68K_DIR)/fx68k.sv
 		$(SOURCES) $(FX68K_DIR)/fx68k.sv $(FX68K_DIR)/fx68kAlu.sv $(FX68K_DIR)/uaddrPla.sv \
 		tb_gc.cpp \
 		-o V$(TOP)
-	cp $(FX68K_DIR)/microrom.mem $(FX68K_DIR)/nanorom.mem .
+	cp $(FX68K_DIR)/microrom.mem $(FX68K_DIR)/nanorom.mem $(M68705_DIR)/6805.uc .
 
 SCREEN_H := 224
 ifeq ($(GAME),manybloc)
@@ -187,4 +199,4 @@ run: $(OBJ_DIR)/V$(TOP)
 	TB_GAME_SEL=$(SEL) TB_PREFIX=$(GAME) TB_SCREEN_H=$(SCREEN_H) ./$(OBJ_DIR)/V$(TOP) $(CYCLES)
 
 clean:
-	rm -rf obj_dir_* *_sys.trace *_cyc.trace *_68k.trace *_video.trace *_frame_*.ppm microrom.mem nanorom.mem
+	rm -rf obj_dir_* 6805.uc *_sys.trace *_cyc.trace *_68k.trace *_video.trace *_frame_*.ppm microrom.mem nanorom.mem

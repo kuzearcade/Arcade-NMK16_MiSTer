@@ -30,6 +30,12 @@ set_global_assignment -name VERILOG_FILE rtl/third_party_gen/t80/T80s.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/bjtwin/video_timing.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/nmk_irq/nmk_irq.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/bjtwin/nmk_irq_hacky.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/m68705/m68705_core.sv
+set_global_assignment -name VERILOG_FILE rtl/third_party/jt680x/hdl/jt6805.v
+set_global_assignment -name VERILOG_FILE rtl/third_party/jt680x/hdl/jt6805_ctrl.v
+set_global_assignment -name VERILOG_FILE rtl/third_party/jt680x/hdl/jt6805_alu.v
+set_global_assignment -name VERILOG_FILE rtl/third_party/jt680x/hdl/jt6805_regs.v
+set_global_assignment -name SEARCH_PATH rtl/m68705
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_req.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_arb.sv

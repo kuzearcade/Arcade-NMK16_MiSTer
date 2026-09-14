@@ -737,6 +737,64 @@ MANYBLOC = dict(
     ])
 
 # ---------------------------------------------------------------------------
+# Task Force Harrier (Lettering bootleg) -- gunnail_core id 55, Gunnail.rbf.
+# tharrier's board with a real, fully dumped MC68705R3 where the original has
+# its undumped MCU, and its own I/O block (tharrierb_map). The MCU image rides
+# in the protection-firmware slot the NMK-215/113 boards use, which the core
+# reads back out of SDRAM after reset (BASE_BYTE_PROT), so it sits between the
+# Z80 program and the 8x8 tiles.
+#
+# Every input and DIP bit is IP_ACTIVE_HIGH and all five ports are read
+# THROUGH the MCU (Port D, muxed by Port C[2:0]: 0 DSW1, 1 DSW2, 2 BUTTONS,
+# 3 P1, 4 P2), so the .mra <switches> default is the raw MAME default word
+# 00,00 rather than the usual all-ones, and DSW1/DSW2 are two byte ports.
+#
+# The ROMs are the original's content in smaller chips, except: fgtile is a
+# single 0x8000 ROM (half the original's) padded to the family's 0x10000 slot,
+# and bgtile 0x60000-0x67fff / sprites 0xf8000-0xfffff hold duplicated data
+# where the original is 0xff-filled.
+# ---------------------------------------------------------------------------
+THARRIERB = dict(
+    id=55, year=1989, manufacturer="bootleg (Lettering)", rot=True, switches="00,00",
+    dips=[
+        ('0,1', "Lives", "3,2,4,5"), ('2,3', "Bonus Life", "200k,None,200k 1000k,200k 500k 1000k 2000k 3000k 5000k"),
+        ('4,5', "Difficulty", "Normal,Easy,Hard,Hardest"), ('6', "Unused (DSW1:7)", "Off,On"),
+        ('7', "Cabinet", "Upright,Cocktail"),
+        ('8,10', "Coin B", "1C_1C,1C_2C,1C_3C,1C_4C,2C_1C,3C_1C,4C_1C,Free Play"),
+        ('11,13', "Coin A", "1C_1C,1C_2C,1C_3C,1C_4C,2C_1C,3C_1C,4C_1C,Free Play"),
+        ('14', "Demo Sounds", "On,Off"), ('15', "Unused (DSW2:8)", "Off,On"),
+    ],
+    regions=[
+        ("maincpu, 0x040000", [pair(("cpua", "d55d21c7"), ("cpub", "65c247f6"))]),
+        ("Z80 sound program, 0x010000", [("s1.512", "b959f837")]),
+        ("mcu, 0x001000 (the whole MC68705R3 image: user EPROM, bootstrap ROM and vectors)",
+         [("mc68705r35.bin", "c560798b")]),
+        ("fgtile, 0x008000 -- half the original's. MAME wraps tile codes modulo the "
+         "region's own tile count (gfx_element::get_data does code %= total), so the "
+         "family's 0x010000 slot is filled with a SECOND COPY rather than zeros: that "
+         "reproduces the wrap exactly for the codes above 1023.",
+         [("t.256", "4e9a7e0b"), ("t.256", "4e9a7e0b")]),
+        ("bgtile, 0x080000 (8 files)", [
+            ("10h.512", "9b97073c"), ("21h.512", "d5a90bd5"), ("12h.512", "3d4a03ac"), ("24h.512", "edecb4c8"),
+            ("11h.512", "c20d20ed"), ("23h.512", "c7949c45"), ("22h.512", "7f38e700"), ("9h.512", "43499c11")]),
+        ("sprites, 0x100000 (8 ROM_LOAD16_BYTE pairs)", [
+            pair(("l3.512", "b1537a3b"), ("l10.512", "203b88f8")),
+            pair(("l1.512", "060ed368"), ("l15.512", "0c5cef0e")),
+            pair(("l2.512", "d62b4a9e"), ("l16.512", "6b637cda")),
+            pair(("l6.512", "5f249283"), ("l14.512", "dfabc192")),
+            pair(("l5.512", "5e51cdfa"), ("l11.512", "3ac04d8f")),
+            pair(("l8.512", "0a8b8eca"), ("l12.512", "85445005")),
+            pair(("l4.512", "19f82acd"), ("l13.512", "5cf2b63b")),
+            pair(("l7.512", "fc99519f"), ("l9.512", "4c5a8f33"))]),
+        ("oki1, 0x080000 (8 files)", [
+            ("8h.512", "f509f5ca"), ("7h.512", "1a0ec174"), ("6h.512", "55e704f7"), ("5h.512", "ad459ad3"),
+            ("4h.512", "5ee53d1d"), ("3h.512", "91c27b64"), ("2h.512", "8d11ce0d"), ("1h.512", "b42203c4")]),
+        ("oki2, 0x080000 (8 files)", [
+            ("13h.512", "024878b1"), ("14h.512", "3544758d"), ("15h.512", "6929577a"), ("16h.512", "c909d929"),
+            ("17h.512", "09e7635b"), ("18h.512", "370a2fbd"), ("19h.512", "64e58cfe"), ("20h.512", "5ccd9205")]),
+    ])
+
+# ---------------------------------------------------------------------------
 # Afega boards (Family H, 2026-09-13): gunnail_core.sv ids 23-43, one per
 # distinct configuration (decryptcode table, screen_update variant, ROM
 # sizes); every set below carries its own region list transcribed from
@@ -1017,6 +1075,7 @@ SETS = [
     ("mustangb3",   "US AAF Mustang (Lettering bootleg)",                          10791, MUSTANGB3, "mustang", {}),
     ("tharrier",    "Task Force Harrier",                                          10699, THARRIER, None, {}),
     ("manybloc",    "Many Block",                                                  10775, MANYBLOC, None, {}),
+    ("tharrierb",   "Task Force Harrier (Lettering bootleg)",                      10792, THARRIERB, "tharrier", {}),
     ("tharrieru",   "Task Force Harrier (US)",                                     10700, THARRIER, "tharrier",
      {"2.18b": ("u_2.18b", "78923aaa"), "3.21b": ("u_3.21b", "99cea259"), "1.13b": ("1.13b", "c7402e4a")}),
     ("vandykeb",    "Vandyke (bootleg with PIC16c57)",                             10711, VANDYKEB, "vandyke", {}),
@@ -1266,9 +1325,11 @@ def sim_roms(setname, outdir):
     m = regions["maincpu"]
     with open(os.path.join(outdir, f"{setname}_maincpu.hex"), "w") as f:
         f.write("".join("%02x%02x\n" % (m[i], m[i + 1]) for i in range(0, len(m), 2)))
-    for kind in ("audiocpu", "fgtile", "bgtile", "sprites", "oki1", "oki2"):
+    for kind in ("audiocpu", "fgtile", "bgtile", "sprites", "oki1", "oki2", "mcu"):
         data = regions.get(kind)
         if data is None:
+            if kind == "mcu":
+                continue   # only tharrierb has one
             data = bytes([0xFF]) * (0x10000 if kind in ("fgtile", "audiocpu") else 0x1000)
         wbytes(kind, data)
     if spec.get("bg8"):

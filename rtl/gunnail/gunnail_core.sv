@@ -93,6 +93,7 @@ module gunnail_core #(
 	parameter NMK004_BOOT_FILE  = "",
 	parameter NMK004_EXT_FILE   = "",
 	parameter PROT_BOOT_FILE    = "",
+	parameter M68705_ROM_FILE   = "",   // tharrierb's MC68705R3 image (HW_ROMS=0)
 	parameter OKI1_ROM_FILE     = "",
 	parameter OKI2_ROM_FILE     = "",
 	parameter VTIMING_FILE      = "",
@@ -217,8 +218,8 @@ module gunnail_core #(
 	output        dbg_mcu_reply_we,
 	output [7:0]  dbg_mcu_reply,
 
-	output [15:0] dbg_prot_pc,
-	output        dbg_prot_valid,
+	output [15:0] dbg_prot_pc,     // tharrierb: the MC68705R3's address bus instead (no TLCS-90 on that board)
+	output        dbg_prot_valid,  // tharrierb: its bus-write strobe
 	output        dbg_halt_68k,
 	output [15:0] dbg_prot_hl,
 	output  [7:0] dbg_prot_a,
@@ -405,6 +406,9 @@ module gunnail_core #(
 	                                       // IP_ACTIVE_HIGH (so: read as 0) where dolmen/puzlwrld
 	                                       // declare them IP_ACTIVE_LOW (read as 1). One shared id
 	                                       // for both -- that is the ONLY core-visible difference.
+	                 G_THARRIERB = 6'd55,  // Task Force Harrier (Lettering bootleg): tharrier's board with a real,
+	                                       // fully dumped MC68705R3 in place of the original's simulated MCU --
+	                                       // see rtl/m68705/ and docs/tier7-tharrierb.md.
 	                 G_MANYBLOC = 6'd54,   // Many Block: tharrier's Z80+YM2203+2OKI board, its own 68000 map,
 	                                       // a 4 KB "scroll" RAM whose words 0x41/0x61 are the BG scroll,
 	                                       // and its own 256x240 screen (see the geometry block below).
@@ -433,6 +437,7 @@ module gunnail_core #(
 	wire g_twinactn_a = (game_sel == G_TWINACTN_A);         // twinactn/dolmenk: the IN1 boot-test override
 	wire g_twinactn = (game_sel == G_TWINACTN) | g_twinactn_a;
 	wire g_manybloc = (game_sel == G_MANYBLOC);
+	wire g_tharrierb = (game_sel == G_THARRIERB);
 	wire g_comad    = g_ssmissin | g_twinactn;                 // the Comad-shape Z80+OKI board (ssmissin_sound_map): ROM 0-7FFF, RAM 8000-87FF, OKI bank at 0x9000 (memory write), OKI r/w 0x9800, soundlatch read 0xA000, no FM — latch pending drives the Z80's IRQ0 directly
 	wire g_seibu    = g_mustangb | g_acrobatmbl | g_hachamfb2 | g_tdragonb | g_strahljbl; // the Seibu Sound System board (seibu_sound_map)
 	wire g_m2snd    = g_gunnailb | g_tomagic;                                            // macross2-style banked Z80 (gunnailb_sound_map / tomagic_sound_map)
@@ -471,7 +476,7 @@ module gunnail_core #(
 	                       ((game_sel == G_GRDNSTRMJ) || (game_sel == G_GRDNSTRMG)) ? 4'd6 : (game_sel == G_GRDNSTRMAU) ? 4'd7 :
 	                       (game_sel == G_REDFOXWP2A) ? 4'd8 : ((game_sel == G_MANGCHI) || (game_sel == G_BUBL2000) || (game_sel == G_HOTBUBLA)) ? 4'd9 :
 	                       ((game_sel == G_SPEC2K) || (game_sel == G_SPEC2KH)) ? 4'd10 : 4'd0;
-	wire g_z80snd   = g_tharrier | g_mustangb3 | g_afega | g_seibu | g_m2snd | g_comad | g_manybloc; // the Z80 sound boards (tharrier_sound_map / afega_sound_map / firehawk_sound_map / seibu_sound_map / gunnailb+tomagic / ssmissin_sound_map)
+	wire g_z80snd   = g_tharrier | g_mustangb3 | g_afega | g_seibu | g_m2snd | g_comad | g_manybloc | g_tharrierb; // the Z80 sound boards (tharrier_sound_map / afega_sound_map / firehawk_sound_map / seibu_sound_map / gunnailb+tomagic / ssmissin_sound_map)
 	wire has_nmk004 = ~(g_bjtwin | g_z80snd | g_vandykeb);             // else the NMK004 is held in reset
 
 	wire lowres          = ~(g_gunnail | g_bjtwin | g_m2snd);            // set_screen_lowres (gunnail, gunnailb, tomagic and bjtwin are hires)
@@ -481,14 +486,14 @@ module gunnail_core #(
 	wire has_214         = g_gunnail | g_macross | g_bjtwin_prot | g_cactus | g_gunnailb; // base_nmk214_215: bgtile + sprites scrambled (cactus/gunnailb: same data, config injected below)
 	wire prot_rom_16k    = g_hachamf | g_tdragon1;                       // TMP91640 (NMK-110/113): 16 KB firmware
 	wire nmi_invert      = g_bioship;                                    // nmk004_bioship_x0016_w
-	wire mainram_strange = g_macross | g_blkheart | g_mustang | g_bioship | g_vandyke | g_tharrier | g_vandykeb | g_afega; // macross_map/mustang_map/bioship_map/vandyke_map/tharrier_map/afega_map mainram_strange_w
+	wire mainram_strange = g_macross | g_blkheart | g_mustang | g_bioship | g_vandyke | g_tharrier | g_tharrierb | g_vandykeb | g_afega; // macross_map/mustang_map/bioship_map/vandyke_map/tharrier_map/tharrierb_map/afega_map mainram_strange_w
 	wire bg2             = g_bioship | g_strahl | g_afega_8bpp;          // screen_update_strahl: two BG layers; afega 8bpp: layer B = the high nibble
 	wire irq_hacky       = g_strahl | g_cactus | g_vandykeb | g_mustangb3 | g_afega | g_seibu | g_m2snd | g_twinactn | g_manybloc; // manybloc: periodic IRQ1 + its own scanline IRQ4/IRQ2, see nmk_irq_hacky // twinactn: set_hacky_interrupt_timing // set_hacky_interrupt_timing (no V-PROM)
 	wire spr_plain       = g_bioship | g_strahl | g_acrobatm | (g_afega & ~g_afega_spr_pair); // sprite ROMs are plain ROM_LOAD byte files (the rest: WORD_SWAP / odd-first byte pairs), see video_macross2 spr_swap
 	wire [3:0] vprom_sel = (g_blkheart | g_bioship | g_vandyke) ? 4'd1 : // 98ed1c97
 	                       (g_tdragon | g_tdragon1)             ? 4'd2 : // e6ead349
 	                       g_mustangs                           ? 4'd3 : // de156d99
-	                       g_tharrier                           ? 4'd4 : // fcd5efea
+	                       (g_tharrier | g_tharrierb)           ? 4'd4 : // fcd5efea (tharrierb ships the same 21.bpr)
 	                       g_ssmissin                           ? 4'd8 : // ssm-pr1.114, expanded per decode_ssmissin (half-populated dump)
 	                                                              4'd0;  // 633ab1c9 (gunnail, macross, mustang, acrobatm, hachamf, bjtwin family)
 	// Memory maps (nmk16.cpp): the decode function below keys on these.
@@ -496,7 +501,7 @@ module gunnail_core #(
 	                 M_VANDYKE = 5'd4, M_ACROBATM = 5'd5, M_STRAHL = 5'd6, M_TDRAGON = 5'd7,
 	                 M_BJTWIN = 5'd8, M_THARRIER = 5'd9, M_VANDYKEB = 5'd10, M_AFEGA = 5'd11, M_FIREHAWK = 5'd12,
 	                 M_GUNNAILB = 5'd13, M_TOMAGIC = 5'd14, // gunnail_map plus the 68000-bus OKI (0x194001 / 0x094001-3)
-	                 M_SSMISSIN = 5'd15, M_MANYBLOC = 5'd16;
+	                 M_SSMISSIN = 5'd15, M_MANYBLOC = 5'd16, M_THARRIERB = 5'd17;
 	wire [4:0] map_id = g_gunnail  ? M_GUNNAIL :
 	                    g_gunnailb ? M_GUNNAILB :
 	                    g_tomagic  ? M_TOMAGIC :
@@ -507,6 +512,7 @@ module gunnail_core #(
 	                    g_vandykeb ? M_VANDYKEB :
 	                    g_ssmissin ? M_SSMISSIN :
 	                    g_manybloc ? M_MANYBLOC :
+	                    g_tharrierb ? M_THARRIERB :
 	                    g_mustang  ? M_MUSTANG :
 	                    g_bioship  ? M_BIOSHIP :
 	                    g_vandyke  ? M_VANDYKE :
@@ -548,7 +554,7 @@ module gunnail_core #(
 			G_BJTWIN, G_BJTWINP, G_BJTWINPA: begin cfg_tx_pal = 11'h000; cfg_spr_units = 18'd8192; end   // sprites 0x100000
 			G_SABOTENB, G_CACTUS, G_NOURYOKUP: begin cfg_tx_pal = 11'h000; cfg_spr_units = 18'd16384; end // sprites 0x200000
 			// gfx_tharrier: fgtile 0x000, bgtile 0x000, sprites 0x100; bgtile 0x80000, sprites 0x100000
-			G_THARRIER: begin cfg_tx_pal = 11'h000; cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd8192; end
+			G_THARRIER, G_THARRIERB: begin cfg_tx_pal = 11'h000; cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd8192; end
 			G_MANYBLOC: begin cfg_tx_pal = 11'h000; cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd4096; end // gfx_tharrier layout; bgtile 0x80000, sprites 0x80000
 			G_VANDYKEB: begin cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd12288; end                     // bgtile 0x80000, sprites 0x180000 of the 0x200000 region
 			// gfx_macross / gfx_grdnstrm / gfx_redhawkb: BG at 0 (8bpp: one 256-colour bank), sprites 0x100, TX 0x200 — the defaults
@@ -735,7 +741,8 @@ module gunnail_core #(
 	           S_OKI0 = 20, S_OKI1 = 21, S_NMK112 = 22, S_IN2 = 23,
 	           S_AUNK = 24, S_ASCROLL = 25,   // afega: afega_unknown_r (0x080012), the four scroll words (0x084000-7 / 0x08C000-7)
 	           S_MANYBLOC_SCR = 26,           // manybloc's 4 KB scroll RAM (0x09C000-0x09CFFF)
-	           S_N = 27;
+	           S_MCU_CTRL = 27, S_MCU_DATAW = 28,  // tharrierb: mcu_control_w (0x080010) / mcu_data_w (0x080012)
+	           S_N = 29;
 	function automatic [S_N-1:0] decode(input [23:0] a_in, input [4:0] m, input [23:0] romtop);
 		reg io;          // the 32-byte I/O block
 		reg [3:0] r;     // word offset within it
@@ -752,6 +759,7 @@ module gunnail_core #(
 				M_ACROBATM, M_SSMISSIN: io = (a[23:5] == 19'h06000);                // 0x0C0000
 				M_TDRAGON:  io = (a[23:5] == 19'h06000) || (a[23:5] == 19'h07000);  // 0x0C0000 mirror 0x020000
 				M_FIREHAWK: io = (a[23:5] == 19'h14000);                            // 0x280000 (firehawk_map: afega_map + 0x200000)
+				M_THARRIERB: io = (a[23:12] == 12'h080) && (a[7:5] == 3'd0);        // 0x080000, the four MCU registers .mirror(0xf00)
 				default:    io = (a[23:5] == 19'h04000);                            // 0x080000
 			endcase
 			r = a[4:1];
@@ -805,6 +813,27 @@ module gunnail_core #(
 					decode[S_SCROLLA] = (a[23:1] == 23'h04A001);                     // 0x094003 bjtwin_scroll_w
 					decode[S_TXVRAM]  = (a >= 24'h09C000) && (a <= 24'h09DFFF);
 					decode[S_MAINRAM] = (a >= 24'h0F0000) && (a <= 24'h0FFFFF);
+				end
+				M_THARRIERB: begin // tharrierb_map: tharrier's board, its own I/O block and a real MC68705R3
+					// r=0 mcu_status_r, r=1 mcu_data_r (both read-only, handled in the read
+					// mux); r=7 soundlatch2 read at 0x08000F; r=8 mcu_control_w, r=9
+					// mcu_data_w; r=0xF soundlatch write at 0x08001F. flipscreen (r=0xA) and
+					// the sound-CPU reset (r=0xE) are unmaprw() on this board.
+					decode[S_IN0]      = io && (r == 4'h0);
+					decode[S_IN1]      = io && (r == 4'h1);
+					decode[S_DSW1]     = 1'b0;
+					decode[S_DSW2]     = 1'b0;
+					decode[S_FLIP]     = 1'b0;
+					decode[S_NMI]      = 1'b0;
+					decode[S_TILEBANK] = 1'b0;
+					decode[S_MCU_CTRL]  = io && (r == 4'h8);
+					decode[S_MCU_DATAW] = io && (r == 4'h9);
+					decode[S_PALETTE]  = (a >= 24'h088000) && (a <= 24'h0883FF);
+					decode[S_BGVRAM]   = (a >= 24'h090000) && (a <= 24'h093FFF);
+					decode[S_BGVRAM2]  = ((a >= 24'h09C000) && (a <= 24'h09CFFF)) ||
+					                     ((a >= 24'h09D800) && (a <= 24'h09DFFF));  // both plain RAM, "verified in test mode"
+					decode[S_TXVRAM]   = (a >= 24'h09D000) && (a <= 24'h09D7FF);
+					decode[S_MAINRAM]  = (a >= 24'h0F0000) && (a <= 24'h0FFFFF);
 				end
 				M_MANYBLOC: begin // manybloc_map: tharrier's board shape with a 4 KB scroll RAM where tharrier keeps its spare 2 KB of RAM
 					decode[S_PALETTE]      = (a >= 24'h088000) && (a <= 24'h0883FF);   // 512 entries
@@ -891,6 +920,8 @@ module gunnail_core #(
 	wire sel_nmk112     = sel[S_NMK112];
 	wire sel_in2        = sel[S_IN2];
 	wire sel_manybloc_scr = sel[S_MANYBLOC_SCR];
+	wire sel_mcu_ctrl     = sel[S_MCU_CTRL];
+	wire sel_mcu_dataw    = sel[S_MCU_DATAW];
 
 	// ------------------------------------------------------------------
 	// Protection MCU shared-bus decode (20-bit byte address, same map)
@@ -930,7 +961,7 @@ module gunnail_core #(
 	           BASE_BYTE_BG2TILE, BASE_BYTE_TILEROM, BASE_BYTE_SPRITES, BASE_BYTE_OKI1, BASE_BYTE_OKI2;
 	reg [13:0] PROT_ROM_BYTES_M1; // protection ROM size - 1 (0x1FFF / 0x3FFF)
 	always @(*) begin
-		PROT_ROM_BYTES_M1 = prot_rom_16k ? 14'h3FFF : 14'h1FFF;
+		PROT_ROM_BYTES_M1 = g_tharrierb ? 14'h0FFF : prot_rom_16k ? 14'h3FFF : 14'h1FFF; // tharrierb: the MC68705R3's 4 KB image
 		BASE_BYTE_BG2TILE = 24'h000000; BASE_BYTE_TILEROM = 24'h000000; BASE_BYTE_PROT = 24'h000000;
 		case (game_sel)
 			G_MACROSS: begin // maincpu 0x80000, ext, boot, nmk-215 0x2000, fg 0x20000, bg 0x200000, spr 0x200000, oki 0x80000 x2
@@ -990,6 +1021,11 @@ module gunnail_core #(
 			G_THARRIER: begin // maincpu 0x40000, audiocpu 0x10000 (in the NMK004 ext slot), fg 0x10000, bg 0x80000, spr 0x100000 (pair), oki 0x80000 x2
 				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h050000;
 				BASE_BYTE_BGTILE = 24'h060000; BASE_BYTE_SPRITES = 24'h0E0000; BASE_BYTE_OKI1 = 24'h1E0000; BASE_BYTE_OKI2 = 24'h260000;
+			end
+			G_THARRIERB: begin // maincpu 0x40000, audiocpu 0x10000 (the NMK004 ext slot), mcu 0x1000 (the PROT slot),
+			                   // fg 0x10000 (a 0x8000 ROM padded by the .mra), bg 0x80000, spr 0x100000, oki 0x80000 x2
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_PROT = 24'h050000; BASE_BYTE_FGTILE = 24'h051000;
+				BASE_BYTE_BGTILE = 24'h061000; BASE_BYTE_SPRITES = 24'h0E1000; BASE_BYTE_OKI1 = 24'h1E1000; BASE_BYTE_OKI2 = 24'h261000;
 			end
 			G_MANYBLOC: begin // maincpu 0x40000, audiocpu 0x10000 (the NMK004 ext slot), fg 0x10000, bg 0x80000, spr 0x80000 (two pairs), oki1 0x80000, oki2 0x80000 (ROMREGION_ERASE00 -- zero-filled by the .mra)
 				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h050000;
@@ -1727,8 +1763,8 @@ module gunnail_core #(
 	                                              ascroll[0];                         // afega/bubl2000
 	wire [8:0] afega_txx = (afega_vid == 2'd0) ? ascroll[3][8:0] : 9'd0;              // tx scrollx = scroll[1][1] (video_update only)
 	wire [7:0] afega_txy = (afega_vid == 2'd0) ? ascroll[2][7:0] : 8'd0;              // tx scrolly = scroll[1][0]
-	wire [15:0] bga_xscroll = g_afega ? afega_bgx : (g_vandyke | g_vandykeb) ? {vsc[0][7:0], vsc[1][15:8]} : g_mustang ? must_x : g_tharrier ? th_scroll : g_manybloc ? manybloc_scrollx : {scr_a[0], scr_a[1]};
-	wire [15:0] bga_yscroll = g_afega ? afega_bgy : (g_vandyke | g_vandykeb) ? {vsc[2][7:0], vsc[3][15:8]} : (g_mustang | g_tharrier) ? 16'h0000 : g_manybloc ? manybloc_scrolly : {scr_a[2], scr_a[3]};
+	wire [15:0] bga_xscroll = g_afega ? afega_bgx : (g_vandyke | g_vandykeb) ? {vsc[0][7:0], vsc[1][15:8]} : g_mustang ? must_x : (g_tharrier | g_tharrierb) ? th_scroll : g_manybloc ? manybloc_scrollx : {scr_a[0], scr_a[1]};
+	wire [15:0] bga_yscroll = g_afega ? afega_bgy : (g_vandyke | g_vandykeb) ? {vsc[2][7:0], vsc[3][15:8]} : (g_mustang | g_tharrier | g_tharrierb) ? 16'h0000 : g_manybloc ? manybloc_scrolly : {scr_a[2], scr_a[3]};
 	wire [15:0] bgb_xscroll = g_afega_8bpp ? afega_bgx : {scr_b[0], scr_b[1]}; // 8bpp: layer B is layer A's second nibble, same scroll
 	wire [15:0] bgb_yscroll = g_afega_8bpp ? afega_bgy : {scr_b[2], scr_b[3]};
 
@@ -2138,7 +2174,7 @@ module gunnail_core #(
 	// ------------------------------------------------------------------
 	reg [1:0] oki1_bank_r = 2'd0, oki2_bank_r = 2'd0;
 	always @(posedge clk_sys) begin
-		if (g_tharrier | g_manybloc) begin
+		if (g_tharrier | g_tharrierb | g_manybloc) begin
 			// tharrier_okibank_w (Z80 0xF600/0xF700): entries 0-3 of the
 			// 0x20000 pages from +0x20000; a write of 3 is ignored
 			if (z80_mem_we & sel_z80_okibank0 & (z80_do[1:0] != 2'd3)) oki1_bank_r <= z80_do[1:0];
@@ -2385,7 +2421,7 @@ module gunnail_core #(
 	reg        pl_lo_written;
 	wire [15:0] pl_word;
 	wire        pl_word_valid;
-	wire        prot_loading = HW_ROMS && has_prot && !pl_done;
+	wire        prot_loading = HW_ROMS && (has_prot | g_tharrierb) && !pl_done; // tharrierb loads the MC68705R3 image through the same machine
 	wire        pl_last = (pl_idx == PROT_ROM_BYTES_M1[13:1]);
 	always @(posedge clk_sys) begin
 		if (reset) begin
@@ -2413,6 +2449,8 @@ module gunnail_core #(
 
 	wire [9:0] vt_hcount, vt_vcount;
 	wire prot_halt_raw;
+	wire [15:0] prot_dbg_pc;
+	wire        prot_dbg_valid;
 	// NMK-215/113/110 protection MCU (TLCS-90): never present on Afega
 	// boards (see INCLUDE_NMK). halt_68k MUST stub low — a stuck-high
 	// stub would freeze the 68000 of every game on this rbf.
@@ -2431,7 +2469,7 @@ module gunnail_core #(
 			.vpos_div4(vt_vcount[9:2]),
 			.halt_68k(prot_halt_raw),
 			.nmk214_cfg_we(nmk214_cfg_we), .nmk214_cfg_data(nmk214_cfg_data),
-			.dbg_pc(dbg_prot_pc), .dbg_valid(dbg_prot_valid),
+			.dbg_pc(prot_dbg_pc), .dbg_valid(prot_dbg_valid),
 			.dbg_hl(dbg_prot_hl), .dbg_a(dbg_prot_a), .dbg_de(dbg_prot_de), .dbg_iy(dbg_prot_iy),
 			.dbg_int_ram_at_hl(dbg_prot_int_ram_at_hl)
 		);
@@ -2443,8 +2481,8 @@ module gunnail_core #(
 		assign prot_halt_raw   = 1'b0;
 		assign nmk214_cfg_we   = 1'b0;
 		assign nmk214_cfg_data = 8'h00;
-		assign dbg_prot_pc            = 16'd0;
-		assign dbg_prot_valid         = 1'b0;
+		assign prot_dbg_pc            = 16'd0;
+		assign prot_dbg_valid         = 1'b0;
 		assign dbg_prot_hl            = 16'd0;
 		assign dbg_prot_a             = 8'h00;
 		assign dbg_prot_de            = 16'd0;
@@ -2518,6 +2556,91 @@ module gunnail_core #(
 	wire [15:0] mb_in0 = 16'h8000;
 	wire [15:0] mb_in1 = {~in0_eff[1], ~in1_eff[11], ~in1_eff[10], ~in1_eff[9], ~in1_eff[8], ~in1_eff[13], ~in1_eff[12], ~in0_eff[4],
 	                      ~in0_eff[0], ~in1_eff[3],  ~in1_eff[2],  ~in1_eff[1], ~in1_eff[0], ~in1_eff[5],  ~in1_eff[4], ~in0_eff[3]};
+
+	// ------------------------------------------------------------------
+	// tharrierb's MC68705R3 (2026-09-14). Unlike tharrier's own
+	// undumped/simulated MCU above, this bootleg's chip is fully dumped,
+	// so the game runs against the real thing: rtl/m68705/m68705_core.sv
+	// (jotego's jt6805 plus this project's peripheral wrapper), verified
+	// instruction-for-instruction against MAME's m6805 -- see
+	// sim/rtl/m68705 and docs/tier7-tharrierb.md.
+	//
+	// The 68000 side is tharrierb_state's own four registers:
+	//   0x080000 r  mcu_status_r  -- bit 15 set, nothing else
+	//   0x080002 r  mcu_data_r    -- Port A in the msb, Port B in the lsb
+	//   0x080010 w  mcu_control_w -- bit 0 low asserts the MCU's IRQ pin
+	//   0x080012 w  mcu_data_w    -- the byte Port B reads back
+	// and the MCU's Port D is a 5-way input mux selected by Port C[2:0]:
+	// 0 DSW1, 1 DSW2, 2 BUTTONS, 3 P1, 4 P2, anything else 0. Every bit of
+	// all five is IP_ACTIVE_HIGH, so they are built from this family's own
+	// active-low inputs by inversion.
+	//
+	// Clock: XTAL(4'915'200)/2 = 2.4576 MHz, which is jt6805's `cen` (it
+	// wants the crystal, 4x the E-pin rate). 6144/100000 x 40 MHz.
+	// ------------------------------------------------------------------
+	wire [7:0] mcu_porta_out, mcu_portb_out, mcu_portc_out;
+	wire [11:0] mcu_dbg_pc;
+	wire        mcu_dbg_valid;
+	wire [7:0]  mcu_dbg_data;
+	// The TLCS-90 protection trace ports carry the MC68705R3's bus instead on
+	// tharrierb, which has no TLCS-90 at all -- so sim/rtl/gunnail_mg's own
+	// <game>_prot.trace is the MCU's write trace there.
+	assign dbg_prot_pc    = g_tharrierb ? {4'd0, mcu_dbg_pc} : prot_dbg_pc;
+	assign dbg_prot_valid = g_tharrierb ? mcu_dbg_valid : prot_dbg_valid;
+	reg  [7:0] mcu_in_latch = 8'h00;
+	reg        mcu_irq_n    = 1'b1;
+	always @(posedge clk_sys) begin
+		if (reset) begin
+			mcu_in_latch <= 8'h00;
+			mcu_irq_n    <= 1'b1;
+		end else begin
+			if (sel_mcu_dataw & cpu_write & ~LDSn) mcu_in_latch <= oEdb[7:0];
+			if (sel_mcu_ctrl  & cpu_write & ~LDSn) mcu_irq_n    <= oEdb[0];
+		end
+	end
+	// tharrierb's own INPUT_PORTS, all IP_ACTIVE_HIGH:
+	//   P1/P2  bit1 B1, bit2 B2, bit3 right, bit4 left, bit5 down, bit6 up
+	//   BUTTONS bit1 start2, bit2 start1, bit4 coin1, bit5 coin2
+	wire [7:0] thb_p1      = {1'b0, ~in1_eff[3], ~in1_eff[2], ~in1_eff[1], ~in1_eff[0], ~in1_eff[5], ~in1_eff[4], 1'b0};
+	wire [7:0] thb_p2      = {1'b0, ~in1_eff[11], ~in1_eff[10], ~in1_eff[9], ~in1_eff[8], ~in1_eff[13], ~in1_eff[12], 1'b0};
+	wire [7:0] thb_buttons = {2'b00, ~in0_eff[1], ~in0_eff[0], 1'b0, ~in0_eff[3], ~in0_eff[4], 1'b0};
+	wire [7:0] thb_dsw1    = (HW_ROMS || (SIM_DSW != 0)) ? dsw1_i[7:0] : 8'h00;
+	wire [7:0] thb_dsw2    = (HW_ROMS || (SIM_DSW != 0)) ? dsw2_i[7:0] : 8'h00;
+	reg  [7:0] mcu_portd_in;
+	always @(*) case (mcu_portc_out[2:0])
+		3'd0:    mcu_portd_in = thb_dsw1;
+		3'd1:    mcu_portd_in = thb_dsw2;
+		3'd2:    mcu_portd_in = thb_buttons;
+		3'd3:    mcu_portd_in = thb_p1;
+		3'd4:    mcu_portd_in = thb_p2;
+		default: mcu_portd_in = 8'h00;
+	endcase
+	reg [16:0] mcu_cen_acc = 17'd0;
+	reg        mcu_cen = 1'b0;
+	always @(posedge clk_sys) begin
+		if (mcu_cen_acc + 17'd6144 >= 17'd100000) begin mcu_cen_acc <= mcu_cen_acc + 17'd6144 - 17'd100000; mcu_cen <= 1'b1; end
+		else begin mcu_cen_acc <= mcu_cen_acc + 17'd6144; mcu_cen <= 1'b0; end
+	end
+	generate
+	if (INCLUDE_NMK) begin : g_m68705
+		m68705_core #(.ROM_FILE(M68705_ROM_FILE), .HW_ROMS(HW_ROMS)) u_mcu (
+			.clk(clk_sys), .cen(mcu_cen & g_tharrierb), .reset(reset | ~g_tharrierb | prot_loading),
+			.rom_we(prot_rom_we & g_tharrierb), .rom_waddr(prot_rom_waddr[11:0]), .rom_wdata(prot_rom_wdata),
+			.irq_n(mcu_irq_n),
+			.porta_out(mcu_porta_out), .portb_out(mcu_portb_out), .portb_in(mcu_in_latch),
+			.portc_out(mcu_portc_out), .portd_in(mcu_portd_in),
+			.dbg_pc(mcu_dbg_pc), .dbg_valid(mcu_dbg_valid), .dbg_data(mcu_dbg_data), .dbg_porta()
+		);
+	end else begin : g_m68705_off
+		assign mcu_dbg_pc    = 12'd0;
+		assign mcu_dbg_valid = 1'b0;
+		assign mcu_dbg_data  = 8'h00;
+		assign mcu_porta_out = 8'h00;
+		assign mcu_portb_out = 8'h00;
+		assign mcu_portc_out = 8'h00;
+	end
+	endgenerate
+
 	reg  [23:0] last_fetch_pc;
 	always @(posedge clk_sys) if (cpu_read & FC1 & ~FC0) last_fetch_pc <= byte_addr;   // the most recent instruction-fetch address
 	// mustangb3_map's 0x080006 ("gross hack. Protection?"): MAME keys on
@@ -2913,8 +3036,10 @@ module gunnail_core #(
 		else if (sel_oki1)    rdata = {8'h00, oki2_chip_dout};
 		else if (sel_mb3_prot) rdata = mb3_prot_val;
 		else if (sel_aunk)    rdata = 16'h0100; // afega_unknown_r
-		else if (sel_in0)     rdata = g_manybloc ? mb_in0 : g_tharrier ? th_in0 : g_redhawkb ? ~in0_eff : (in0_eff & ~{9'd0, g_vandykeb, 6'd0}); // redhawkb: every input active high; vandykeb: IN0 bit 6 is IP_ACTIVE_HIGH "tested on boot" — reading it 1 drops the game into its service-mode test loop (WRAM check / tile / grid screens)
-		else if (sel_in1)     rdata = g_manybloc ? mb_in1 : g_tharrier ? (LDSn ? {th_mcu_val, 8'h00} : th_in1) : g_redhawkb ? ~in1_eff :
+		// tharrierb mcu_status_r: bit 15 set, every other bit unused
+		else if (sel_in0)     rdata = g_tharrierb ? 16'h8000 : g_manybloc ? mb_in0 : g_tharrier ? th_in0 : g_redhawkb ? ~in0_eff : (in0_eff & ~{9'd0, g_vandykeb, 6'd0}); // redhawkb: every input active high; vandykeb: IN0 bit 6 is IP_ACTIVE_HIGH "tested on boot" — reading it 1 drops the game into its service-mode test loop (WRAM check / tile / grid screens)
+		// tharrierb mcu_data_r: the MC68705R3's Port A latch in the msb, Port B in the lsb
+		else if (sel_in1)     rdata = g_tharrierb ? {mcu_porta_out, mcu_portb_out} : g_manybloc ? mb_in1 : g_tharrier ? (LDSn ? {th_mcu_val, 8'h00} : th_in1) : g_redhawkb ? ~in1_eff :
 		                             // twinactn/dolmenk boot-test IN1 bits 0x0080/0x8000, which their own
 		                             // INPUT_PORTS declare IP_ACTIVE_HIGH (unpressed = 0) where
 		                             // dolmen/puzlwrld declare them IP_ACTIVE_LOW (unpressed = 1).
@@ -2931,7 +3056,7 @@ module gunnail_core #(
 		// unmapped space at PC 0x5F0C56 forever -- a black screen from frame
 		// ~50 on. Matched to MAME for this map only, to keep the blast radius
 		// off every other game on the rbf.
-		else                  rdata = (g_comad | g_manybloc) ? 16'h0000 : 16'hFFFF; // unmapped (incl. the write-only scroll registers); manybloc's inputs are all ACTIVE HIGH, so 0xFFFF would read as "everything pressed"
+		else                  rdata = (g_comad | g_manybloc | g_tharrierb) ? 16'h0000 : 16'hFFFF; // unmapped (incl. the write-only scroll registers); manybloc's inputs are all ACTIVE HIGH, so 0xFFFF would read as "everything pressed"
 	end
 	assign iEdb = rdata;
 
@@ -3027,7 +3152,7 @@ module gunnail_core #(
 		.scrollram_row(vid_scrollram_row), .scrollramy_row(vid_scrollramy_row),
 		.nmk214_cfg_we(vid_cfg_we), .nmk214_cfg_data(vid_cfg_data),
 		.tx_bg_mode(g_bjtwin), .tx_yscroll(g_afega ? afega_txy : 8'd0 - tx_scroll_reg), .tx_bank_off(cfg_tx_bank_off),
-		.spr_flip_en(g_tharrier | g_afega | g_manybloc), .spr_lag1(g_bjtwin | g_manybloc), .vis_start(vt_line_start & (vt_vcount == (g_manybloc ? 10'd8 : 10'd16))), .tall240(g_manybloc),
+		.spr_flip_en(g_tharrier | g_tharrierb | g_afega | g_manybloc), .spr_lag1(g_bjtwin | g_manybloc), .vis_start(vt_line_start & (vt_vcount == (g_manybloc ? 10'd8 : 10'd16))), .tall240(g_manybloc),
 		.bg_bank(bgbank_reg),
 		.game_powerins(1'b0), .tile_lsb(g_redhawkb), .bg_8bpp(g_afega_8bpp), .bg_code_mod12k((game_sel == G_BUBL2000) || (game_sel == G_HOTBUBLA)), .tx_xscroll(g_afega ? afega_txx : 9'd0), .tx_off(g_afega & g_afega_tx_off), .spr_off(g_afega_spr_off),
 		.gfx_swap34(g_gfx_swap34), .spr_bitrev(g_tomagic),

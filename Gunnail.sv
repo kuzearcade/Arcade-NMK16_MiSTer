@@ -121,8 +121,8 @@ wire        game_vertical = (game_sel == 6'd0) | (game_sel == 6'd1) | (game_sel 
                             (game_sel == 6'd35) | (game_sel == 6'd36) | (game_sel == 6'd41) |
                             // Family E ROT270 sets: acrobatmbl, tdragonb, tdragonb3, gunnailb
                             (game_sel == 6'd45) | (game_sel == 6'd47) | (game_sel == 6'd48) | (game_sel == 6'd50) |
-                            // ssmissin (52) is ROT270, manybloc (54) ROT270
-                            (game_sel == 6'd52) | (game_sel == 6'd54);
+                            // ssmissin (52) is ROT270, manybloc (54) and tharrierb (55) ROT270
+                            (game_sel == 6'd52) | (game_sel == 6'd54) | (game_sel == 6'd55);
 // MAME ORIENTATION_FLIP_Y sets (grdnstrm, grdnstrmau, firehawk, spec2kh): the
 // board draws upside down for a monitor mounted that way; the picture is
 // read out bottom-up (rd_y mirrored) so it displays upright, as MAME does.

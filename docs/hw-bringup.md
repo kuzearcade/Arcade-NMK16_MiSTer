@@ -3557,6 +3557,49 @@ four are in the moving demo, where the two runs' timelines diverge as
 they do for every game here. A separate 16-shot and a 40-shot burst
 added three more exact matches.
 
+## Task Force Harrier (Lettering bootleg) on the Gunnail rbf (2026-09-14)
+
+The last set in `nmk16.cpp` that needed a CPU core this project did not
+have. Its protection chip is a fully dumped MC68705R3, so it runs the real
+thing: jotego's jt6805 under `rtl/m68705/m68705_core.sv`. The full account —
+how the CPU was verified against MAME's `m6805` (960,794 instructions, 13
+interrupts, zero mismatches), the testbench traps that first looked like CPU
+bugs, the 17,782 -> 830 ALM fix, the edge-triggered interrupt latch and the
+game port itself — is in `docs/tier7-tharrierb.md`. Three things worth
+repeating here:
+
+- **The interrupt is edge triggered and latched.** `m6805_base_device::
+  execute_set_input` ORs into `m_pending_interrupts` on the ASSERT edge and
+  nothing clears it until the CPU services it; jt6805 samples its `irq` input
+  live at an instruction boundary. tharrierb's 68000 pulses the MCU IRQ for
+  about 1 us (write 0 then 1 to 0x080010, ten 10 MHz cycles apart) against an
+  MCU whose instructions are 2-10 us long, so without a latch the pulse is
+  simply missed — the 68000 spun forever at 0x83C on the first handshake with
+  a provably correct MCU behind it.
+- **NMK-10 for the third time this week, and here it was the blocker.** The
+  wrapper read its 4 KB ROM and 112 B RAM combinationally: 17,782 ALMs for
+  that module alone, against 41,910 on the device. jt6805 samples `din` on
+  its own 2.4576 MHz `cen` (one pulse in ~16 clk_sys) and holds the address
+  for that whole window, so a clk_sys-registered read needs no change to
+  jt6805 and costs 830 ALMs + 5 M10K instead.
+- **The bootleg's 8x8 tile ROM is half the original's** (0x8000, 1024 tiles).
+  MAME wraps tile codes modulo the region's own tile count, so the `.mra`
+  fills the family's 0x10000 slot with a SECOND COPY rather than zeros, which
+  reproduces that wrap exactly.
+
+Fit: 26,492 -> 27,422 ALMs (65 %), 413 -> 427 M10K, worst setup slack
++0.627 ns.
+
+Verification: 430 reference-sim frames against MAME 0.289, **321
+pixel-exact**; every frame that is not exact differs by at most 24 px of
+57,344 (0.04 %), all of them one palette entry on the title aircraft that the
+whole-frame renderer and the scanline renderer disagree about for part of a
+frame — the NMK-16 class of residual, not a port defect. On the DE10-Nano the
+core boots, plays its attract demo and renders gameplay; 4 of 19 native
+screenshots taken a second apart are byte-identical to a MAME frame and three
+more differ only by that same palette entry, the rest being in the moving
+demo past the end of the 520-frame reference window.
+
 ## Status
 
 Four RBFs run on the DE10-Nano and are tracked in `releases/`:

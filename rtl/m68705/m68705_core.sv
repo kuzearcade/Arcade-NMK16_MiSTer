@@ -85,18 +85,51 @@ module m68705_core #(
 	reg  [7:0]  din;
 	wire [7:0]  dout;
 	wire        tirq;
+	wire [11:0] a = addr[11:0]; // the chip's own address bus is 12 bits (4096-byte map)
+
+	// The external interrupt is EDGE TRIGGERED AND LATCHED, not a level:
+	// m6805_base_device::execute_set_input only ever ORs into
+	// m_pending_interrupts on the transition to ASSERT, and nothing clears it
+	// until the CPU services the interrupt. jt6805 samples its `irq` input
+	// live at an instruction boundary, so without this latch tharrierb's
+	// ~1 us pulse (the 68000 writes 0 then 1 to 0x080010 back to back, ten
+	// 10 MHz cycles apart) is simply missed by an MCU whose instructions are
+	// 2-10 us long -- which left the 68000 spinning forever on the first
+	// handshake. Cleared when the vector at 0x0FFA is fetched, which is the
+	// RTL's observable equivalent of MAME's interrupt() clearing the bit.
+	reg irq_latch = 1'b0, irq_n_d = 1'b1;
+	always @(posedge clk) begin
+		if (reset) begin
+			irq_latch <= 1'b0;
+			irq_n_d   <= 1'b1;
+		end else begin
+			irq_n_d <= irq_n;
+			if (irq_n_d & ~irq_n)                 irq_latch <= 1'b1;
+			else if (cen && (a == 12'hFFA))       irq_latch <= 1'b0;
+		end
+	end
 
 	jt6805 u_cpu (
 		.rst(reset), .clk(clk), .cen(cen),
-		.irq(~irq_n), .tirq(tirq),
+		.irq(irq_latch), .tirq(tirq),
 		.wr(wr), .tstop(tstop),
 		.addr(addr), .din(din), .dout(dout)
 	);
 
-	wire [11:0] a = addr[11:0]; // the chip's own address bus is 12 bits (4096-byte map)
+`ifdef VERILATOR
+	// Simulation only: an INSTRUCTION trace, directly comparable with a MAME
+	// m6805 trace. jt6805's `ni` microinstruction starts the next instruction
+	// with its opcode already in md and PC on that instruction, which is
+	// exactly what MAME's trace line shows. Hierarchical reads, so they are
+	// kept out of the synthesised build.
+	assign dbg_pc    = u_cpu.u_regs.pc[11:0];
+	assign dbg_valid = u_cpu.u_ctrl.ni & cen;
+	assign dbg_data  = u_cpu.u_regs.a;
+`else
 	assign dbg_pc = a;
 	assign dbg_valid = wr;
 	assign dbg_data = dout;
+`endif
 	assign dbg_porta = porta_latch;
 
 	// ------------------------------------------------------------------
