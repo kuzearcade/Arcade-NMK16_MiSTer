@@ -412,6 +412,15 @@ therefore never meant anything. Two specific traps:
   bootlegs `powerinsa`/`powerinsb`/`powerinsc` remain out of scope:
   different sound hardware (`powerinsa` has no Z80; `powerinsc` is not
   working in MAME either).
+  **Update (2026-09-12/14):** `powerinsa` and `powerinsb` are no longer
+  out of scope — both were ported as Macross2 runtime clone modes and
+  ship (`powerinsa` really does have no Z80; its OKI is driven straight
+  off the 68000). `powerinsc` does not: MAME cannot run it either
+  (*"different sprites' format not implemented"*), and although the port
+  boots, its sprites draw wrong the same way. Its `.mra` is generated
+  into the gitignored `.non-working/` rather than `releases/`, so it is
+  never shipped or deployed — see `tools/gen_family_c_mra.py`'s
+  `NON_WORKING` set.
 
 ### NMK-8 · macross2 shows a dead "Button 3" in the OSD button wizard
 - **Severity:** limitation (cosmetic) · **Status:** fixed (2026-09-10 — not dead after all)

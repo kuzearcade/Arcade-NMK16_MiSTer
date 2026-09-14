@@ -21,7 +21,7 @@ Surveyed several existing MiSTer arcade cores of comparable scope to avoid reinv
 
 ## Full game inventory (from source analysis)
 
-85 `GAME()` entries. Hardware sub-families identified (full detail — memory maps, per-game quirks, screen timing tables — already captured from the source read and will be formalized into a living per-game config table as Milestone 0):
+85 `GAME()` entries *(wrong — there are 101; see the Milestone 0 correction below)*. Hardware sub-families identified (full detail — memory maps, per-game quirks, screen timing tables — already captured from the source read and will be formalized into a living per-game config table as Milestone 0):
 
 | Family | Representative games | Main CPU | Sound path | Video layers | Protection |
 |---|---|---|---|---|---|
@@ -36,6 +36,10 @@ Surveyed several existing MiSTer arcade cores of comparable scope to avoid reinv
 | I — Afega hacks of Mustang | twinactn, dolmen, puzlwrld | 68000 | as family B | as B | none |
 
 **Correction from Milestone 0 (full per-game read, `docs/game-inventory.md`): there are 101 romsets, not 85** — the original count undercounted. The `.rbf` estimate is also revised substantially upward: actually-distinct `MACHINE_CONFIG` functions per family push the total to **~26–30 `.rbf` builds**, not the original ~14–18 — driven mainly by family H (Afega) needing 6–8 builds (at least 8 distinct machine-config functions: `stagger1`, `redhawki`, `redhawkb`, `grdnstrm`, `grdnstrmk`, `popspops`, `spec2k`, `firehawk`, not "1–2" as first assumed) and families C/D/E each needing 3–5 builds where clones diverge in real hardware, not just ROM content. Full per-family breakdown is in `docs/game-inventory.md`. Two romsets (`powerinsc`, `macrossbl`) are `MACHINE_NOT_WORKING` in MAME itself — recommend deprioritizing/excluding them rather than reverse-engineering behavior MAME's own maintainers haven't nailed down.
+
+**Outcome (2026-09-14), against the two estimates above.** Both were wrong in the same direction — the plan over-estimated how much of the family diverges in hardware rather than in ROM content:
+- **4 `.rbf` builds, not 26–30.** `Macross2`, `Raphero`, `Gunnail` and `NMK16_Afega`. Distinct `MACHINE_CONFIG` functions turned out to be a poor proxy for distinct *hardware*: nearly all of them collapse into runtime game modes selected by the `.mra`'s `<switches>` game-id byte, driven off one shared core. Family H, projected at 6–8 builds, is one. The split that did happen (`NMK16_Afega` out of `Gunnail`, 2026-09-13) was for FPGA area, not fidelity.
+- **Four `MACHINE_NOT_WORKING` romsets, not two.** `powerinsc` and `macrossbl` as listed here, plus `tdragonb2` (*"runs too quickly, Oki sounds terrible"*) and `firehawkv` (*"incomplete dump"*). Those four are exactly the four that do not ship — the equivalence holds in both directions — so the "deprioritize rather than reverse-engineer" recommendation stands and was followed. 97 of the 101 ship; see the README for the per-set reasons.
 
 ## Custom RTL components required
 
