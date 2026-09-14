@@ -622,6 +622,19 @@ AIRATTCK = dict(
         ("bgtile, 0x100000 (2 files)", [("9.uw9", "86e59966"), ("10.ux9", "122c8d04")]),
         ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("7.uo81", "3c38d671"), ("8.uo82", "9a83e3d8"))]),
         ("oki1, 0x0A0000 (fixed 0x20000 = 2.su12, banked = 1.su13's own 4 quarters)", [("2.su12", "93ab615b"), ("1.su13", "09a836bb")])])
+# Air Attack set 2: identical to set 1 except the two program ROMs, which
+# are different dumps AND swap the byte lanes by filename (6.uc10 even /
+# 5.ue10 odd, where set 1 has ue10 even / uc10 odd). Everything else
+# resolves from the parent zip.
+AIRATTCKA = dict(
+    id=52, year=1996, manufacturer="Comad", rot=True, switches="FF,FF", dips=AIRATTCK_DIPS,
+    regions=[
+        ("maincpu, 0x040000", [pair(("6.uc10", "3572baf0"), ("5.ue10", "6589c005"))]),
+        ("Z80 sound program, 0x008000", [("3.su6", "3e352370")]),
+        ("fgtile, 0x020000", [("4.ul10", "e9362ab4")]),
+        ("bgtile, 0x100000 (2 files)", [("9.uw9", "86e59966"), ("10.ux9", "122c8d04")]),
+        ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("7.uo81", "3c38d671"), ("8.uo82", "9a83e3d8"))]),
+        ("oki1, 0x0A0000 (fixed 0x20000 = 2.su12, banked = 1.su13's own 4 quarters)", [("2.su12", "93ab615b"), ("1.su13", "09a836bb")])])
 
 # ---------------------------------------------------------------------------
 # Afega boards (Family H, 2026-09-13): gunnail_core.sv ids 23-43, one per
@@ -946,6 +959,7 @@ SETS = [
     ("tomagic",     "Tom Tom Magic",                                               10778, TOMAGIC, None, {}),
     ("ssmissin",    "S.S. Mission",                                                10801, SSMISSIN, None, {}),
     ("airattck",    "Air Attack (set 1)",                                          10803, AIRATTCK, None, {}),
+    ("airattcka",   "Air Attack (set 2)",                                          10804, AIRATTCKA, "airattck", {}),
 ]
 
 

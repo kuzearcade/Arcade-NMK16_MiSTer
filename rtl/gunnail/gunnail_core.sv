@@ -2809,7 +2809,15 @@ module gunnail_core #(
 		else if (sel_in2)     rdata = th_in2;
 		else if (sel_dsw1)    rdata = (HW_ROMS || (SIM_DSW != 0)) ? dsw1_i : 16'hFFFF;
 		else if (sel_dsw2)    rdata = (HW_ROMS || (SIM_DSW != 0)) ? dsw2_i : 16'hFFFF;
-		else                  rdata = 16'hFFFF; // unmapped (incl. the write-only scroll registers)
+		// Unmapped. MAME's unmap value for a 68000 program space is 0, but
+		// this core has always returned 0xFFFF and no shipped game noticed --
+		// they do not read unmapped addresses. airattcka does: it reads
+		// 0x0C000C (unmapped in ssmissin_map, MAME returns 0x0000) during
+		// boot, and on 0xFFFF it computes a bad jump target and spins in
+		// unmapped space at PC 0x5F0C56 forever -- a black screen from frame
+		// ~50 on. Matched to MAME for this map only, to keep the blast radius
+		// off every other game on the rbf.
+		else                  rdata = g_ssmissin ? 16'h0000 : 16'hFFFF; // unmapped (incl. the write-only scroll registers)
 	end
 	assign iEdb = rdata;
 

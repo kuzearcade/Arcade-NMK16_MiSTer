@@ -267,8 +267,27 @@ by reading the driver source. Defect 1 is **confirmed on hardware**
   as suffering; the fixed build is pixel-identical to MAME there. So the
   prediction made from reading `.mirror(0x1800)` — that ssmissin is inert
   but airattck loses its whole TX layer — is borne out, and **airattck is
-  now a shipping candidate** (sim ROMs extracted, generator entry added;
-  it still needs a `.mra` and a hardware test).
+  now shipped**, together with airattcka.
+
+**A third defect on this map, found while shipping them (2026-09-14).**
+airattcka boots into a black screen: it reads **0x0C000C**, which
+`ssmissin_map` leaves unmapped and MAME's 68000 space returns as
+**0x0000**, while this core's read mux has always defaulted unmapped
+reads to **0xFFFF**. On 0xFFFF it computes a bad jump target and spins
+forever in unmapped space at PC 0x5F0C56 — 1.37M instructions and 853k
+writes in the window, against airattck's 2.53M/212k. Matched to MAME
+**for this map only**: the 0xFFFF default is wrong everywhere in
+principle, but no other shipped game reads an unmapped address, and
+flipping it globally under 50 working games is not worth the risk.
+
+| set | before | after |
+|---|---|---|
+| airattcka | 24/62 (black from frame ~50) | **55/62** |
+| airattck | 55/62 | 55/62 (unchanged) |
+| ssmissin | 54/62 | 54/62 (unchanged) |
+
+  All three verified in gameplay on the DE10-Nano: clean BG, TX and
+  sprites, no streaking.
 Note the same-scene `video_state` harness still disagrees with MAME for
 unrelated, unresolved reasons (see below), so it played no part in
 validating either fix.
