@@ -3268,8 +3268,9 @@ parameters of the rbf that ships it** (`EXTRA_VFLAGS=-GINCLUDE_AFEGA=..
 the sim with the default 1/1 parameters would have tested the *unsplit*
 core and proven nothing about the gating, so that step is essential.
 
-40 of the 57 distinct game ids could run (the other 17 have no extracted
-sim ROMs yet): **27 pixel-exact on all 62 compared frames, 13 partial.**
+40 sets could run, covering 38 of the core's 52 game ids (the rest had
+no extracted sim ROMs yet): **27 pixel-exact on all 62 compared frames,
+13 partial.**
 
 The 13 partials were then re-run on the **pre-split** core
 (`INCLUDE_AFEGA=1, INCLUDE_NMK=1`) as a control. Every one scored
@@ -3310,9 +3311,7 @@ Both partials were re-run on the **unsplit** core as controls and scored
 identically — spec2kh 61/62, redfoxwp2 23/62 — so both are pre-existing
 differences against MAME, not split regressions. Combined with part 1,
 **zero regressions are attributable to the split**, and simulation
-coverage now reaches **48 of the 57 game ids** (up from 38). The nine
-still unverified in simulation are id 0 (`gunnail` itself, which the
-board table above covers directly) and eight with no sim ROMs.
+coverage reaches **48 of the core's 52 game ids** (up from 38).
 
 **The trap that cost the most time here: `-norotate` suppresses
 `ORIENTATION_FLIP_Y`, not just rotation.** `machine.video:snapshot()`
@@ -3326,6 +3325,63 @@ orientation 'vflip'" — a perfect match, upside down. Vertically flipping
 the references for those sets took grdnstrmau to 62/62 and spec2kh to
 61/62. If a set reads 0/62 with a plausible-looking picture, test the
 flip before hunting for an RTL bug.
+
+### Reference-sim campaign, part 3 (the last 4 ids — coverage complete)
+
+Parts 1 and 2 were reported against a denominator of 57 game ids, which
+was never right: `gunnail_core.sv` defines ids 0-51, so the core has
+**52**. The real gap after part 2 was therefore four ids, not nine — id
+0 `gunnail`, 11 `hachamfp`, 12 `mustangs`, 16 `bjtwinpa` — and the last
+three had no sim target at all. Count ids from the `G_*` localparams,
+not from the number of sets.
+
+Adding those three meant two small pieces of plumbing worth knowing:
+
+- `gen_gunnail_mra.py --simroms` writes the NMK004 external program as
+  `<set>_audiocpu.hex`, which is byte-for-byte what `gunnail_mg` wants
+  at `../tlcs90/roms/<set>_ext.hex` (verified: `mustangs_audiocpu.hex`
+  and the existing `mustang_ext.hex` are identical files). Copy it
+  across; there is no separate extraction step.
+- `--simroms` never writes a `_prot.hex`. `bjtwinpa` needs the NMK-215
+  boot ROM, which is a single shared 8 KB dump — `bjtwin_prot.hex` and
+  `sabotenb_prot.hex` are identical — so any of them serves.
+
+`SEL_hachamfp`/`SEL_mustangs`/`SEL_bjtwinpa` are now in the Makefile,
+with `bjtwinpa` added to the EXT-suppression filter and to the PROT
+filter. Results, built `INCLUDE_AFEGA=0, INCLUDE_NMK=1` (the shipped
+Gunnail configuration):
+
+| set | id | result |
+|---|---|---|
+| mustangs | 12 | 62/62 |
+| bjtwinpa | 16 | 62/62 |
+| gunnail | 0 | 54/62 |
+| hachamfp | 11 | 57/62 |
+
+Both partials are **boot lag, not a rendering difference**: every missed
+frame reports `sim nonblack 0` — an entirely black sim frame — and they
+are contiguous at the start of the window (gunnail 20-27, hachamfp
+20-24). MAME starts drawing a few frames earlier than the sim; from the
+first drawn frame onward both match exactly. This is the same shape as
+every part-1 partial.
+
+The unsplit control (`INCLUDE_AFEGA=1`) scored identically, 54/62 and
+57/62, and going further, **all 99 dumped frames are byte-identical
+between the split and unsplit builds** for both games — a stronger
+statement than equal scores, and worth preferring when the two builds
+are supposed to be behaviourally identical.
+
+**Simulation coverage is now 52 of 52 game ids.** Note this is
+reference-sim coverage (`HW_ROMS=0`), which bypasses SDRAM, the arbiter
+and the prefetch caches — see the ssmissin episode for what that does
+not prove.
+
+One harness note: `gunnail_mg` writes PPMs only when `TB_DUMP_PPM=1` is
+set. Without it a run still completes, prints its full statistics and
+exits 0, having written no frames at all — so check for the PPMs, not
+the exit code. Frames 20-81 are identical regardless of total `CYCLES`
+(the sim is deterministic from reset and the count only decides when it
+stops), so 70M cycles is enough for this comparison window.
 
 ## Status
 

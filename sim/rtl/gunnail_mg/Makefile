@@ -51,9 +51,12 @@ SEL_strahl   := 7
 SEL_tdragon  := 8
 SEL_hachamf  := 9
 SEL_tdragon1 := 10
+SEL_hachamfp := 11
+SEL_mustangs := 12
 SEL_hachamfb := 13
 SEL_bjtwin   := 14
 SEL_bjtwinp  := 15
+SEL_bjtwinpa := 16
 SEL_sabotenb := 17
 SEL_nouryoku := 17
 SEL_cactus   := 18
@@ -114,7 +117,7 @@ endif
 ifeq ($(GAME),hachamfb)
 EXT := ../tlcs90/roms/hachamf_ext.hex
 endif
-ifneq ($(filter $(GAME),bjtwin bjtwinp sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3 $(AFEGA_SETS) $(FAME_SETS)),)
+ifneq ($(filter $(GAME),bjtwin bjtwinp bjtwinpa sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3 $(AFEGA_SETS) $(FAME_SETS)),)
 EXT :=
 endif
 AUDIOCPU :=
@@ -126,7 +129,7 @@ ifeq ($(GAME),vandykeb)
 OKI2 :=
 endif
 PROT :=
-ifneq ($(filter $(GAME),gunnail macross hachamf tdragon1 bjtwin sabotenb nouryoku),)
+ifneq ($(filter $(GAME),gunnail macross hachamf tdragon1 bjtwin bjtwinpa sabotenb nouryoku),)
 PROT := $(R)_prot.hex
 endif
 BG2 :=
