@@ -141,7 +141,11 @@ int main(int argc, char **argv) {
 		if (!prev_frame_done && frame_done_now) {
 			long nonzero_px = 0;
 			FILE *ppm = nullptr;
-			if (dump_ppm) {
+			// TB_PPM_FROM=N: only dump frames >= N (same knob as the
+			// reference tb; a long run to a late attract window would
+			// otherwise write hundreds of megabytes of dead frames).
+			static const unsigned ppm_from = std::getenv("TB_PPM_FROM") ? (unsigned)strtoul(std::getenv("TB_PPM_FROM"), nullptr, 0) : 0;
+			if (dump_ppm && frame_count >= ppm_from) {
 				char fname[64];
 				std::snprintf(fname, sizeof(fname), "%s_hw_frame_%03u.ppm", prefix.c_str(), frame_count);
 				ppm = std::fopen(fname, "wb");

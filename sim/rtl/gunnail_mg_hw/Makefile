@@ -67,6 +67,7 @@ SEL_tdragonb3 := 48
 SEL_strahljbl := 49
 SEL_gunnailb := 50
 SEL_tomagic  := 51
+SEL_ssmissin := 52
 SEL := $(SEL_$(GAME))
 
 SOURCES := $(TOP).sv $(CORE_DIR)/gunnail_core.sv $(MACROSS2_DIR)/video_macross2.sv \

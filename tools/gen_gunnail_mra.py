@@ -578,6 +578,32 @@ TOMAGIC = dict(id=51, year=1997, manufacturer="Hobbitron T.K.Trading Co. Ltd.", 
     ("oki1, 0x040000 (3 MHz, unbanked, on the 68000 bus at 0x094001/3)", [("1.bin", "02b042e3")])])
 
 # ---------------------------------------------------------------------------
+# Comad Family F (2026-09-13): ssmissin, gunnail_core.sv id 52. Its own
+# small Z80+OKI sound board (ssmissin_sound_map: ROM 0-7FFF, RAM 8000-87FF,
+# the OKI bank selected by a MEMORY write at 0x9000, the OKI at 0x9800, the
+# soundlatch read at 0xA000, no FM chip — the latch's data-pending flag
+# drives the Z80's IRQ0 directly). The oki1 region is the canonical
+# [fixed 0x20000][bank0..3] layout the NMK112-less banking expects.
+# NMK-20: highway/field scenes render with 1-pixel vertical striping. The
+# long-standing "hardware-only" diagnosis was disproven 2026-09-14 — see
+# docs/known-issues.md.
+# ---------------------------------------------------------------------------
+SSMISSIN_DIPS = [
+    ('0', "Flip Screen", "On,Off"), ('1', "Unused (SW1:7)", "On,Off"),
+    ('2,3', "Difficulty", "Hardest,Hard,Easy,Normal"), ('4', "Unused (SW1:4)", "On,Off"), ('5', "Unused (SW1:3)", "On,Off"),
+    ('6,7', "Lives", "1,2,4,3"), ('8', "Unused (SW2:8)", "On,Off"), ('9', "Demo Sounds", "Off,On"),
+    ('10,12', "Coin B", COIN8_FREE), ('13,15', "Coinage", "4C_1C,2C_3C,2C_1C,1C_2C,3C_1C,1C_3C,3C_2C,1C_1C")]
+SSMISSIN = dict(
+    id=52, year=1992, manufacturer="Comad", rot=True, switches="FF,FF", dips=SSMISSIN_DIPS,
+    regions=[
+        ("maincpu, 0x040000", [pair(("ssm15.166", "aff15927"), ("ssm14.165", "eda61b74"))]),
+        ("Z80 sound program, 0x008000", [("ssm11.188", "8be6dce3")]),
+        ("fgtile, 0x020000", [("ssm16.172", "5cf6eb1f")]),
+        ("bgtile, 0x100000 (2 files)", [("ssm17.147", "c9c28455"), ("ssm18.148", "ebfdaad6")]),
+        ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("ssm19.33", "b1943657"), ("ssm20.34", "a0c16c4d"))]),
+        ("oki1, 0x0A0000 (fixed 0x20000 = ssm13.190, banked = ssm12.189's own 4 quarters)", [("ssm13.190", "618f66f0"), ("ssm12.189", "e8219c83")])])
+
+# ---------------------------------------------------------------------------
 # Afega boards (Family H, 2026-09-13): gunnail_core.sv ids 23-43, one per
 # distinct configuration (decryptcode table, screen_update variant, ROM
 # sizes); every set below carries its own region list transcribed from
@@ -898,6 +924,7 @@ SETS = [
     ("strahljbl",   "Koutetsu Yousai Strahl (Japan, bootleg)",                     10787, STRAHLJBL, "strahl", {}),
     ("gunnailb",    "GunNail (bootleg)",                                           10798, GUNNAILB, "gunnail", {}),
     ("tomagic",     "Tom Tom Magic",                                               10778, TOMAGIC, None, {}),
+    ("ssmissin",    "S.S. Mission",                                                10801, SSMISSIN, None, {}),
 ]
 
 

@@ -3383,6 +3383,69 @@ the exit code. Frames 20-81 are identical regardless of total `CYCLES`
 (the sim is deterministic from reset and the count only decides when it
 stops), so 70M cycles is enough for this comparison window.
 
+## Restoring ssmissin onto Gunnail.rbf (2026-09-13)
+
+S.S. Mission was added back to `Gunnail.rbf` as game id 52, on request,
+with the defect that got it withdrawn still unresolved. Read NMK-20 in
+`docs/known-issues.md` first — but note that on 2026-09-14 its
+"hardware-only" diagnosis was **disproven**: a board frame of a striped
+city scene is byte-identical to the reference sim's frame, and the
+hardware-path sim matches the reference sim 224/224 over that window at
+the correct 96MHz-equivalent clock ratio. The memory path is exonerated;
+what remains open is whether the RTL differs from MAME on those scenes
+at all.
+
+It was ported by hand rather than by applying the archived patch.
+`archive/e6e7074-five-sets` bundles five sets plus the m68705 core and
+manybloc's gating, and predates the Afega split, so its diff against
+current `master` mixes "add nine sets" with "undo `INCLUDE_AFEGA`/
+`INCLUDE_NMK`" — applying it would have silently reverted the split.
+Only the ssmissin-specific pieces were taken, with `g_comad` reduced
+from `g_ssmissin | g_twinactn` to just `g_ssmissin`.
+
+What the port touches, as a checklist for the next board of this shape:
+
+- **Game id and family wires** — `G_SSMISSIN`/`G_LAST`, `g_ssmissin`,
+  `g_comad`, and `g_comad` folded into `g_z80snd` so the NMK004 is held
+  in reset (`has_nmk004`).
+- **Clocks** — 8 MHz 68000 (`cpu_8mhz`), 4 MHz Z80 (`z80_inc` 10000),
+  1 MHz OKI with pin 7 high (`oki_cen_chip`'s divide-by-4, `ss` on both
+  `jt6295` instances).
+- **V-PROM** — ssmissin is table 8, so `vprom_sel` widened to `[3:0]`,
+  `nmk_irq.sv`'s `table_sel` to `[3:0]` and its array to `[0:4095]`, and
+  `roms/gunnail_multi_vtiming.hex` swapped for the 9-table file. That
+  file is a strict superset — its first 2048 lines are byte-identical to
+  the 8-table one, verified before the swap — so no existing game moves.
+- **Memory map** — `M_SSMISSIN` (mainram 0x0B0000, io 0x0C0000, IN1 at
+  r=2, DSW1 at r=3, no DSW2), checked line by line against
+  `ssmissin_map` in nmk16.cpp including flipscreen at r=0xA, tilebank at
+  r=0xC and the soundlatch at r=0xF.
+- **Sound board** — `ssmissin_sound_map` is unlike the others on this
+  rbf: ROM 0-7FFF, RAM 8000-87FF, **the OKI bank selected by a MEMORY
+  write at 0x9000** (not an I/O port — hence the separate
+  `sel_z80_okibank_mem`), the OKI at 0x9800, the soundlatch read at
+  0xA000, and **no FM chip at all**, so `z80_int_n` is the latch's own
+  data-pending flag and the audio mix is the single OKI alone.
+- **`Gunnail.sv`** — id 52 into `game_vertical` (ROT270) and into
+  `game_mustang`, because ssmissin reads **one 16-bit DSW port** at
+  0x0C0006 rather than two byte ports. Missing the second of these
+  would have mis-mapped every DIP switch while looking fine at defaults.
+
+Reference sim: **54/62** against MAME over frames 20-81. Seven of the
+eight misses are the usual boot-lag black frames (20-26, `sim nonblack
+0`). The eighth, frame 42, is real but benign: MAME frames 34-40 are
+ssmissin's boot colour-flash (magenta, black, dark, black) where
+consecutive frames differ by the full 57344 pixels, and the sim runs one
+frame behind through it — sim 41 matches MAME 35 exactly and sim 43
+matches MAME 42 exactly, so it re-locks immediately.
+
+**That score was not evidence the game works** — and, as it turned out,
+neither was its converse. The reference sim reads ROMs from `$readmemh`
+arrays and never touches SDRAM, the arbiter or the prefetch caches, so
+it was assumed to be blind to NMK-20. On 2026-09-14 the board was shown
+to produce output byte-identical to that same reference sim on a striped
+scene, which is what disproved the hardware-only diagnosis. See NMK-20.
+
 ## Status
 
 Four RBFs run on the DE10-Nano and are tracked in `releases/`:
@@ -3390,8 +3453,9 @@ Four RBFs run on the DE10-Nano and are tracked in `releases/`:
 runtime-selected core), `Raphero` (raphero, rapheroa, arcadian),
 `Gunnail` (gunnail, gunnailp and, since 2026-09-11, the nine lowres
 NMK004 boards with their clones, the Bombjack Twin and Task Force
-Harrier boards and, since 2026-09-14, the Family E bootlegs — 44 sets
-on one runtime-selected core) and, since 2026-09-13, `NMK16_Afega`
+Harrier boards, since 2026-09-14 the Family E bootlegs, and ssmissin —
+45 sets on one runtime-selected core; note ssmissin ships with the
+open NMK-20 hardware defect) and, since 2026-09-13, `NMK16_Afega`
 (the 27 Afega-hardware sets, game ids 23-43, split out of `Gunnail`
 — see "Splitting the Afega boards into their own rbf" below). Each one boots through the `.mra` loader with its ROM image
 matching simulation, renders its attract demo without the smearing,

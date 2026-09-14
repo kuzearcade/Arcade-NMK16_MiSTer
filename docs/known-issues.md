@@ -162,6 +162,81 @@ but not proven), `infra` (build/test/doc health).
   same range as Thunder Dragon 2 on hardware (0.987). The 100 s figure
   is pulled down by NMK-7 (demo diverges after ~1 min), not by audio.
 
+### NMK-20 · ssmissin BG "corruption" is NOT hardware-specific (misdiagnosed)
+- **Severity:** unresolved · **Status:** reclassified 2026-09-14; the
+  original "hardware-only" diagnosis is **disproven**
+- **Ref:** `/home/vboxuser/archive_e6e7074/FINDINGS.md` (superseded on
+  this point), "Restoring ssmissin onto Gunnail.rbf" in
+  `docs/hw-bringup.md`
+- S.S. Mission's highway/field scenes render with dense 1-pixel vertical
+  striping. This was recorded as corruption that appears **only on real
+  hardware** — the reason the set was withdrawn from `master`. That
+  premise is wrong.
+
+**What was measured (2026-09-14):**
+
+| comparison | result |
+|---|---|
+| board frame vs reference sim frame (city scene) | **byte-identical (md5)** |
+| hw-path sim vs reference sim (city window, 96MHz-equivalent) | **224/224 pixel-identical** |
+| hw-path sim vs reference sim (coastline window) | 202/202 pixel-identical |
+| hw-path sim 96MHz- vs 120MHz-equivalent (coastline) | 203/203 identical |
+
+  The reference sim (`gunnail_mg`, `HW_ROMS=0`) has **no SDRAM, no
+  arbiter and no prefetch cache** — it reads ROMs from `$readmemh`
+  arrays. The board producing a byte-identical frame therefore rules out
+  the entire memory path. **The SDRAM controller, arbiter and
+  `tile_prefetch_byte` caches are exonerated**, on the failing scene and
+  at the correct clock ratio.
+
+**Also disproven, each with evidence:**
+- *Prefetch-cache false hit on an in-flight entry* — `tile_prefetch_byte`
+  writes tags only together with `sd_valid`.
+- *Tile bank* — exactly one `tilebank_w` in the whole attract, value 0,
+  so every scene reads the same half of the BG ROM.
+- *SDRAM row-thrash from the scene's tile codes* — the striped city
+  scene thrashes **less** than the clean coastline (85.7 vs 93.5 row
+  changes per tilemap row).
+- *Sprite/gameplay load* — the attract demo stripes too.
+- *SDRAM timing margin* — a build with `RASCAS_DELAY=3`,
+  `PRECHARGE_DELAY=1` (both clean, +0.384 ns) changed nothing, matching
+  `rtl/sdram.sv`'s own record of both failing before.
+- *Anything analog* (setup/hold, clock phase, refresh decay) — a striped
+  frame reproduced **bit-for-bit across two runs on two different
+  bitstreams and separate power cycles**. Marginal analog behaviour does
+  not repeat bit-exactly.
+
+**What is actually still open:** whether this project's video output
+differs from MAME on these scenes at all, or whether a highway of
+parallel lanes over furrowed fields simply looks like this. It cannot be
+settled by frame index: by frame ~5255 the attract demo has drifted from
+MAME (best same-index match is 34% differing — see NMK-7), and the
+striped scenes only appear that late. **The next step is the video-state
+harness** (`sim/rtl/video_state`, built precisely for "the demo has
+drifted"): dump MAME's VRAM/scroll/palette/sprite state at a striped
+frame and render it through `video_macross2` for a guaranteed same-scene
+pixel comparison. It currently assumes gunnail's raster-scroll tables and
+needs adapting to ssmissin's four scroll registers. A BG VRAM dump of a
+city frame already exists as a starting point.
+
+**The methodological lesson, which is the most reusable part.** This bug
+has now carried four wrong conclusions — stale-serve, a 1-pixel shift,
+timing closure, and "hardware-only" — plus several more during the
+2026-09-14 session (sprite load, SDRAM bandwidth via `TB_RAM_PER2`, the
+whole analog-timing line). **Every one of them traces to comparing
+frames that were not the same scene.** The archive's own headline
+numbers — terrain mean colour-run 1.34 (hw) / 1.74 (MAME) / 2.28
+(reference sim) — were measured on non-corresponding frames and
+therefore never meant anything. Two specific traps:
+- A colour-run or anisotropy statistic does **not** separate defect from
+  artwork here. ssmissin's terrain is genuinely dithered, and its
+  highway scenes are genuinely full of vertical structure: the reference
+  sim scores v/h 3.56 on a city frame that is provably correct output.
+  Whole-frame variants are confounded further by sprite coverage.
+- Before comparing two frames, prove they are the same scene (a
+  near-zero pixel diff), rather than assuming equal frame indices
+  correspond.
+
 ### NMK-7 · Attract demo diverges from MAME after ~1 minute
 - **Severity:** limitation (verification only) · **Status:** wontfix
 - **Ref:** "GunNail (the "Gunnail" rbf)"
