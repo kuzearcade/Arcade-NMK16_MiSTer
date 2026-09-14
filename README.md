@@ -37,12 +37,18 @@ scenes that can be compared. 97 game sets ship as `.mra` files under
 `releases/` (the parent of each group at the top level, its clones
 under `releases/_alternatives/_<parent>/`), one per MAME set:
 
+Every core is named `NMK16_<family>`, and its bitstream ships as
+`Arcade-NMK16_<family>_<date>.rbf` — the MiSTer loader prefix-matches a
+`.mra`'s `<rbf>` tag against that filename. The prefix is what makes the
+four sort and read as one family on an SD card shared with a few hundred
+other arcade cores.
+
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
-| `Macross2` | 68000 + Z80 sound, YM2203, 2x OKIM6295 with NMK112 banking; hi-res and Power Instinct's 320-px board as runtime modes, plus the bootleg boards' variants (vblank-only interrupts, a Z80 without its YM2203, a 68000-driven OKI, nibble-swapped tiles) | Thunder Dragon 2 (tdragon2, tdragon2a), Big Bang (bigbang, bigbanga), Thunder Dragon 3 (tdragon3h — plays tdragon2's soundtrack, which MAME leaves silent), Super Spacefortress Macross II (macross2, macross2g, macross2k), Power Instinct / Gouketsuji Ichizoku (powerins, powerinsj, powerinspu, powerinspj, powerinsa, powerinsb) |
-| `Raphero` | Bare TLCS-90 sound CPU, 14 MHz 68000 | Rapid Hero (raphero, rapheroa), Arcadia (arcadian) |
-| `Gunnail` | NMK004 sound MCU, YM2203, 2x OKIM6295; NMK-215/113/110 protection MCUs with dual NMK214; hi-res per-line scroll (GunNail), the nine lowres NMK004 boards, the Bombjack Twin boards (no sound CPU, 68000-driven OKIs with NMK112, one 8x8 two-ROM tile layer), Task Force Harrier's Z80 + YM2203 sound board — with MAME's MCU simulation for the parent and a real MC68705R3 for the Lettering bootleg — and the Raiden-sound bootlegs (the Seibu Sound System: Z80 + YM3812 + OKI with its interrupt-vector arbitration; tdragonb's program/GFX bitswaps decoded per fetch) plus the gunnailb/tomagic banked-Z80 boards and Comad's ssmissin/airattck board (Z80 + a single OKI, no FM; decode_ssmissin's gfx bitswap applied per fetch) plus the Afega-published Mustang hacks that reuse it, Many Block's 256x240 screen with its own scroll RAM and scanline interrupt table, all as runtime game modes | GunNail (gunnail, gunnailp), Super Spacefortress Macross (macross), Black Heart (blkheart, blkheartj), US AAF Mustang (mustang, mustangs, mustangb3), Bio-ship Paladin / Space Battle Ship Gomorrah (bioship, sbsgomo), Vandyke (vandyke, vandykejal, vandykejal2, vandykeb), Acrobat Mission (acrobatm), Koutetsu Yousai Strahl (strahl, strahlj, strahlja), Thunder Dragon (tdragon, tdragon1), Hacha Mecha Fighter (hachamf, hachamfa, hachamfp, hachamfb), Bombjack Twin (bjtwin, bjtwina, bjtwinp, bjtwinpa), Saboten Bombers / Cactus (sabotenb, sabotenba, cactus), Nouryoku Koujou Iinkai (nouryoku, nouryokup), Task Force Harrier (tharrier, tharrieru, tharrierb — the Lettering bootleg runs its real, fully dumped MC68705R3), Many Block (manybloc), US AAF Mustang bootlegs (mustangb, mustangb2), Acrobat Mission bootleg (acrobatmbl), Hacha Mecha Fighter bootleg (hachamfb2), Thunder Dragon bootlegs (tdragonb, tdragonb3), Koutetsu Yousai Strahl bootleg (strahljbl), GunNail bootleg (gunnailb), Tom Tom Magic (tomagic), S.S. Mission (ssmissin), Air Attack (airattck, airattcka), Twin Action (twinactn), Dolmen (dolmen, dolmenk), Puzzle World (puzlwrld) |
-| `NMK16_Afega` | The Afega derivative boards: 12 MHz 68000 with address-scrambled program ROMs decoded per fetch, Z80 + YM2151 + OKI or twin-OKI sound, an 8bpp background layer. Split out of `Gunnail` on 2026-09-13 — the same `rtl/gunnail/gunnail_core.sv` built with `INCLUDE_AFEGA(1)`/`INCLUDE_NMK(0)`, so the NMK004/protection TLCS-90 cores, the YM2203 and the Seibu/YM3812 board are left out of the netlist (18,494 ALMs, 44% of the device, against 27,422 for `Gunnail`) | Stagger I / Red Hawk (stagger1, redhawk, redhawki, redhawks, redhawksa, redhawkg, redhawke, redhawkk, redhawkc, redhawkb), Guardian Storm / Hong Hu Zhanji II (grdnstrm, grdnstrmv, grdnstrmj, grdnstrmk, grdnstrmg, grdnstrmau, redfoxwp2, redfoxwp2a), Bubble 2000 / Hot Bubble (bubl2000, bubl2000a, hotbubl, hotbubla), Pop's Pop's (popspops), Mang-Chi (mangchi), Spectrum 2000 (spec2k, spec2kh), Fire Hawk (firehawk) |
+| `NMK16_Macross2` | 68000 + Z80 sound, YM2203, 2x OKIM6295 with NMK112 banking; hi-res and Power Instinct's 320-px board as runtime modes, plus the bootleg boards' variants (vblank-only interrupts, a Z80 without its YM2203, a 68000-driven OKI, nibble-swapped tiles) | Thunder Dragon 2 (tdragon2, tdragon2a), Big Bang (bigbang, bigbanga), Thunder Dragon 3 (tdragon3h — plays tdragon2's soundtrack, which MAME leaves silent), Super Spacefortress Macross II (macross2, macross2g, macross2k), Power Instinct / Gouketsuji Ichizoku (powerins, powerinsj, powerinspu, powerinspj, powerinsa, powerinsb) |
+| `NMK16_Raphero` | Bare TLCS-90 sound CPU, 14 MHz 68000 | Rapid Hero (raphero, rapheroa), Arcadia (arcadian) |
+| `NMK16_Gunnail` | NMK004 sound MCU, YM2203, 2x OKIM6295; NMK-215/113/110 protection MCUs with dual NMK214; hi-res per-line scroll (GunNail), the nine lowres NMK004 boards, the Bombjack Twin boards (no sound CPU, 68000-driven OKIs with NMK112, one 8x8 two-ROM tile layer), Task Force Harrier's Z80 + YM2203 sound board — with MAME's MCU simulation for the parent and a real MC68705R3 for the Lettering bootleg — and the Raiden-sound bootlegs (the Seibu Sound System: Z80 + YM3812 + OKI with its interrupt-vector arbitration; tdragonb's program/GFX bitswaps decoded per fetch) plus the gunnailb/tomagic banked-Z80 boards and Comad's ssmissin/airattck board (Z80 + a single OKI, no FM; decode_ssmissin's gfx bitswap applied per fetch) plus the Afega-published Mustang hacks that reuse it, Many Block's 256x240 screen with its own scroll RAM and scanline interrupt table, all as runtime game modes | GunNail (gunnail, gunnailp), Super Spacefortress Macross (macross), Black Heart (blkheart, blkheartj), US AAF Mustang (mustang, mustangs, mustangb3), Bio-ship Paladin / Space Battle Ship Gomorrah (bioship, sbsgomo), Vandyke (vandyke, vandykejal, vandykejal2, vandykeb), Acrobat Mission (acrobatm), Koutetsu Yousai Strahl (strahl, strahlj, strahlja), Thunder Dragon (tdragon, tdragon1), Hacha Mecha Fighter (hachamf, hachamfa, hachamfp, hachamfb), Bombjack Twin (bjtwin, bjtwina, bjtwinp, bjtwinpa), Saboten Bombers / Cactus (sabotenb, sabotenba, cactus), Nouryoku Koujou Iinkai (nouryoku, nouryokup), Task Force Harrier (tharrier, tharrieru, tharrierb — the Lettering bootleg runs its real, fully dumped MC68705R3), Many Block (manybloc), US AAF Mustang bootlegs (mustangb, mustangb2), Acrobat Mission bootleg (acrobatmbl), Hacha Mecha Fighter bootleg (hachamfb2), Thunder Dragon bootlegs (tdragonb, tdragonb3), Koutetsu Yousai Strahl bootleg (strahljbl), GunNail bootleg (gunnailb), Tom Tom Magic (tomagic), S.S. Mission (ssmissin), Air Attack (airattck, airattcka), Twin Action (twinactn), Dolmen (dolmen, dolmenk), Puzzle World (puzlwrld) |
+| `NMK16_Afega` | The Afega derivative boards: 12 MHz 68000 with address-scrambled program ROMs decoded per fetch, Z80 + YM2151 + OKI or twin-OKI sound, an 8bpp background layer. Split out of `NMK16_Gunnail` on 2026-09-13 — the same `rtl/gunnail/gunnail_core.sv` built with `INCLUDE_AFEGA(1)`/`INCLUDE_NMK(0)`, so the NMK004/protection TLCS-90 cores, the YM2203 and the Seibu/YM3812 board are left out of the netlist (18,494 ALMs, 44% of the device, against 27,422 for `NMK16_Gunnail`) | Stagger I / Red Hawk (stagger1, redhawk, redhawki, redhawks, redhawksa, redhawkg, redhawke, redhawkk, redhawkc, redhawkb), Guardian Storm / Hong Hu Zhanji II (grdnstrm, grdnstrmv, grdnstrmj, grdnstrmk, grdnstrmg, grdnstrmau, redfoxwp2, redfoxwp2a), Bubble 2000 / Hot Bubble (bubl2000, bubl2000a, hotbubl, hotbubla), Pop's Pop's (popspops), Mang-Chi (mangchi), Spectrum 2000 (spec2k, spec2kh), Fire Hawk (firehawk) |
 
 Every parent set has been loaded on a DE10-Nano through its `.mra`,
 drawn its title and attract sequence in native screenshots and played
@@ -65,18 +71,18 @@ shared rbf as a runtime mode (see docs/hw-bringup.md).
 Family B (the lowres NMK004 boards) and the NMK004 half of Family D
 went to hardware on 2026-09-11, Family A (Bombjack Twin) and Family G
 (Task Force Harrier, the Vandyke bootleg) on 2026-09-12, all as runtime
-game modes of the Gunnail rbf (`rtl/gunnail/gunnail_core.sv`'s game
+game modes of the NMK16_Gunnail rbf (`rtl/gunnail/gunnail_core.sv`'s game
 table; their original single-game sims under `rtl/<game>/` remain as
 register references).
 Family H (the 27 Afega-hardware sets) went to hardware on 2026-09-13,
-also as Gunnail-rbf game modes, with jotego's jt51 (YM2151) vendored for
+also as NMK16_Gunnail-rbf game modes, with jotego's jt51 (YM2151) vendored for
 their sound board. The hardware path (SDRAM ROM caches, clock-domain
 crossing, wait states, OKI fetch stalls, the `.mra` loader layout) is
 shared, so bringing the remaining games to hardware is mostly wiring
 and verification rather than new design. Family E (the nine
 Raiden-sound bootlegs, gunnailb and tomagic) followed on 2026-09-14,
 with jotego's jtopl (YM3812) and the project's Seibu Sound System glue
-joining the Gunnail rbf, then the Comad boards (ssmissin, airattck), the
+joining the NMK16_Gunnail rbf, then the Comad boards (ssmissin, airattck), the
 Afega hacks of Mustang (twinactn, dolmen, dolmenk, puzlwrld) and Many
 Block, all the same day. Many Block is the one board here whose screen
 is not one of MAME's three shared NMK16 timings — 256x240 from raster
@@ -136,7 +142,7 @@ not committed; fetch them at their pinned commits first:
 
 ```
 tools/bootstrap.sh
-quartus_sh --flow compile Gunnail     # or Macross2, Raphero
+quartus_sh --flow compile NMK16_Gunnail   # or NMK16_Macross2, NMK16_Raphero, NMK16_Afega
 ```
 
 `deps.lock` pins every vendored dependency by commit and records its
@@ -150,7 +156,7 @@ Simulations are run per game, for example:
 ```
 make -C sim/rtl/gunnail run                    # reference sim, zero-latency ROMs
 make -C sim/rtl/gunnail_hw run                 # hardware sim, SDRAM model and caches
-make -C sim/rtl/gunnail_mg GAME=bioship run    # any Gunnail-rbf game on the shared core
+make -C sim/rtl/gunnail_mg GAME=bioship run    # any NMK16_Gunnail-rbf game on the shared core
 make -C sim/rtl/gunnail_mg_hw GAME=strahl run  # ... on the hardware path
 ```
 
@@ -169,7 +175,7 @@ and the comparison tools.
 | `rtl/sdram*.sv`, `rtl/rom_cache1*.sv`, `rtl/oki_rom_cache.sv`, `rtl/tile_prefetch_byte.sv` | SDRAM controller, arbiter and ROM caches for the hardware path |
 | `rtl/third_party/` | Vendored cores (gitignored, fetched by `tools/bootstrap.sh`) |
 | `sys/` | MiSTer framework (gitignored, fetched by `tools/bootstrap.sh`) |
-| `<Core>.sv`, `<Core>.qsf`, `<Core>.sdc`, `files_<core>.qip` | Quartus project per hardware family |
+| `NMK16_<family>.sv`, `.qsf`, `.sdc`, `.qpf`, `files_nmk16_<family>.qip` | Quartus project per hardware family |
 | `sim/rtl/` | Verilator testbenches, one per game plus unit tests |
 | `sim/oracle/`, `sim/compare/` | MAME Lua tracer and trace comparison |
 | `tools/` | ROM builders, `.mra` generators, audio comparison, MiSTer key injection |

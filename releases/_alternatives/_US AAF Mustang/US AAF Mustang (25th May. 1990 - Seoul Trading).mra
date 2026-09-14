@@ -1,5 +1,5 @@
 <!--
-  US AAF Mustang (25th May. 1990 / Seoul Trading) — NMK16 "Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 12).
+  US AAF Mustang (25th May. 1990 / Seoul Trading) — NMK16 "NMK16_Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 12).
   Clone of mustang; files it shares with the parent are looked up in the parent zip.
 
   Transcribed from mame/src/mame/nmk/nmk16.cpp: GAME(... mustangs ...)
@@ -17,7 +17,7 @@
   <year>1990</year>
   <manufacturer>UPL (Seoul Trading license)</manufacturer>
   <category>Shooter</category>
-  <rbf>Gunnail</rbf>
+  <rbf>NMK16_Gunnail</rbf>
 
   <!-- DSW1, DSW2 (defaults from the PORT_DIPNAME default values; ids in
        bit-value order, value 0 first), then the game-id byte the core

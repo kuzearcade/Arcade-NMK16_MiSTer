@@ -32,7 +32,7 @@ MACROSS2_DIR := ../../../rtl/macross2
 RTL_DIR := ../../../rtl
 # Video is rtl/macross2/video_macross2.sv (gfx_macross parameters,
 # RASTER_SCROLL, NMK214 descramble) — the hardware-ready module, so the
-# reference sim and Gunnail.rbf share one video path. The SDRAM/cache
+# reference sim and NMK16_Gunnail.rbf share one video path. The SDRAM/cache
 # modules are listed so their HW_ROMS=1 generate branches resolve.
 SOURCES := $(CORE_DIR)/$(TOP).sv $(MACROSS2_DIR)/video_macross2.sv $(NMK214_DIR)/nmk214.sv \
            $(TLCS90_DIR)/tlcs90.sv $(TLCS90_DIR)/nmk004_periph.sv $(TLCS90_DIR)/nmk004_core.sv $(TLCS90_DIR)/nmk_prot_core.sv \

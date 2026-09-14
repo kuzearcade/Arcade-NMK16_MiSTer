@@ -11,7 +11,7 @@
 // stream instead of $readmemh. See docs/hw-bringup.md.
 //
 // rd_x/rd_y are driven INTERNALLY from the core's own live hcount_o/
-// vcount_o raster counters, exactly as Macross2.sv's own real hardware
+// vcount_o raster counters, exactly as NMK16_Macross2.sv's own real hardware
 // top does — see tdragon2_hw_top.sv's own header for why a raw
 // testbench-controlled sweep is not a faithful model of video_macross2.sv's
 // HW_ROMS=1 real-time tile-byte SDRAM fetch pacing.
@@ -81,7 +81,7 @@ module macross2_hw_top
 	wire        p0_req, p1_req, p2_req, p3_req;
 	wire        p0_ack, p1_ack, p2_ack, p3_ack;
 
-	// REFRESH_CYCLES=240 (6us @ 40MHz clk_sys) — matches Macross2.sv's
+	// REFRESH_CYCLES=240 (6us @ 40MHz clk_sys) — matches NMK16_Macross2.sv's
 	// own real hardware override; see rtl/sdram.sv's own parameter
 	// comment. sim/models/sdram_model.sv doesn't model charge decay so
 	// this doesn't change simulated behavior, but keeps this testbench
@@ -109,7 +109,7 @@ module macross2_hw_top
 
 	// VTIMING_FILE: nmk_irq.sv's own V-PROM has no HW_ROMS gating at
 	// all — always loaded via $readmemh regardless — so this must be
-	// wired here too, matching Macross2.sv's own real hardware top,
+	// wired here too, matching NMK16_Macross2.sv's own real hardware top,
 	// or this testbench would silently run with an uninitialized (all
 	// zero) interrupt-timing table despite otherwise exercising the
 	// real HW_ROMS=1 path.

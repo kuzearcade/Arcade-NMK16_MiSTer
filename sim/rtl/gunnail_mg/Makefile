@@ -3,7 +3,7 @@
 # lowres NMK004 boards (or gunnail itself), ROM hex files from each game's
 # own single-game sim directory (../<game>/roms, built by that Makefile's
 # rom/gfx-roms/oki-roms targets) and the four-table V-PROM file
-# roms/gunnail_multi_vtiming.hex at the repo root (Gunnail.sv's own).
+# roms/gunnail_multi_vtiming.hex at the repo root (NMK16_Gunnail.sv's own).
 #
 #   make GAME=blkheart run            # build obj_dir_blkheart, run 300M cycles
 #   make GAME=bioship CYCLES=60000000 run
@@ -115,7 +115,7 @@ SEL_tomagic  := 51
 SEL_ssmissin := 52
 SEL_airattck := 52
 SEL_airattcka := 52
-# Afega-published Mustang hacks (2026-09-14): ids 53/56, Gunnail.rbf
+# Afega-published Mustang hacks (2026-09-14): ids 53/56, NMK16_Gunnail.rbf
 SEL_dolmen   := 53
 SEL_puzlwrld := 53
 SEL_twinactn := 56

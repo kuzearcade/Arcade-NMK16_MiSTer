@@ -1,13 +1,13 @@
 # --------------------------------------------------------------------------
 #
 # MiSTer project — NMK16 "Gunnail" RBF (gunnail/gunnailp — see
-# rtl/gunnail/gunnail_core.sv's own header). Cloned from Raphero.qsf
+# rtl/gunnail/gunnail_core.sv's own header). Cloned from NMK16_Raphero.qsf
 # (same device/pin/optimization settings); only the RTL file list,
 # output directory and top differ. See docs/hw-bringup.md.
 #
 # WARNING WARNING WARNING:
 # Do not add files to project in Quartus IDE! It will mess this file!
-# Add the files manually to files_gunnail.qip instead.
+# Add the files manually to files_nmk16_afega.qip instead.
 #
 # --------------------------------------------------------------------------
 
@@ -317,4 +317,3 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache_n.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_cache_n_byte.sv
 set_global_assignment -name VERILOG_FILE rtl/third_party/jt51/hdl/jt51.v
 set_global_assignment -name VERILOG_FILE rtl/third_party/jtopl/hdl/jtopl2.v
-set_global_assignment -name SDC_FILE Gunnail.sdc

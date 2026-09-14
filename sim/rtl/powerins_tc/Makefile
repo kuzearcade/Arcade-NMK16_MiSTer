@@ -1,12 +1,12 @@
 # Verilator build for Power Instinct (powerins) running through the SHARED
 # Family C core, rtl/tdragon2/tdragon2_core.sv with game_powerins=1 (the
-# same module Macross2.rbf ships; see its game_powerins port). HW_ROMS=0:
+# same module NMK16_Macross2.rbf ships; see its game_powerins port). HW_ROMS=0:
 # zero-latency $readmemh ROMs — the reference sim for MAME frame
 # comparisons. The ROM hex files are sim/rtl/powerins/roms/ (symlinked):
 #   make -C ../powerins roms
 # rebuilds them; roms/tdragon2_powerins_vtiming.hex is the 512-line
 # two-table V-PROM file (tdragon2's 10.bpr + powerins' 21.u71) that
-# Macross2.sv also synthesises with (table 1 is selected by game_powerins).
+# NMK16_Macross2.sv also synthesises with (table 1 is selected by game_powerins).
 #
 # Usage:
 #   make run          # 300M clk_sys cycles; TB_DUMP_PPM=1 dumps every frame

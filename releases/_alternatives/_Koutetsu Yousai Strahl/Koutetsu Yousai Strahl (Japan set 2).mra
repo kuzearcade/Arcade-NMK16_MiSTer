@@ -1,5 +1,5 @@
 <!--
-  Koutetsu Yousai Strahl (Japan set 2) — NMK16 "Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 7).
+  Koutetsu Yousai Strahl (Japan set 2) — NMK16 "NMK16_Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 7).
   Clone of strahl; files it shares with the parent are looked up in the parent zip.
 
   Transcribed from mame/src/mame/nmk/nmk16.cpp: GAME(... strahlja ...)
@@ -17,7 +17,7 @@
   <year>1992</year>
   <manufacturer>UPL</manufacturer>
   <category>Shooter</category>
-  <rbf>Gunnail</rbf>
+  <rbf>NMK16_Gunnail</rbf>
 
   <!-- DSW1, DSW2 (defaults from the PORT_DIPNAME default values; ids in
        bit-value order, value 0 first), then the game-id byte the core

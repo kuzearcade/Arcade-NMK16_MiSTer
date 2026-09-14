@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
 	if (argc > 1) RUN_CYCLES = strtoull(argv[1], nullptr, 0);
 
 	Vtdragon2_core top{&contextp};
-	// TB_GAME_BYTE: the .mra <switches> third byte (Macross2.sv's dip_sw[2]):
+	// TB_GAME_BYTE: the .mra <switches> third byte (NMK16_Macross2.sv's dip_sw[2]):
 	// bit0 macross2, bit1 powerins, bit2 tdragon3h, bit3 pi_bootleg,
 	// bit4 pi_nosnd, bit5 pi_gfxlsb. Default 0x02 (powerins).
 	unsigned game_byte = std::getenv("TB_GAME_BYTE") ? strtoul(std::getenv("TB_GAME_BYTE"), nullptr, 16) : 0x02;

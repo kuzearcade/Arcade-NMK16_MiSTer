@@ -9,7 +9,7 @@
 //
 // rd_x/rd_y are now driven INTERNALLY from the core's own live
 // hcount_o/vcount_o raster counters, computed the exact same way
-// Macross2.sv's own real hardware top does (rd_x_screen/rd_y_screen) —
+// NMK16_Macross2.sv's own real hardware top does (rd_x_screen/rd_y_screen) —
 // NOT left as raw testbench-controlled inputs. This matters: a
 // testbench that instead sweeps rd_x/rd_y through a post-frame scan
 // (this file's own original shape, and the plain HW_ROMS=0 sim
@@ -129,7 +129,7 @@ module powerins_hw_top
 	output reg [31:0] dbg_spr_pass_max
 );
 
-	// Same computation as Macross2.sv's own rd_x_screen/rd_y_screen —
+	// Same computation as NMK16_Macross2.sv's own rd_x_screen/rd_y_screen —
 	// see that file's own header for the underflow-during-blanking
 	// derivation.
 	wire [8:0] rd_x_screen = hcount_o[8:0] - 9'd28;
@@ -148,7 +148,7 @@ module powerins_hw_top
 	wire        p0_req, p1_req, p2_req, p3_req;
 	wire        p0_ack, p1_ack, p2_ack, p3_ack;
 
-	// REFRESH_CYCLES=240 (6us @ 40MHz clk_sys) — matches Macross2.sv's
+	// REFRESH_CYCLES=240 (6us @ 40MHz clk_sys) — matches NMK16_Macross2.sv's
 	// own real hardware override; see rtl/sdram.sv's own parameter
 	// comment. sim/models/sdram_model.sv doesn't model charge decay so
 	// this doesn't change simulated behavior, but keeps this testbench
@@ -176,7 +176,7 @@ module powerins_hw_top
 
 	// VTIMING_FILE: nmk_irq.sv's own V-PROM has no HW_ROMS gating at
 	// all — always loaded via $readmemh regardless — so this must be
-	// wired here too, matching Macross2.sv's own real hardware top,
+	// wired here too, matching NMK16_Macross2.sv's own real hardware top,
 	// or this testbench would silently run with an uninitialized (all
 	// zero) interrupt-timing table despite otherwise exercising the
 	// real HW_ROMS=1 path.

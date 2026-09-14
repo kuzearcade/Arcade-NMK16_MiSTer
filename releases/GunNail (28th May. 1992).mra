@@ -1,5 +1,5 @@
 <!--
-  GunNail (28th May. 1992) — NMK16 "Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 0).
+  GunNail (28th May. 1992) — NMK16 "NMK16_Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 0).
   Parent set.
 
   Transcribed from mame/src/mame/nmk/nmk16.cpp: GAME(... gunnail ...)
@@ -17,7 +17,7 @@
   <year>1993</year>
   <manufacturer>NMK / Tecmo</manufacturer>
   <category>Shooter</category>
-  <rbf>Gunnail</rbf>
+  <rbf>NMK16_Gunnail</rbf>
 
   <!-- ROT270 in nmk16.cpp -->
   <rotation>1</rotation>

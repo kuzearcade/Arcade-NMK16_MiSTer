@@ -1,5 +1,5 @@
 <!--
-  Thunder Dragon 2 (NMK, 1993) — Family C ("Macross2" rbf) pilot game.
+  Thunder Dragon 2 (NMK, 1993) — Family C ("NMK16_Macross2" rbf) pilot game.
 
   Transcribed directly from mame/src/mame/nmk/nmk16.cpp:
     - ROM_START(tdragon2)      lines 8331-8359
@@ -60,7 +60,7 @@
   <year>1993</year>
   <manufacturer>NMK</manufacturer>
   <category>Shooter</category>
-  <rbf>Macross2</rbf>
+  <rbf>NMK16_Macross2</rbf>
 
   <!-- ROT270 in nmk16.cpp (docs/game-inventory.md: "vertical") — see
        this file's own header note on the rotation-convention caveat. -->

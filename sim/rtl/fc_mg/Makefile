@@ -1,5 +1,5 @@
 # Family C multi-game reference sim (2026-09-12): rtl/tdragon2/tdragon2_core.sv
-# (the Macross2.rbf core) at HW_ROMS=0 for the clone modes —
+# (the NMK16_Macross2.rbf core) at HW_ROMS=0 for the clone modes —
 #   make GAME=tdragon3h|powerinsa|powerinsb|powerinsc roms run
 # TB_GAME_BYTE is the .mra <switches> third byte (see tb_fc_mg.cpp);
 # TB_DUMP_PPM=1 dumps every frame as <game>_frame_NN.ppm for

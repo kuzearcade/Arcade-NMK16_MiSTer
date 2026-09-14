@@ -19,7 +19,7 @@
 // <dip> declaration over it stays fixed at that raw value, invisible to
 // the OSD, exactly the "pick a game with zero user interaction and no
 // stray-toggle risk" property this needs). Loading tdragon2.mra vs
-// macross2.mra on this SAME Macross2.rbf therefore deterministically
+// macross2.mra on this SAME NMK16_Macross2.rbf therefore deterministically
 // boots the matching game with no manual OSD step.
 //
 // Known, honestly-flagged limitations of this first pass, not yet
@@ -137,7 +137,7 @@ localparam CONF_STR = {
 	// Fixed at synthesis time as the superset of every game this RBF
 	// serves: Power Instinct has four buttons (P1_P2 bits 4-7), tdragon2
 	// three, macross2 two. MiSTer maps a gamepad POSITIONALLY against the
-	// loaded .mra's <buttons> list, so every Macross2.rbf .mra declares
+	// loaded .mra's <buttons> list, so every NMK16_Macross2.rbf .mra declares
 	// all six entries in this order (docs/hw-bringup.md, gamepad Coin).
 	"J1,Button 1,Button 2,Button 3,Button 4,Start,Coin;",
 	"V,v",`BUILD_DATE

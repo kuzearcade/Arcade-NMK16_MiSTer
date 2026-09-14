@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate every "Gunnail" rbf .mra file: GunNail (gunnail, gunnailp) and,
+"""Generate every "NMK16_Gunnail" rbf .mra file: GunNail (gunnail, gunnailp) and,
 since 2026-09-11, the nine lowres NMK004 boards the same rbf runs as
 runtime game modes (rtl/gunnail/gunnail_core.sv's game table), with
 their straightforward clones. Everything below is transcribed from
@@ -512,7 +512,7 @@ MUSTANGB2 = dict(MUSTANGB, manufacturer="bootleg (TAB Austria)", regions=[
                                                         pair(("16.bin", "23d03ad5"), ("15.bin", "a62b2f87")), pair(("12.bin", "42a6cfc2"), ("11.bin", "9d3bee66"))]),
     ("oki1, 0x010000 (1.32 MHz, unbanked)", [("02.bin", "f6f6c4bf")])])
 # acrobatmbl reads its DSW1 word with SW1 in the HIGH byte ("changed from
-# move.w to move.b"): the same switch bytes, placed there by Gunnail.sv.
+# move.w to move.b"): the same switch bytes, placed there by NMK16_Gunnail.sv.
 ACROBATMBL = dict(ACROBATM, id=45, manufacturer="bootleg", regions=[
     ("maincpu, 0x040000 (the PIC patch of init_acrobatmbl is applied by the core)", [pair(("4.10c", "c516dac3"), ("3.10f", "ae6d2349"))]),
     (SEIBU_Z80, [("2.12w", "99ee7505")]),
@@ -638,7 +638,7 @@ AIRATTCKA = dict(
 # ---------------------------------------------------------------------------
 # Afega-published hacks of Mustang (2026-09-14): nmk16_state, not afega_state.
 # twinactn_map is mustang_map with the NMK004 replaced by ssmissin's Comad
-# Z80+OKI board, so these are gunnail_core ids 53/56 on Gunnail.rbf, NOT the
+# Z80+OKI board, so these are gunnail_core ids 53/56 on NMK16_Gunnail.rbf, NOT the
 # Afega rbf. init_twinactn does no ROM decode; the map has no .mirror().
 # The family shares one set of SDRAM slots, so puzlwrld's smaller bgtile and
 # sprite ROMs are padded up to them.
@@ -693,7 +693,7 @@ PUZLWRLD = dict(
         (OKI_TWIN_NOTE, [("afega2.su12", "667c208a"), ("afega2.su12", "667c208a"), ("fill", 0x20000), ("afega3.su13", "1f042b9c")])])
 
 # ---------------------------------------------------------------------------
-# Many Block (Bee-Oh, 1991) -- gunnail_core id 54, Gunnail.rbf. tharrier's
+# Many Block (Bee-Oh, 1991) -- gunnail_core id 54, NMK16_Gunnail.rbf. tharrier's
 # board (Z80 + YM2203 + two OKIs, tharrier_sound_map, gfx_tharrier) with its
 # own 68000 map, its own 256x240 screen (set_size(256,256) +
 # set_visarea(0,255,8,247), no set_videoshift -- see video_timing.sv's
@@ -737,7 +737,7 @@ MANYBLOC = dict(
     ])
 
 # ---------------------------------------------------------------------------
-# Task Force Harrier (Lettering bootleg) -- gunnail_core id 55, Gunnail.rbf.
+# Task Force Harrier (Lettering bootleg) -- gunnail_core id 55, NMK16_Gunnail.rbf.
 # tharrier's board with a real, fully dumped MC68705R3 where the original has
 # its undumped MCU, and its own I/O block (tharrierb_map). The MCU image rides
 # in the protection-firmware slot the NMK-215/113 boards use, which the core
@@ -1188,8 +1188,8 @@ def rbf_for_id(game_id):
     """2026-09-13: the 27 Afega-hardware sets (ids 23-43) build into their
     own NMK16_Afega.rbf — gunnail_core with INCLUDE_AFEGA(1)/INCLUDE_NMK(0),
     so the NMK004/protection TLCS-90 cores, the YM2203 and the Seibu/YM3812
-    board are elaborated out. Every other id stays on Gunnail.rbf."""
-    return "NMK16_Afega" if 23 <= game_id <= 43 else "Gunnail"
+    board are elaborated out. Every other id stays on NMK16_Gunnail.rbf."""
+    return "NMK16_Afega" if 23 <= game_id <= 43 else "NMK16_Gunnail"
 
 
 def mra(setname, desc, game_line, spec, parent, overrides):

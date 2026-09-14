@@ -66,7 +66,7 @@ set_clock_groups -exclusive \
 # in them updates only on those pulses, so register-to-register paths
 # inside each pair have 5 (sound) / 10 (protection) clk_sys periods.
 # Paths into and out of them (memory/latch data, address decode) stay
-# single-cycle. Same constraint Raphero.sdc uses for its sound CPU.
+# single-cycle. Same constraint NMK16_Raphero.sdc uses for its sound CPU.
 # ------------------------------------------------------------------
 # 2026-09-13: the ':*nmk004' / ':*prot_mcu' wildcards matter. When these
 # instances were wrapped in `generate if` blocks for the Afega rbf split,

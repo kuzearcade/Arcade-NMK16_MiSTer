@@ -3,7 +3,7 @@
 // ports, loaded by a real ioctl_download byte stream. Mirrors
 // sim/rtl/tdragon2_hw/tdragon2_hw_top.sv (see its header for why rd_x/
 // rd_y are driven from the core's live raster counters, exactly as
-// Gunnail.sv does, and not swept by the testbench).
+// NMK16_Gunnail.sv does, and not swept by the testbench).
 module gunnail_hw_top #(
 	parameter integer UNUSED = 0
 ) (
@@ -74,7 +74,7 @@ module gunnail_hw_top #(
 	output        frame_done
 );
 
-	// Same computation as Gunnail.sv's own rd_x_screen/rd_y_screen.
+	// Same computation as NMK16_Gunnail.sv's own rd_x_screen/rd_y_screen.
 	wire [8:0] rd_x_screen = hcount_o[8:0] - 9'd28;
 	wire [7:0] rd_y_screen = vcount_o[7:0] - 8'd16;
 
@@ -91,7 +91,7 @@ module gunnail_hw_top #(
 	wire        p0_req, p1_req, p2_req, p3_req;
 	wire        p0_ack, p1_ack, p2_ack, p3_ack;
 
-	// REFRESH_CYCLES=740 at the 96MHz clk_ram — matches Gunnail.sv.
+	// REFRESH_CYCLES=740 at the 96MHz clk_ram — matches NMK16_Gunnail.sv.
 	sdram #(.REFRESH_CYCLES(10'd740)) sdram_inst (
 		.SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
 		.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_nRAS(SDRAM_nRAS),

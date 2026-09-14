@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the three "Raphero" rbf .mra files (arcadian parent, raphero,
+"""Generate the three "NMK16_Raphero" rbf .mra files (arcadian parent, raphero,
 rapheroa) from the table below, transcribed from mame/src/mame/nmk/
 nmk16.cpp's GAME()/ROM_START/INPUT_PORTS_START(raphero). Part order is
 rtl/raphero/raphero_core.sv's fixed SDRAM layout (see the header written
@@ -11,7 +11,7 @@ import os
 RELEASES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "releases")
 
 HEADER_NOTE = '''<!--
-  {desc} — NMK16 "Raphero" rbf (arcadian/raphero/rapheroa share the
+  {desc} — NMK16 "NMK16_Raphero" rbf (arcadian/raphero/rapheroa share the
   raphero() machine config, nmk16.cpp). {origin}
 
   Transcribed from mame/src/mame/nmk/nmk16.cpp:
@@ -39,7 +39,7 @@ BODY = '''<misterromdescription>
   <year>1994</year>
   <manufacturer>{manufacturer}</manufacturer>
   <category>Shooter</category>
-  <rbf>Raphero</rbf>
+  <rbf>NMK16_Raphero</rbf>
 
   <!-- ROT270 in nmk16.cpp -->
   <rotation>1</rotation>
@@ -50,7 +50,7 @@ BODY = '''<misterromdescription>
        raphero_core.sv's decode (sel_dsw1 at 0x100008, sel_dsw2 at
        0x10000A). ids are listed in bit-value order (value 0 first).
        Third byte 0x00 is not a <dip> (no OSD entry over it): bit 6 is
-       Raphero.sv's hidden "unlock P1/P2 Autofire menu" flag (see its
+       NMK16_Raphero.sv's hidden "unlock P1/P2 Autofire menu" flag (see its
        autofire_unlock comment) — 00 keeps the menu hidden, same as
        every other game on this rbf. Without this explicit byte the
        core reads the idle 0xFF default and the flag reads set. -->

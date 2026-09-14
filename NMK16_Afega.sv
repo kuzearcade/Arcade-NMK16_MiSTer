@@ -2,23 +2,23 @@
 // "NMK16_Afega" RBF: the 27 Afega-hardware sets (Stagger I / Red Hawk,
 // Guardian Storm / Hong Hu Zhanji II, Bubble 2000 / Hot Bubble, Pop's
 // Pop's, Mang-Chi, Spectrum 2000, Fire Hawk), game ids 23-43 of
-// rtl/gunnail/gunnail_core.sv. Split out of Gunnail.rbf on 2026-09-13:
+// rtl/gunnail/gunnail_core.sv. Split out of NMK16_Gunnail.rbf on 2026-09-13:
 // identical framework wiring, but gunnail_core is built with
 // INCLUDE_AFEGA(1)/INCLUDE_NMK(0), so the NMK004/protection TLCS-90
 // cores, the YM2203 and the Seibu/YM3812 sound board are elaborated
 // away and only the Afega games' own hardware is in the netlist.
-// Gunnail.rbf is the mirror image (INCLUDE_AFEGA(0)) and keeps ids
+// NMK16_Gunnail.rbf is the mirror image (INCLUDE_AFEGA(0)) and keeps ids
 // 0-22 and 44-51. See docs/hw-bringup.md.
 //
-// (original Gunnail.sv header follows)
+// (original NMK16_Gunnail.sv header follows)
 // NMK16 MiSTerFPGA project — real hardware top-level for the "Gunnail"
 // RBF: GunNail (gunnail, gunnailp — nmk16.cpp gunnail_prot()) and, since
 // 2026-09-11, the nine lowres NMK004 boards (macross, blkheart, mustang,
 // bioship, vandyke, acrobatm, strahl, tdragon/tdragon1, hachamf) as
 // runtime game modes of rtl/gunnail/gunnail_core.sv (game_sel, from the
-// .mra <switches> third byte). Cloned from Raphero.sv: the same
+// .mra <switches> third byte). Cloned from NMK16_Raphero.sv: the same
 // framework wiring (hps_io, SDRAM, MAME-style keyboard, P1/P2 autofire,
-// framebuffer rotation, .mra DIP capture) plus Macross2.sv's video
+// framebuffer rotation, .mra DIP capture) plus NMK16_Macross2.sv's video
 // output retimer (here at 48 MHz: 8 MHz pixels for gunnail's 512-px
 // line, 6 MHz for the lowres boards' 384-px line). See docs/hw-bringup.md.
 //
@@ -351,7 +351,7 @@ assign autofire_unlock = (dip_sw[2] == 8'hFF) ? 1'b0 : dip_sw[2][6];
 // controller runs on the 96MHz clk_ram; every consumer stays on clk_sys
 // and reaches it through rtl/sdram_req.sv's clock crossing.
 // REFRESH_CYCLES=740 = 7.7us @ 96MHz, inside the JEDEC 7.8125us row
-// refresh interval (see Macross2.sv / docs/hw-bringup.md).
+// refresh interval (see NMK16_Macross2.sv / docs/hw-bringup.md).
 // ------------------------------------------------------------------
 wire [24:1] sd0_addr, sd1_addr, sd2_addr, sd3_addr;
 wire        sd0_wrl, sd0_wrh, sd2_wrl, sd2_wrh;

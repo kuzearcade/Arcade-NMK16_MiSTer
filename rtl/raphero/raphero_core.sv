@@ -55,7 +55,7 @@ module raphero_core #(
 	parameter BGTILE_FILE    = "",
 	parameter SPRITES_FILE   = "",
 	// See docs/hw-bringup.md. HW_ROMS=0 (default, the reference sim):
-	// $readmemh 0-latency arrays. HW_ROMS=1 (Raphero.sv and the
+	// $readmemh 0-latency arrays. HW_ROMS=1 (NMK16_Raphero.sv and the
 	// raphero_hw sim): every ROM region reads through a cache over the
 	// real rtl/sdram.sv controller, loaded via ioctl_download.
 	parameter HW_ROMS        = 0,

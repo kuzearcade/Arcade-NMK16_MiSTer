@@ -106,7 +106,7 @@ module video_macross2 #(
 	input reset,
 
 	// ------------------------------------------------------------------
-	// Runtime layer configuration (2026-09-11, Gunnail.rbf's nine lowres
+	// Runtime layer configuration (2026-09-11, NMK16_Gunnail.rbf's nine lowres
 	// NMK004 games). lowres: set_screen_lowres geometry — 256 visible
 	// pixels from bitmap x 92 (the same 64 us line: 384 px at 6 MHz),
 	// TX tilemap 32x32, max_sprite_clock 384*263. cfg_rt=1: the palette

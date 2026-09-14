@@ -1,5 +1,5 @@
 <!--
-  Task Force Harrier (Lettering bootleg) — NMK16 "Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 55).
+  Task Force Harrier (Lettering bootleg) — NMK16 "NMK16_Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 55).
   Clone of tharrier; files it shares with the parent are looked up in the parent zip.
 
   Transcribed from mame/src/mame/nmk/nmk16.cpp: GAME(... tharrierb ...)
@@ -17,7 +17,7 @@
   <year>1989</year>
   <manufacturer>bootleg (Lettering)</manufacturer>
   <category>Shooter</category>
-  <rbf>Gunnail</rbf>
+  <rbf>NMK16_Gunnail</rbf>
 
   <!-- ROT270 in nmk16.cpp -->
   <rotation>1</rotation>

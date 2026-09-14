@@ -29,7 +29,7 @@
 // during write line L+1, while the writer fills buf[(L+1)&1].
 // Parameters (2026-09-11, the Gunnail rbf): the two modes' geometry and
 // the clk_r count per line are parameters — the defaults are the
-// Macross2 rbf's (56 MHz clk_r: 512 px / 7 and 448 px / 8); Gunnail.sv
+// Macross2 rbf's (56 MHz clk_r: 512 px / 7 and 448 px / 8); NMK16_Gunnail.sv
 // passes a 48 MHz set (512 px / 6 for gunnail, 384 px / 8 for the lowres
 // boards, 3072 clk_r per line). mode1 selects the second set.
 module video_retime #(
@@ -113,7 +113,7 @@ module video_retime #(
 	wire [9:0] r_aw = m7 ? AW_7   : AW_8;
 	wire [3:0] r_div = m7 ? DIV_7 : DIV_8;
 
-	// H/V Shift (the same arithmetic Macross2.sv used on the core raster):
+	// H/V Shift (the same arithmetic NMK16_Macross2.sv used on the core raster):
 	// positive = picture right/down = sync earlier.
 	wire [9:0] hshift_px = {{5{hshift_sel[3]}}, hshift_sel, 1'b0};
 	wire [9:0] vshift_ln = (vshift_sel <= 6'd20) ? {4'd0, vshift_sel} : ({4'd0, vshift_sel} - 10'd41);

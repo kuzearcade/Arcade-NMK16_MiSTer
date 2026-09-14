@@ -226,7 +226,7 @@ design itself:
    would make TimeQuest time every `clk_sys`↔`clk_ram` path
    synchronously against the worst-case edge relationship of a
    25ns/10.4ns pair (~2ns, every 125ns) and fail on the payload paths
-   the handshake makes irrelevant. `Macross2.sdc`/`SdramTest.sdc` build
+   the handshake makes irrelevant. `NMK16_Macross2.sdc`/`SdramTest.sdc` build
    the groups with a `foreach_in_collection` over
    `emu|pll|altpll_component|*PLL_OUTPUT_COUNTER|divclk`, so it stays
    correct whatever Quartus names the counters (`generic_pll1`/
@@ -234,7 +234,7 @@ design itself:
 
 `REFRESH_CYCLES` moved from 240 (7.8µs at 40MHz) to 740 (7.7µs at
 96MHz). `SdramTest` rebuilt at 96MHz shows the full-512KB Phase 1 clean
-apart from its documented shared-address-0 artifact, and the Macross2
+apart from its documented shared-address-0 artifact, and the NMK16_Macross2
 build closes timing on both domains with margin (96MHz domain: ~1.2-1.6ns
 setup / 0.45ns hold slack, Fmax ~108MHz; 40MHz domain: ~3.2-5.4ns setup).
 The Verilator harnesses (`sim/rtl/*_hw/`) drive `clk_ram` at three
@@ -385,7 +385,7 @@ worth recording because the eventual root cause was small, and several
 plausible-looking leads along the way were not it.
 
 **Root cause: `ioctl_download` SDRAM writes were not gated on
-`ioctl_index`.** `Macross2.sv` never connected `hps_io`'s `ioctl_index`
+`ioctl_index`.** `NMK16_Macross2.sv` never connected `hps_io`'s `ioctl_index`
 output, and `tdragon2_core.sv`'s `sd0_inst` wrote SDRAM on *any* ioctl
 session. The MiSTer `.mra` loader sends **two** sessions per game load:
 the single `<rom index="0">` block (every ROM region, at the byte
@@ -403,7 +403,7 @@ jtframe `IDX_ROM`/`IDX_DIPSW=254`) qualifies ROM writes on
 
 **Fix:** `tdragon2_core.sv` takes `ioctl_index`, and `sd0_inst`'s
 `we`/`wrl`/`wrh`/`req` are gated by
-`ioctl_rom_wr = ioctl_download && ioctl_index == 16'd0`. `Macross2.sv`
+`ioctl_rom_wr = ioctl_download && ioctl_index == 16'd0`. `NMK16_Macross2.sv`
 also now captures the index-254 block into `dip_sw[0:7]` and drives
 `dsw1_i`/`dsw2_i` and the hidden game-select bit (`dip_sw[2][0]`) from
 it — the previous `status[15:0]`/`status[16]` wiring never received DIP
@@ -443,7 +443,7 @@ conclusions.
 The diagnostic instrumentation (`rom_csum`, per-bucket/per-word
 checksums with `$readmemh`-loaded sim references under
 `rtl/tdragon2/*_ref.hex`, the `dbg_*` ports on `rtl/sdram_req.sv`) is
-left in `tdragon2_core.sv`; `Macross2.sv` no longer draws the overlays
+left in `tdragon2_core.sv`; `NMK16_Macross2.sv` no longer draws the overlays
 (reconnect the `final_rgb` ternary chain, preserved in git history, to
 bring them back). The self-contained methodology — a passive checksum
 tap at a fixed *transaction count*, compared between a fixed-input
@@ -517,7 +517,7 @@ separate things did, the first two of which are core bugs:
    has to do it, and the framework ships the standard way in
    `sys/arcade_video.v` (`screen_rotate`: a DDR3-backed rotating
    framebuffer driven from `VGA_*`, exposing `FB_*`/`DDRAM_*` which
-   `Macross2.sv` tied off at the time). That was wired in next — see
+   `NMK16_Macross2.sv` tied off at the time). That was wired in next — see
    "Orientation option" below, since extended to both quarter-turn
    directions plus a Flip screen option on all three cores.
 3. **The black borders are the MiSTer's own scaler setting.** The box's
@@ -640,10 +640,10 @@ mix, full-length renders:
 
 GunNail's lower correlation is the sequencer divergence below, not a
 level problem — its level is corrected exactly as well as the other
-two. `releases/Macross2.rbf`, `Raphero.rbf` and `Gunnail.rbf` rebuilt.
-Raphero needed two Quartus seed retries (`SEED 7` succeeded) after the
+two. `releases/NMK16_Macross2.rbf`, `NMK16_Raphero.rbf` and `NMK16_Gunnail.rbf` rebuilt.
+NMK16_Raphero needed two Quartus seed retries (`SEED 7` succeeded) after the
 first attempt failed to route — a pre-existing near-100%-utilization
-congestion issue (Raphero was already at 82% ALM / 94% M10K with 0.27 ns
+congestion issue (NMK16_Raphero was already at 82% ALM / 94% M10K with 0.27 ns
 of setup slack before this change), not caused by the new expression,
 which costs the same one adder as the old one.
 
@@ -976,14 +976,14 @@ case, mirroring OP_INC/OP_DEC's own pattern exactly.
   session just changed, these tests are worth fixing and re-running
   as a real regression gate before trusting this area of the CPU core
   again — not done in this pass.
-- **Rebuilt for hardware**: `releases/Raphero.rbf` and
-  `releases/Gunnail.rbf` (the only two bitstreams whose CPU core
-  changed — `Macross2.rbf` doesn't use `tlcs90.sv` at all, its sound
+- **Rebuilt for hardware**: `releases/NMK16_Raphero.rbf` and
+  `releases/NMK16_Gunnail.rbf` (the only two bitstreams whose CPU core
+  changed — `NMK16_Macross2.rbf` doesn't use `tlcs90.sv` at all, its sound
   path is Z80/jt03). `docs/hw-bringup.md`'s "Sound effects corrupted"
   section below and the OKI mixer-gain fix are unrelated, unaffected
   by this change.
 - **Audio band correlation re-measured on the board** (2026-09-10,
-  later the same day, shipped `Gunnail.rbf`, attract from boot, MAME
+  later the same day, shipped `NMK16_Gunnail.rbf`, attract from boot, MAME
   `-wavwrite` 100 s vs a 110 s `arecord` capture, `tools/audio_compare.py
   --offset-search 20`): 0.919 mean band corr / 0.951 envelope over the
   full 100 s at −1.1 dB, and **0.968 / 0.997 over the first 60 s** at
@@ -1019,19 +1019,19 @@ case, mirroring OP_INC/OP_DEC's own pattern exactly.
   the write-to-A version fails exactly the two register-writeback
   checks; the current RTL passes all nine and the other eight
   self-tests. No shipped game is known to execute `set/res b,g` with
-  `g≠A`, so no behaviour change is expected on the board — Raphero and
-  Gunnail were rebuilt anyway so `releases/` matches the RTL.
+  `g≠A`, so no behaviour change is expected on the board — NMK16_Raphero and
+  NMK16_Gunnail were rebuilt anyway so `releases/` matches the RTL.
   Verification of that rebuild: `gunnail_hw` sim ROM audit 13.3M
   words / 0 wrong, OKI audits 0/0, NMK-215 still emitting its 2 NMK214
   config writes; `raphero_hw` ROM audit 18.9M / 0 wrong, OKI1 0 wrong,
   OKI0 1 wrong of 727,249 — and re-running that exact sim against the
   previous `tlcs90.sv` gives identical instruction counts and the same
   single byte, so it is pre-existing (now tracked as NMK-15), and the
-  CPU change has no observable effect on Raphero's execution at all.
-  Quartus: Gunnail +0.444 ns setup, Raphero +0.011 ns (positive; SEED
+  CPU change has no observable effect on NMK16_Raphero's execution at all.
+  Quartus: NMK16_Gunnail +0.444 ns setup, NMK16_Raphero +0.011 ns (positive; SEED
   23 unchanged). Both RBFs deployed, MD5-verified, boot into their
-  attract demos with continuous audio (Raphero 23/25 s active from
-  load, Gunnail 21/25 s including the ROM-upload gap). The full
+  attract demos with continuous audio (NMK16_Raphero 23/25 s active from
+  load, NMK16_Gunnail 21/25 s including the ROM-upload gap). The full
   sim-only sweep of every TLCS-90 user (mustang, bioship, vandyke,
   blkheart, acrobatm, strahl, tdragon, tdragon1, hachamf, hachamfb,
   macross, bjtwin's `run-prot` variant, gunnail, raphero — run
@@ -1253,7 +1253,7 @@ whatever `data` shows for it (the default line's byte, `0xBB`). The
 chip's own address pipeline cannot cause this — its updates are
 cen-aligned and ten clocks apart — and jt6295's phrase-start address
 load is `cen4`-aligned too, so NMK112 writes are the only
-asynchronous path. Gunnail has no NMK112, hence its permanent 0/0.
+asynchronous path. NMK16_Gunnail has no NMK112, hence its permanent 0/0.
 
 **Fix.** `nmk112.sv` gains a `hold` input: a write arriving while
 hold is high is captured in a one-entry slot and applied on the next
@@ -1279,16 +1279,16 @@ wrong / 0 unserved, 40 writes deferred, 0 lost. `gunnail_hw`,
 `oki_rom_cache` unit test is unchanged (99.94% resident, 0 wrong,
 0.12% stall).
 
-**Build note.** Gunnail's first rebuild with the cache guard missed
+**Build note.** NMK16_Gunnail's first rebuild with the cache guard missed
 timing by −1.066 ns; a `quartus_sta` path report showed every failing
 path on `video_timing hcount[4] → video_macross2 tile_rgb_r[18/19]` —
 the compositing path, untouched — i.e. placement wobble, and `SEED 3
-→ 11` gave +0.378 ns. Raphero then did the same twice on the final
+→ 11` gave +0.378 ns. NMK16_Raphero then did the same twice on the final
 RTL — `SEED 23` −0.132 ns on the framework's `d[14] → hdmi_out_d[14]`
 register, `SEED 31` −0.080 ns inside `ascal` (`o_vacpt[0] →
 o_vpixq_pre[2].b[5]`) — neither anywhere near the cores; seeds 7, 19
 and 43 run in parallel all passed (+0.069, +0.356, +0.429) and 43 is
-now the tracked seed. Macross2 passed first time (+0.132). Worth
+now the tracked seed. NMK16_Macross2 passed first time (+0.132). Worth
 remembering: check *which* paths fail before attributing a miss to the
 change that triggered the rebuild — and that three parallel Quartus
 runs plus the scratch copies of earlier builds overflow the 16 GB
@@ -1308,7 +1308,7 @@ vblank (~56 Hz): 10Hz = 3 frames on / 3 off, 12Hz = 2/3, 15Hz = 2/2,
 20Hz = 1/2, 30Hz = 1/1. The phase counter restarts on each new press
 so a tap fires on its first frame. While a player's autofire is on,
 that player's button 3 is OR'd in as a plain non-autofire button 1 and
-its own bit is not sent to the game — `af1_en`/`af2_en` (`Macross2.sv`)
+its own bit is not sent to the game — `af1_en`/`af2_en` (`NMK16_Macross2.sv`)
 used to be gated `& ~game_macross2`, both to match the menu being
 hidden for that game and because macross2's own `INPUT_PORTS_START`
 has no 3rd button at all. Removing the gate is safe, and the OR path
@@ -1323,7 +1323,7 @@ other status bits by OSD > System > Save settings.
 
 Both .mra files already declared every DSW1/DSW2 option from
 nmk16.cpp, but MiSTer only renders its DIP submenu where the core's
-CONF_STR carries a `"DIP;"` line — `Macross2.sv` now has one, between
+CONF_STR carries a `"DIP;"` line — `NMK16_Macross2.sv` now has one, between
 Orientation and Reset. The submenu lists the eight options per game,
 Enter cycles a value (Right/Left switch OSD pages instead), and MiSTer
 saves every change by itself to `config/dips/<setname>.dip` (8 bytes,
@@ -1345,7 +1345,7 @@ submenu returns to the core page; a second F12 closes the OSD.
 ## Orientation option (vertical games upright over HDMI, both quarter-turn directions)
 
 tdragon2 is MAME ROT270: the board draws it on its side. Same for
-gunnail and raphero. `Macross2.sv`/`Gunnail.sv`/`Raphero.sv` each
+gunnail and raphero. `NMK16_Macross2.sv`/`NMK16_Gunnail.sv`/`NMK16_Raphero.sv` each
 offer `Orientation: Horz/Vert 270/Vert 90` in the OSD (`H0O[9:8]`,
 default Horz — 2 status bits now, was a single bit before 2026-09-10).
 Both "Vert" choices enable the framework's `screen_rotate` (the second
@@ -1362,10 +1362,10 @@ DDR3->scaler->HDMI output orientation without the operator manually
 rotating the physical display. With Horz selected, `no_rotate` keeps
 FB_EN low, nothing touches DDRAM and the scaler takes the direct VGA
 path as before — the core's own video pipeline is not in the loop
-either way. In `Macross2.sv` the entry is hidden (status_menumask bit
+either way. In `NMK16_Macross2.sv` the entry is hidden (status_menumask bit
 0) for macross2, which is horizontal (and gets its own Flip screen
 option instead, below, which works for both games); in
-`Gunnail.sv`/`Raphero.sv`, which only serve vertical games, it's shown
+`NMK16_Gunnail.sv`/`NMK16_Raphero.sv`, which only serve vertical games, it's shown
 unconditionally. All three hide it under direct_video, where the
 framebuffer path does not exist; `no_rotate` is forced in that case
 too. The framebuffer ports need `MISTER_FB=1` in the .qsf, which is
@@ -1418,8 +1418,8 @@ guess, each core now exposes the position as two OSD trims (added
 - Persistence is the MiSTer's own (OSD > System > Save settings).
   Once a good baseline is found on a CRT, fold it into the constants
   and keep the trims at 0 = that new baseline.
-- Verified on the box (all three RBFs rebuilt first time, Macross2
-  +0.263 / Raphero +0.541 / Gunnail +0.359 ns): both entries appear
+- Verified on the box (all three RBFs rebuilt first time, NMK16_Macross2
+  +0.263 / NMK16_Raphero +0.541 / NMK16_Gunnail +0.359 ns): both entries appear
   and cycle as listed (H wraps 0 → +14 → −16 → −2 → 0, V 0 → +4 →
   −8 → −1 → 0). Over HDMI the picture does not move at all — the lit
   window in a 640x480 capture is x 58..541 / y 26..453 at H+14 and at
@@ -1429,8 +1429,8 @@ guess, each core now exposes the position as two OSD trims (added
   measurement itself has to happen on real CRT equipment (this
   environment captures HDMI only).
 - Second pass (±20 V range, re-centred nominal) verified the same way:
-  all three RBFs rebuilt first time (Macross2 +0.335 / Raphero +0.296
-  / Gunnail +0.403 ns), deployed, MD5-checked; on tdragon2 the 41-entry
+  all three RBFs rebuilt first time (NMK16_Macross2 +0.335 / NMK16_Raphero +0.296
+  / NMK16_Gunnail +0.403 ns), deployed, MD5-checked; on tdragon2 the 41-entry
   V list cycles 0 → +20 (twenty presses) → −20 (one more) → 0 (twenty
   more), i.e. the list closes exactly; HDMI framing unchanged at both
   extremes — at −20 the lit window is x 58..541 / y 26..453 (a
@@ -1452,7 +1452,7 @@ way, since `video_rotated` (which drives the 4:3-vs-3:4 choice) is
 tied to `~no_rotate`, and `no_rotate` stays asserted for a flip-only
 selection.
 
-macross2 is horizontal, so it doesn't use Orientation — `Macross2.sv`
+macross2 is horizontal, so it doesn't use Orientation — `NMK16_Macross2.sv`
 offers `Flip screen: Off/On` (`H2O[17]`, default Off) for it, always
 meaningful since macross2 is permanently `no_rotate`. tdragon2,
 gunnail and raphero are all MAME ROT270 (vertical), so for them Flip
@@ -1461,9 +1461,9 @@ at Horz — an operator playing one of these games un-rotated (the way
 the board naturally outputs it) on a HORIZONTAL monitor that happens
 to be mounted upside-down (added 2026-09-10, extending the option
 originally built for macross2 alone; requested explicitly for this
-use case). `Macross2.sv`'s own `flip` wire dropped its `& game_macross2`
+use case). `NMK16_Macross2.sv`'s own `flip` wire dropped its `& game_macross2`
 term to cover tdragon2 too — the option is hidden (H2) only under
-direct_video now, not per-game. `Gunnail.sv`/`Raphero.sv` reuse
+direct_video now, not per-game. `NMK16_Gunnail.sv`/`NMK16_Raphero.sv` reuse
 Orientation's own `H0` tag/mask for their new `Flip screen` line
 (same direct_video-only hide condition), rather than adding a new
 status_menumask bit.
@@ -1488,17 +1488,17 @@ V Shift +20 saved, core reloaded, all four read back; defaults
 restored, saved, reloaded, defaults read back. When scripting this
 with `tools/mister_keys.py`, remember F12 *toggles* the OSD: the key
 sequence has to track whether the menu is open, or the presses go
-into the game. `Raphero.qsf`'s `SEED` moved 19 ->
+into the game. `NMK16_Raphero.qsf`'s `SEED` moved 19 ->
 23 in the same pass: the Flip screen addition alone pushed the build
 just far enough that `SEED 19` missed timing (setup slack -0.065 ns);
 `SEED 23` in a fresh scratch rebuild passed (+0.255 ns) and was
 persisted into the tracked .qsf — same chronic near-100%-utilization
-sensitivity as every other Raphero timing note in this file, not a
+sensitivity as every other NMK16_Raphero timing note in this file, not a
 new problem.
 
 ## Keyboard input (MAME default keys)
 
-`Macross2.sv` decodes hps_io's `ps2_key` stream into held-key
+`NMK16_Macross2.sv` decodes hps_io's `ps2_key` stream into held-key
 registers and ORs them into IN0/IN1 next to the joysticks, always on,
 using MAME's default bindings: P1 arrows + LCtrl/LAlt/Space + `1`;
 P2 R/F/D/G + A/S/Q + `2`; coins `5`/`6`; service `9`; F2 toggles the
@@ -1519,14 +1519,14 @@ and /dev/uinput are present) and presses keys from the command line —
 
 Reported: macross2's Coin button did nothing on a gamepad, but worked
 fine from a keyboard, and the other three games (sharing this same
-`Macross2.rbf`/`Gunnail.rbf`/`Raphero.rbf` codebase) were unaffected.
-The keyboard-vs-gamepad split was the key clue: `Macross2.sv`'s
+`NMK16_Macross2.rbf`/`NMK16_Gunnail.rbf`/`NMK16_Raphero.rbf` codebase) were unaffected.
+The keyboard-vs-gamepad split was the key clue: `NMK16_Macross2.sv`'s
 keyboard path (`kb_coin1`/etc., see above) decodes PS/2 scancodes
 directly in the RTL, entirely independent of any `.mra` metadata — so
 a bug specific to gamepads but not keyboards has to live outside the
 RTL, in the `.mra`.
 
-Root cause: `Macross2.sv`'s CONF_STR declares a single, fixed 5-entry
+Root cause: `NMK16_Macross2.sv`'s CONF_STR declares a single, fixed 5-entry
 button list shared by both games it serves — `"J1,Button 1,Button 2,
 Button 3,Start,Coin;"` — since the core is a runtime-selected merge of
 tdragon2 (3 buttons) and macross2 (2 buttons; see `in0_i`'s own
@@ -1765,13 +1765,13 @@ depends on FM-chip status timing that MAME and jt03 model differently.
 Real hardware has its own arbitrary phase here. Both video paths are
 exact on their own diagonals; nothing to fix.
 
-## Rapid Hero / Arcadia (the "Raphero" rbf)
+## Rapid Hero / Arcadia (the "NMK16_Raphero" rbf)
 
 `rtl/raphero/raphero_core.sv` is the second hardware core, built on
 `tdragon2_core.sv`'s `HW_ROMS=1` machinery with `video_macross2.sv` (now
 parameterised: `RASTER_SCROLL=1` for the per-scanline X+Y scroll tables,
-`SPRITES_BYTES` for the 6 MB sprite ROM) — `Raphero.sv`/`.qsf`/`.sdc`/
-`files_raphero.qip`, `sim/rtl/raphero_hw/`, three `.mra` files
+`SPRITES_BYTES` for the 6 MB sprite ROM) — `NMK16_Raphero.sv`/`.qsf`/`.sdc`/
+`files_nmk16_raphero.qip`, `sim/rtl/raphero_hw/`, three `.mra` files
 (`tools/gen_raphero_mra.py`). What is different from the Family C core,
 checked against `nmk16.cpp`'s `raphero()`:
 
@@ -1793,7 +1793,7 @@ checked against `nmk16.cpp`'s `raphero()`:
   withheld while the program-ROM cache (`oki_rom_cache`, 16 lines + next-
   line prefetch, not the 1-line `rom_cache1_byte`) does not hold the byte
   being fetched. In the hardware sim 0.1% of clock pulses are withheld.
-  `Raphero.sdc` declares the CPU/peripheral register-to-register paths as
+  `NMK16_Raphero.sdc` declares the CPU/peripheral register-to-register paths as
   5-cycle multicycle paths (they only ever update on the enable) — without
   that the execute logic fails timing by ~10 ns at 40 MHz.
 - **Per-scanline scroll.** `bg_update()` in `nmk16_v.cpp` draws bitmap line
@@ -1829,7 +1829,7 @@ of every ROM read):
    guard is now in `tdragon2_core.sv` for both the 68000's `rom_cache1`
    and the Z80's `rom_cache1_byte` (whose RAM/latch accesses used to start
    speculative bank-window fetches the same way); the reference sim trace
-   is unchanged and the Macross2 rbf was rebuilt and re-verified.
+   is unchanged and the NMK16_Macross2 rbf was rebuilt and re-verified.
 2. **Registered `ready` flags stale for one clock.** `mainram_ready <=
    (addr_r == addr)` is high for the first `clk_sys` after the address
    changes (it still reflects the previous address); at 14 MHz `enPhi2`
@@ -1846,7 +1846,7 @@ scores 0.96 band correlation against MAME's `-wavwrite` output
 (`tools/audio_compare.py`, whose level column shows the same ~9 dB
 MAME-louder offset the Family C hardware captures have).
 
-Real hardware (DE10-Nano, `Raphero.rbf`, `Rapid Hero (NMK).mra`): boots
+Real hardware (DE10-Nano, `NMK16_Raphero.rbf`, `Rapid Hero (NMK).mra`): boots
 and plays the attract loop; native screenshots of the title screen are
 pixel-identical to MAME's snapshots of the same scene, scrolling scenes
 match to within the capture-time offset; a 40 s audio capture scores
@@ -1865,11 +1865,11 @@ per-line raster case is verified only structurally (same expressions
 as `bg_update()`, both taps indexed by bitmap y) until a stage that
 uses it is reached.
 
-## GunNail (the "Gunnail" rbf): NMK004 sound MCU and NMK-215 protection on hardware
+## GunNail (the "NMK16_Gunnail" rbf): NMK004 sound MCU and NMK-215 protection on hardware
 
 `rtl/gunnail/gunnail_core.sv` is the third hardware core: raphero's
-`HW_ROMS=1` machinery around the Family D/NMK004 board — `Gunnail.sv`/
-`.qsf`/`.sdc`/`files_gunnail.qip`, `sim/rtl/gunnail_hw/`, two `.mra`
+`HW_ROMS=1` machinery around the Family D/NMK004 board — `NMK16_Gunnail.sv`/
+`.qsf`/`.sdc`/`files_nmk16_gunnail.qip`, `sim/rtl/gunnail_hw/`, two `.mra`
 files (`tools/gen_gunnail_mra.py`, GunNail and the location test).
 `video_macross2.sv` gained the gfx_macross parameters (`SPR_COLOUR_BITS=4`,
 `TX_PAL_BASE_P=0x200`, `BG_CODE_BITS=13`) and `NMK214=1`, which puts the
@@ -1958,7 +1958,7 @@ contiguous (fgtile 0x094000, bgtile 0x0B4000, sprites 0x1B4000, oki1
 0x3B4000, oki2 0x434000) — the rule for every core: no gaps between
 `BASE_BYTE_*` regions.
 
-Real hardware with the contiguous layout (DE10-Nano, `Gunnail.rbf`,
+Real hardware with the contiguous layout (DE10-Nano, `NMK16_Gunnail.rbf`,
 Quartus 61% ALMs / 74% of the M10K blocks, worst setup slack +0.45 ns
 with the multicycle constraints on both MCUs): boots through the ROM
 check, logo and title into the attract demo. Native screenshots of the
@@ -2044,8 +2044,8 @@ sprite cache alone (TX still sharing the port) gave 56.0-56.4 in every
 window (mean 56.2 = every frame), as does the final layout (sprites
 on their own port): 56.0-56.4 in all 45 windows, mean 56.20. The
 release build plays normally on the board and its attract cycle is
-33.3 s with no repeated gameplay frames, as in MAME; Raphero and
-Gunnail were rebuilt with the same three changes, their hardware sims
+33.3 s with no repeated gameplay frames, as in MAME; NMK16_Raphero and
+NMK16_Gunnail were rebuilt with the same three changes, their hardware sims
 match their reference sims pixel for pixel (raphero now one frame
 behind its reference instead of thirty), and both boot and run their
 attract demos on the board.
@@ -2096,9 +2096,9 @@ audit after any change to the ROM caches or SDRAM port assignment.
 
 ## Utilization: the palette and the duplicated VRAMs (2026-09-10, NMK-10)
 
-Raphero was "at the edge": 82 % ALM, 94 % M10K, `SEED` churning
+NMK16_Raphero was "at the edge": 82 % ALM, 94 % M10K, `SEED` churning
 7 → 19 → 23 → 43, one seed at −0.065 ns. The fitter's entity report
-(`Raphero.fit.rpt`, "Fitter Resource Utilization by Entity", the
+(`NMK16_Raphero.fit.rpt`, "Fitter Resource Utilization by Entity", the
 parenthesised *own* column) said the weight was not in the video
 pipeline, the CPUs or the caches but in `raphero_core` itself: 14,776
 ALMs and 23,855 registers of flat logic, more than half the core, next
@@ -2153,9 +2153,9 @@ than 1.9 ns):
 
 | core | ALMs | registers | M10K | setup slack |
 |---|---|---|---|---|
-| Raphero | 34,179 (82 %) → 20,451 (palette) → 20,365 (49 %) | 46,135 → 28,694 | 520 (94 %) → 526 → 442 (80 %) | +0.296 → +0.471 → +0.533 ns |
-| Macross2 | 29,548 (71 %) → 15,699 → 15,793 (38 %) | 39,114 → 21,504 | 517 (93 %) → 523 → 439 (79 %) | +0.135 → +0.468 → +0.320 ns |
-| Gunnail | 27,023 (64 %) → 21,525 → 21,244 (51 %) | 36,924 → 25,485 | 407 (74 %) → 411 → 375 (68 %) | +0.403 → +0.403 → +0.535 ns |
+| NMK16_Raphero | 34,179 (82 %) → 20,451 (palette) → 20,365 (49 %) | 46,135 → 28,694 | 520 (94 %) → 526 → 442 (80 %) | +0.296 → +0.471 → +0.533 ns |
+| NMK16_Macross2 | 29,548 (71 %) → 15,699 → 15,793 (38 %) | 39,114 → 21,504 | 517 (93 %) → 523 → 439 (79 %) | +0.135 → +0.468 → +0.320 ns |
+| NMK16_Gunnail | 27,023 (64 %) → 21,525 → 21,244 (51 %) | 36,924 → 25,485 | 407 (74 %) → 411 → 375 (68 %) | +0.403 → +0.403 → +0.535 ns |
 
 `raphero_core`'s own logic went from 14,776 to 3,119 ALMs,
 `tdragon2_core`'s from 12,343 to 258. What is left in M10K is the
@@ -2172,12 +2172,12 @@ the palette). The three reference sims build. On the board all three
 new RBFs boot, play (attract audio recorded) and show correct colours
 in native screenshots.
 
-## Power Instinct on the Macross2 rbf (2026-09-11)
+## Power Instinct on the NMK16_Macross2 rbf (2026-09-11)
 
 Power Instinct (Atlus 1993, `powerins`) is a Family C board — 68000 +
 Z80 with YM2203 and two NMK112-banked OKIs, the same parts as tdragon2
 — but on a "midres" video configuration and with its own memory map,
-so it was added to the shared `Macross2.rbf` as a third runtime-selected
+so it was added to the shared `NMK16_Macross2.rbf` as a third runtime-selected
 game rather than a fourth RBF: `tdragon2_core.sv` and `video_macross2.sv`
 take a `game_powerins` input (from the `.mra` `<switches>` third byte,
 bit 1, or hidden `status[28]`), exactly as `game_macross2` already
@@ -2226,7 +2226,7 @@ What the mode changes, all read straight from `nmk16.cpp` /
   `video_macross2.sv`:
   - 320 x 224 visible at bitmap origin (60, 16). The raster is
     unchanged — 448 px at 7 MHz is the same 64 us line as 512 at 8 MHz
-    — and `Macross2.sv` places the window at hcount 60..379 (32 px in
+    — and `NMK16_Macross2.sv` places the window at hcount 60..379 (32 px in
     from tdragon2's 28..411 on each side, so the sync trims still apply)
     with its own blanking. `VIDEOSHIFT` is 92 in both (60+32 = 28+64),
     so tilemap and sprite x math only changed through `bitmap_x0`.
@@ -2252,7 +2252,7 @@ What the mode changes, all read straight from `nmk16.cpp` /
     `gfx->transpen`. 16-bit codes never wrap (`spr_units` 65536).
 - **Inputs.** Four buttons per player (P1_P2 bits 4-7): the CONF_STR
   became `J1,Button 1,Button 2,Button 3,Button 4,Start,Coin` and every
-  Macross2.rbf `.mra` now declares that six-entry `<buttons>` list
+  NMK16_Macross2.rbf `.mra` now declares that six-entry `<buttons>` list
   (positional gamepad mapping, see the gamepad Coin note); bit 7 is
   only driven in this mode. Keyboard: Left Shift / W for the fourth
   buttons. SYSTEM bits 0-4 are the same as the other two games.
@@ -2317,7 +2317,7 @@ setup slack +0.695 ns — the same footprint as before the port within a
 few hundred ALMs, since every powerins path is a mux on the existing
 logic.
 
-**Board.** `Macross2.rbf` with `Power Instinct (USA).mra` boots on the
+**Board.** `NMK16_Macross2.rbf` with `Power Instinct (USA).mra` boots on the
 DE10-Nano: the self test, the FBI screen, the title intro and the
 attract fight render correctly at 320 px (native `screenshot`
 captures), coin/start from the keyboard path starts a game and the
@@ -2325,7 +2325,7 @@ four buttons act; audio over the first 60 s of the attract correlates
 0.988 band-by-band with MAME's `-wavwrite` (`tools/audio_compare.py
 --offset-search 30`, +2.2 dB mean level, the same class as tdragon2's
 0.987). The previous RBF is kept on the box as
-`Macross2.rbf.pre_powerins`. NMK-18 (the 8 MHz pixel clock, 12.5 % narrower than the PCB on a CRT)
+`NMK16_Macross2.rbf.pre_powerins`. NMK-18 (the 8 MHz pixel clock, 12.5 % narrower than the PCB on a CRT)
 was closed the same day by the video retimer, next section. NMK-19
 (the prototype sets `powerinspu`/`powerinspj`, whose sprites are
 `ROM_LOAD16_BYTE` pairs) was closed with generated `.mra` files whose
@@ -2364,7 +2364,7 @@ placed once by the first synchronised write frame start; later frame
 starts are only compared against the expected read position (a 32-
 clock window either side of the line-276/277 wrap) and reload it on a
 gross error, so the sync outputs never take a per-frame jitter step.
-The `Macross2.sdc` PLL clock-group pattern was widened to `emu|pll*`
+The `NMK16_Macross2.sdc` PLL clock-group pattern was widened to `emu|pll*`
 so the new domain gets its own exclusive group (the buffer and the
 frame-toggle synchroniser are the only crossings).
 
@@ -2387,9 +2387,9 @@ powerins all lock on the HDMI scaler and render complete, correctly
 proportioned pictures (640x480 captures of attract scenes), and the
 native `screenshot` command returns 384 x 224 / 320 x 224 images
 matching the scenes on screen. The previous RBF is kept on the box as
-`Macross2.rbf.pre_retime`.
+`NMK16_Macross2.rbf.pre_retime`.
 
-## The nine lowres NMK004 boards on the Gunnail rbf (2026-09-11)
+## The nine lowres NMK004 boards on the NMK16_Gunnail rbf (2026-09-11)
 
 Macross, Black Heart, US AAF Mustang, Bio-ship Paladin, Vandyke,
 Acrobat Mission, Koutetsu Yousai Strahl, Thunder Dragon (the
@@ -2399,7 +2399,7 @@ OKIM6295, a TLCS-90 protection MCU on some) and differ from it in
 memory map, 68000 clock, screen geometry and a few video details. They
 now run as runtime game modes of `rtl/gunnail/gunnail_core.sv` —
 `game_sel`, from the `.mra` `<switches>` third byte — the same way
-Power Instinct joined the Macross2 rbf, rather than as nine more RBFs.
+Power Instinct joined the NMK16_Macross2 rbf, rather than as nine more RBFs.
 Their earlier single-game sims under `rtl/<game>/` (hi-res geometry,
 never built for hardware) stay as register references.
 
@@ -2528,7 +2528,7 @@ pass.
 
 Inputs: every IN1 layout in the set is the same, acrobatm also reads
 button 3 ("used by secret code"), so the CONF_STR became "Button 1,
-Button 2, Button 3, Start, Coin" and all 21 Gunnail `.mra` files carry
+Button 2, Button 3, Start, Coin" and all 21 NMK16_Gunnail `.mra` files carry
 that five-entry list (Space / Q on the keyboard). mustang reads its
 single 16-bit DSW port with SW1 in the high byte, so its second switch
 byte rides in dsw1's high half. Orientation is hidden and rotation
@@ -2589,16 +2589,16 @@ its Japanese sets open on a long silent story-text screen: the parent's
 first sound comes at 35 s in MAME and 44 s on the board (the loader's
 ~9 s), strahlj's at 60 s in MAME, just past the 70 s board capture.
 
-## Bombjack Twin, Task Force Harrier, the Vandyke and Hacha Mecha bootlegs on the Gunnail rbf (2026-09-12)
+## Bombjack Twin, Task Force Harrier, the Vandyke and Hacha Mecha bootlegs on the NMK16_Gunnail rbf (2026-09-12)
 
-Thirteen more sets joined the Gunnail rbf's game table, in three groups
+Thirteen more sets joined the NMK16_Gunnail rbf's game table, in three groups
 that each brought a new piece of hardware to the shared core.
 
 ### Bombjack Twin family (bjtwin, bjtwina, bjtwinp, bjtwinpa, sabotenb, sabotenba, cactus, nouryoku, nouryokup)
 
 No sound CPU: the 68000 drives the two OKIM6295 directly (byte
 registers at 0x084001/0x084011) and an NMK112 banks their 1 MB sample
-ROMs (0x084020-2F). The core's `nmk112` instance (the Macross2 rbf's)
+ROMs (0x084020-2F). The core's `nmk112` instance (the NMK16_Macross2 rbf's)
 sits in front of both OKI caches on these ids, the OKI write strobes
 and data are muxed from the 68000, and the NMK004 is held in reset.
 
@@ -2719,11 +2719,11 @@ audio. bjtwina and sabotenba (ROM-only clones) were not loaded.
 
 ## Five bootleg / clone sets on the two shared rbfs (2026-09-12)
 
-The last five sets that need no new hardware family: one on the Gunnail
-rbf, four on the Macross2 rbf. Each is a small delta on its parent's
+The last five sets that need no new hardware family: one on the NMK16_Gunnail
+rbf, four on the NMK16_Macross2 rbf. Each is a small delta on its parent's
 runtime mode; every delta below is transcribed from nmk16.cpp.
 
-### mustangb3 (Gunnail rbf, game id 22)
+### mustangb3 (NMK16_Gunnail rbf, game id 22)
 
 The Lettering bootleg of US AAF Mustang: mustang's map, scroll register
 and video (`g_mustang` covers all three mustang ids), an 8 MHz 68000
@@ -2748,7 +2748,7 @@ the six-byte instruction, so the core keys on its last instruction-
 fetch address being inside [0x410,0x416) / [0x648,0x64E) (the same
 `last_fetch_pc` register tharrier's MCU windows use).
 
-### tdragon3h (Macross2 rbf, switches byte 04)
+### tdragon3h (NMK16_Macross2 rbf, switches byte 04)
 
 Conny's Thunder Dragon 3 is tdragon2 (the 1st Oct. 1993 program, per
 MAME) on a 12 MHz 68000 with DSW2 and the Z80's reply latch swapped
@@ -2764,7 +2764,7 @@ oki1 SDRAM slot, so the .mra needs no 2 MB filler. The GFX ROMs are
 tdragon2's data split into more files: a ROM_LOAD16_BYTE sprite pair
 followed by a WORD_SWAP file, two BG files, two OKI files.
 
-### powerinsa, powerinsb, powerinsc (Macross2 rbf, switches bytes 1A / 0A / 2A)
+### powerinsa, powerinsb, powerinsc (NMK16_Macross2 rbf, switches bytes 1A / 0A / 2A)
 
 **powerinsc does not ship (2026-09-14).** It boots and runs, but its sprite
 ROM format is undeciphered, so its sprites draw wrong here exactly as they do
@@ -2873,7 +2873,7 @@ so those parts carry the parent's file name (the .mra searches
 
 Reference sims (`sim/rtl/gunnail_mg` for mustangb3, the new
 `sim/rtl/fc_mg` — `make GAME=<set> roms run`, TB_GAME_BYTE = the
-switches byte — for the Macross2 sets) against MAME exact-frame
+switches byte — for the NMK16_Macross2 sets) against MAME exact-frame
 snapshots, `$SP/mg_cmp.py`:
 
 | set | frames compared | identical | the rest |
@@ -2889,13 +2889,13 @@ stream): mustangb3 132 of 132 drawn frames identical to the reference
 sim, ROM golden-word audit 4,146,847 words / 0 wrong, OKI golden-byte
 audit 0 wrong on both chips.
 
-Builds: Gunnail build 8, 25,352 ALMs (60 %), +1.7 ns on clk_sys;
-Macross2, 15,963 ALMs (38 %), +2.3 ns on clk_sys.
+Builds: NMK16_Gunnail build 8, 25,352 ALMs (60 %), +1.7 ns on clk_sys;
+NMK16_Macross2, 15,963 ALMs (38 %), +2.3 ns on clk_sys.
 
 Board (2026-09-12, `$SP/mg_hwtest.sh`, nine native screenshots and 60 s
-of audio per set): mustangb3 (Gunnail build 8; mustang and tharrier
+of audio per set): mustangb3 (NMK16_Gunnail build 8; mustang and tharrier
 re-checked on the same build), tdragon3h, powerinsa, powerinsb and
-powerinsc (the Macross2 build) all load through their .mra, draw their
+powerinsc (the NMK16_Macross2 build) all load through their .mra, draw their
 attract sequences and play sound — tdragon3h with tdragon2's FM music,
 powerinsa through its 68000-driven OKI. powerinsc shows its intro text,
 title and stages with the fighters missing, as expected from its
@@ -2911,7 +2911,7 @@ Pop's Pop's, Mang-Chi, Spectrum 2000, Fire Hawk) run as game ids 23-43
 of `gunnail_core.sv`, one id per distinct configuration; sets that differ
 only in ROM contents share one (stagger1 with redhawke/k/c, grdnstrmk
 with grdnstrmv, bubl2000 with bubl2000a/hotbubl). Six-bit game ids now:
-the `.mra` third switches byte, `Gunnail.sv`'s `game_sel`, the hw-sim
+the `.mra` third switches byte, `NMK16_Gunnail.sv`'s `game_sel`, the hw-sim
 top's `GAME_SEL`.
 
 ### What the mode muxes
@@ -2957,12 +2957,12 @@ top's `GAME_SEL`.
   sprites reuse powerinsc's `tile_lsb`, its active-high inputs are
   inverted in the read mux. MAME's ORIENTATION_FLIP_Y sets (grdnstrm,
   grdnstrmau, firehawk, spec2kh) draw upside down for their monitors:
-  Gunnail.sv reads the picture out bottom-up (`game_flip_y` mirrors
+  NMK16_Gunnail.sv reads the picture out bottom-up (`game_flip_y` mirrors
   rd_y) so they display upright, as MAME does.
 - **Sound**: the tharrier Z80 board block now has three memory maps.
   `afega_sound_map`: ROM 0-0xEFFF, RAM 0xF000-0xF7FF, the latch at
   0xF800, a **YM2151** at 0xF808/9 (jotego's jt51, vendored — deps.lock,
-  files_gunnail.qip; 4 MHz cen, cen_p1 = cen/2, a one-clock write
+  files_nmk16_gunnail.qip; 4 MHz cen, cen_p1 = cen/2, a one-clock write
   strobe since the chip samples wr_n every clock) and one OKIM6295 at
   0xF80A (4 MHz/4 = 1 MHz, pin 7 HIGH: every fourth 4 MHz pulse, `ss`
   set). The Z80's INT is the latch's data-pending flag OR the YM's IRQ
@@ -3031,7 +3031,7 @@ Hardware-path sims (`sim/rtl/gunnail_mg_hw`, the .mra's own stream):
 stagger1 158 of 160 drawn frames identical to the reference, firehawk
 ROM audit 10,997,661 words / 0 wrong, OKI audits clean.
 
-Board (Gunnail build 12: 26,862 ALMs / 64 %, +1.6 ns on clk_sys —
+Board (NMK16_Gunnail build 12: 26,862 ALMs / 64 %, +1.6 ns on clk_sys —
 build 9 without the address mask was the first to fit the YM2151 and
 the second BG pipeline together): the eleven configurations above load
 through their .mra, draw their attract sequences with the 8bpp
@@ -3043,7 +3043,7 @@ name (apostrophe). The sixteen ROM-only clones of those configurations
 (redhawks/sa/g/e/k/c, grdnstrmv/j/g/au, redfoxwp2/a, bubl2000a,
 hotbubl/a, spec2kh) were not loaded on the board.
 
-## Family E on the Gunnail rbf (2026-09-14): the Raiden-sound bootlegs, gunnailb, tomagic
+## Family E on the NMK16_Gunnail rbf (2026-09-14): the Raiden-sound bootlegs, gunnailb, tomagic
 
 Nine more sets as game ids 44-51 of `gunnail_core.sv`: mustangb and
 mustangb2 (44), acrobatmbl (45), hachamfb2 (46), tdragonb (47),
@@ -3056,7 +3056,7 @@ standalone Tier 5 cores under `rtl/mustangb`, `rtl/tdragonb`,
 for the port and stay as register references; `rtl/seibu/seibu_sound.sv`
 (the Seibu glue, ported from seibusound.cpp) is now instantiated by the
 shared core, and jotego's jtopl (YM3812) joins the vendored list
-(`files_gunnail.qip` SEARCH_PATH + jtopl2.v).
+(`files_nmk16_gunnail.qip` SEARCH_PATH + jtopl2.v).
 
 ### What the mode muxes
 
@@ -3105,7 +3105,7 @@ shared core, and jotego's jtopl (YM3812) joins the vendored list
   OKI x 3/2), tomagic YM 0.50 + OKI 0.50, gunnailb YM2203 + OKI 0.80
   (x 2.75).
 - **DIP switches**: acrobatmbl reads its DSW1 word with SW1 in the HIGH
-  byte ("changed from move.w to move.b") — Gunnail.sv places switch byte
+  byte ("changed from move.w to move.b") — NMK16_Gunnail.sv places switch byte
   0 there for id 45; mustangb has mustang's one 16-bit port; the rest
   are two byte ports as their parents.
 - **SDRAM layouts**: maincpu, Z80 (the NMK004 slot), fgtile, bgtile,
@@ -3180,7 +3180,7 @@ audits 0 unserved; their 4 s audio dumps reproduce the reference sims
 exactly (which is how tomagic's and gunnailb's faults were pinned to
 the core rather than the hardware path).
 
-Board (Gunnail build 15: 27,409 ALMs / 65 %, 53 % M10K, +0.15 ns on
+Board (NMK16_Gunnail build 15: 27,409 ALMs / 65 %, 53 % M10K, +0.15 ns on
 clk_sys; builds 13 and 14 were the two intermediate ones): all nine
 sets load through their .mra, draw title, story and demo play in
 native screenshots, and their 60 s attract audio against MAME
@@ -3200,11 +3200,11 @@ native screenshots, and their 60 s attract audio against MAME
 
 ## Splitting the Afega boards into their own rbf (2026-09-13)
 
-The 27 Afega sets (game ids 23-43) moved from `Gunnail.rbf` to their own
+The 27 Afega sets (game ids 23-43) moved from `NMK16_Gunnail.rbf` to their own
 `NMK16_Afega.rbf`. Both are the same `rtl/gunnail/gunnail_core.sv`; the
 two top levels differ only in the family parameters:
 
-    Gunnail.sv      INCLUDE_AFEGA(0), INCLUDE_NMK(1)   ids 0-22, 44-51
+    NMK16_Gunnail.sv      INCLUDE_AFEGA(0), INCLUDE_NMK(1)   ids 0-22, 44-51
     NMK16_Afega.sv  INCLUDE_AFEGA(1), INCLUDE_NMK(0)   ids 23-43
 
 The parameters gate `generate if` blocks around the family-specific chip
@@ -3226,8 +3226,8 @@ gating does work — measured below.
 
 | build | ALMs | worst setup slack |
 |---|---|---|
-| Gunnail, all 71 sets (before the split) | 27,554 (66%) | +0.393 ns |
-| Gunnail, 44 sets (`INCLUDE_AFEGA(0)`) | 26,554 (63%) | +0.585 ns |
+| NMK16_Gunnail, all 71 sets (before the split) | 27,554 (66%) | +0.393 ns |
+| NMK16_Gunnail, 44 sets (`INCLUDE_AFEGA(0)`) | 26,554 (63%) | +0.585 ns |
 | NMK16_Afega, 27 sets (`INCLUDE_NMK(0)`) | 18,494 (44%) | +0.534 ns |
 
 Both close timing with 0 violations. The Afega rbf keeps 56% of the
@@ -3235,8 +3235,8 @@ device free, which is the headroom the capacity work had been chasing.
 
 ### The SDC trap this exposed
 
-The first split build of `Gunnail` came back at **-9.563 ns** — a 10 ns
-miss on a 25 ns clock, not a marginal one. `Gunnail.sdc` gives both
+The first split build of `NMK16_Gunnail` came back at **-9.563 ns** — a 10 ns
+miss on a 25 ns clock, not a marginal one. `NMK16_Gunnail.sdc` gives both
 TLCS-90 cores a multicycle exception matched by exact hierarchy path:
 
     get_registers {*|gunnail_core:core|nmk004_core:nmk004|tlcs90:cpu|* ...}
@@ -3254,8 +3254,8 @@ into or out of a generate block.
 ### Verification
 
 `.mra` routing is generated: `tools/gen_gunnail_mra.py`'s `rbf_for_id()`
-emits `<rbf>NMK16_Afega</rbf>` for ids 23-43 and `<rbf>Gunnail</rbf>`
-for the rest — 44/27, with the 44 Gunnail files regenerating
+emits `<rbf>NMK16_Afega</rbf>` for ids 23-43 and `<rbf>NMK16_Gunnail</rbf>`
+for the rest — 44/27, with the 44 NMK16_Gunnail files regenerating
 byte-identically. MiSTer prefix-matches the `<rbf>` tag against the
 `Arcade-<Core>_YYYYMMDD.rbf` filename, so no other change was needed.
 
@@ -3358,7 +3358,7 @@ Adding those three meant two small pieces of plumbing worth knowing:
 `SEL_hachamfp`/`SEL_mustangs`/`SEL_bjtwinpa` are now in the Makefile,
 with `bjtwinpa` added to the EXT-suppression filter and to the PROT
 filter. Results, built `INCLUDE_AFEGA=0, INCLUDE_NMK=1` (the shipped
-Gunnail configuration):
+NMK16_Gunnail configuration):
 
 | set | id | result |
 |---|---|---|
@@ -3392,9 +3392,9 @@ the exit code. Frames 20-81 are identical regardless of total `CYCLES`
 (the sim is deterministic from reset and the count only decides when it
 stops), so 70M cycles is enough for this comparison window.
 
-## Restoring ssmissin onto Gunnail.rbf (2026-09-13)
+## Restoring ssmissin onto NMK16_Gunnail.rbf (2026-09-13)
 
-S.S. Mission was added back to `Gunnail.rbf` as game id 52, and the
+S.S. Mission was added back to `NMK16_Gunnail.rbf` as game id 52, and the
 defect that got it withdrawn is now **fixed and confirmed on hardware**
 (2026-09-14). The "hardware-only" diagnosis was a misdiagnosis: a board
 frame of a striped city scene proved byte-identical to the reference
@@ -3437,7 +3437,7 @@ What the port touches, as a checklist for the next board of this shape:
   `sel_z80_okibank_mem`), the OKI at 0x9800, the soundlatch read at
   0xA000, and **no FM chip at all**, so `z80_int_n` is the latch's own
   data-pending flag and the audio mix is the single OKI alone.
-- **`Gunnail.sv`** — id 52 into `game_vertical` (ROT270) and into
+- **`NMK16_Gunnail.sv`** — id 52 into `game_vertical` (ROT270) and into
   `game_mustang`, because ssmissin reads **one 16-bit DSW port** at
   0x0C0006 rather than two byte ports. Missing the second of these
   would have mis-mapped every DIP switch while looking fine at defaults.
@@ -3457,7 +3457,7 @@ it was assumed to be blind to NMK-20. On 2026-09-14 the board was shown
 to produce output byte-identical to that same reference sim on a striped
 scene, which is what disproved the hardware-only diagnosis. See NMK-20.
 
-## Many Block on the Gunnail rbf (2026-09-14) — the 256x240 screen and the scroll RAM
+## Many Block on the NMK16_Gunnail rbf (2026-09-14) — the 256x240 screen and the scroll RAM
 
 `manybloc` (game id 54) is the last NMK16 board in `nmk16.cpp` that has
 never been in this tree. It had been left out for one reason, recorded
@@ -3513,7 +3513,7 @@ Byte-lane arrays with a **single registered read port** and a
 `manybloc_scr_ready` comparator in the DTACK chain (the same shape as
 `g_txvram_hw`), with the two scroll words mirrored into ordinary
 registers on write so the video side never reads the array at all.
-Cost: the Gunnail fit went from 26,554 ALMs to **26,492** and 413/553
+Cost: the NMK16_Gunnail fit went from 26,554 ALMs to **26,492** and 413/553
 M10K, worst setup slack +0.577 ns — i.e. the whole game fits in the
 noise, against the +98K logic cells the async version cost.
 
@@ -3535,7 +3535,7 @@ input for it:
   `rd_x + bitmap_x0 - VIDEOSHIFT`, and MAME's `bitmap_x0` and
   `scrolldx`/`videoshift` are 92/92 for lowres and 0/0 here, so the
   difference cancels exactly. `SCREEN_H` became a parameter (224
-  default, 240 from `gunnail_core`) so the Macross2/Raphero rbfs do not
+  default, 240 from `gunnail_core`) so the NMK16_Macross2/Raphero rbfs do not
   pay the extra ~12 M10K of sprite plane for a mode they cannot enter.
 - `video_retime.sv` — the same window on both the write and read sides,
   and `vrel` measured from line 248, so the regenerated VSync sits 24
@@ -3558,7 +3558,7 @@ frame the +-8 search could reach, and a run of **4-7 px** differences
 during the demo — one column of a fireball that moves ~1 px per frame,
 with the two timelines one frame apart.
 
-Hardware: `Arcade-Gunnail_20260914.rbf` on the DE10-Nano outputs
+Hardware: `Arcade-NMK16_Gunnail_20260914.rbf` on the DE10-Nano outputs
 256x240, boots, plays its attract demo and sounds right. Native
 screenshots taken one second apart from the core load: **9 of 13 are
 byte-identical to a MAME frame**, the title screen among them; the other
@@ -3566,7 +3566,7 @@ four are in the moving demo, where the two runs' timelines diverge as
 they do for every game here. A separate 16-shot and a 40-shot burst
 added three more exact matches.
 
-## Task Force Harrier (Lettering bootleg) on the Gunnail rbf (2026-09-14)
+## Task Force Harrier (Lettering bootleg) on the NMK16_Gunnail rbf (2026-09-14)
 
 The last set in `nmk16.cpp` that needed a CPU core this project did not
 have. Its protection chip is a fully dumped MC68705R3, so it runs the real
@@ -3612,14 +3612,14 @@ demo past the end of the 520-frame reference window.
 ## Status
 
 Four RBFs run on the DE10-Nano and are tracked in `releases/`:
-`Macross2` (tdragon2, macross2, powerins and their clones — one
-runtime-selected core), `Raphero` (raphero, rapheroa, arcadian),
-`Gunnail` (gunnail, gunnailp and, since 2026-09-11, the nine lowres
+`NMK16_Macross2` (tdragon2, macross2, powerins and their clones — one
+runtime-selected core), `NMK16_Raphero` (raphero, rapheroa, arcadian),
+`NMK16_Gunnail` (gunnail, gunnailp and, since 2026-09-11, the nine lowres
 NMK004 boards with their clones, the Bombjack Twin and Task Force
 Harrier boards, since 2026-09-14 the Family E bootlegs, and ssmissin —
 45 sets on one runtime-selected core; note ssmissin ships with the
 open NMK-20 hardware defect) and, since 2026-09-13, `NMK16_Afega`
-(the 27 Afega-hardware sets, game ids 23-43, split out of `Gunnail`
+(the 27 Afega-hardware sets, game ids 23-43, split out of `NMK16_Gunnail`
 — see "Splitting the Afega boards into their own rbf" below). Each one boots through the `.mra` loader with its ROM image
 matching simulation, renders its attract demo without the smearing,
 tearing or missing-sprite problems the sections above walk through,
@@ -3648,6 +3648,6 @@ one-frame sprite latency (NMK-1) turned out on measurement to be an
 off-by-one in the old frame comparison; the core's sprite pipeline
 matches MAME's two-buffer PCB behaviour exactly, and the sole frame
 residual is a 14-px blinking HUD strip (NMK-16). The build margin
-that used to force Raphero seed retries (NMK-10) is gone: the palette
-and VRAM recoding took every core to about half the ALMs and Raphero/
-Macross2 from 94-95 % to 79-80 % M10K.
+that used to force NMK16_Raphero seed retries (NMK-10) is gone: the palette
+and VRAM recoding took every core to about half the ALMs and NMK16_Raphero/
+NMK16_Macross2 from 94-95 % to 79-80 % M10K.

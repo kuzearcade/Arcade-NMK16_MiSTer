@@ -77,7 +77,7 @@ matching prefix), and so is everything else the game's MCU program runs.
 The wrapper originally read its 4 KB ROM and 112 B RAM combinationally.
 Quartus cannot infer M10K from an asynchronous read, so both became flops:
 **17,782 ALMs for this module alone**, against 41,910 on the device with
-`Gunnail` already using 26,492. That is the real reason the set had never
+`NMK16_Gunnail` already using 26,492. That is the real reason the set had never
 shipped.
 
 jt6805 samples `din` on its own `cen` — the chip's 2.4576 MHz crystal, one

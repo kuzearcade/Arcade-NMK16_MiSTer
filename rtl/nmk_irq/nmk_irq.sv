@@ -48,8 +48,8 @@ module nmk_irq #(
 	input        reset,
 
 	// Multiple V-PROM tables (2026-09-11): a shared RBF that serves boards
-	// with different PROMs (Macross2.rbf: tdragon2/macross2 vs powerins;
-	// Gunnail.rbf: 633ab1c9 / 98ed1c97 / e6ead349 / de156d99) loads a
+	// with different PROMs (NMK16_Macross2.rbf: tdragon2/macross2 vs powerins;
+	// NMK16_Gunnail.rbf: 633ab1c9 / 98ed1c97 / e6ead349 / de156d99) loads a
 	// VTIMING_FILE of up to 4096 lines — table N in lines 256N..256N+255 —
 	// and selects with this input. A 256-line file (every single-game
 	// build and sim) leaves the other tables unused; tie 0.

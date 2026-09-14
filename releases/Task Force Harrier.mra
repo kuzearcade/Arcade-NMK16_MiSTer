@@ -1,5 +1,5 @@
 <!--
-  Task Force Harrier — NMK16 "Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 20).
+  Task Force Harrier — NMK16 "NMK16_Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 20).
   Parent set.
 
   Transcribed from mame/src/mame/nmk/nmk16.cpp: GAME(... tharrier ...)
@@ -17,7 +17,7 @@
   <year>1989</year>
   <manufacturer>UPL</manufacturer>
   <category>Shooter</category>
-  <rbf>Gunnail</rbf>
+  <rbf>NMK16_Gunnail</rbf>
 
   <!-- ROT270 in nmk16.cpp -->
   <rotation>1</rotation>

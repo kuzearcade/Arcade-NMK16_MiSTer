@@ -46,7 +46,7 @@ ioctl-rom:
 		--region 0xDC0000:93095-8.u46,93095-9.u47 \
 		--out roms/powerins_ioctl.bin
 
-# Two-table V-PROM file (see Macross2.sv): tdragon2's 10.bpr + powerins' 21.u71.
+# Two-table V-PROM file (see NMK16_Macross2.sv): tdragon2's 10.bpr + powerins' 21.u71.
 vtiming-rom:
 	python3 ../../../tools/mkgfxrom.py --zip ../../../mame_roms/tdragon2.zip --mode concat --files 10.bpr --out roms/t2_vtiming.hex
 	python3 ../../../tools/mkgfxrom.py --zip $(Z1) --mode concat --files 21.u71 --out roms/pi_vtiming.hex

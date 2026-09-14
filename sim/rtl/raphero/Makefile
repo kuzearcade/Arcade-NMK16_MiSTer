@@ -35,7 +35,7 @@ Z2 := $(ROMS_DIR)/arcadian.zip
 
 # Video is rtl/macross2/video_macross2.sv with RASTER_SCROLL=1 (per-line
 # scroll taps) and SPRITES_BYTES=0x600000 — the hardware-ready module,
-# so the reference sim and Raphero.rbf share one video path. The SDRAM/
+# so the reference sim and NMK16_Raphero.rbf share one video path. The SDRAM/
 # cache modules are listed so their (unelaborated at HW_ROMS=0) generate
 # branches resolve. tlcs90.sv/nmk004_periph.sv run on clk_sys with an
 # 8 MHz clock enable here (see raphero_core.sv's header).

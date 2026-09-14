@@ -104,7 +104,7 @@ module gunnail_core #(
 	parameter SPRITES_FILE      = "",
 	parameter AUDIOCPU_FILE     = "",  // tharrier's Z80 program (sim)
 	// HW_ROMS=0 (reference sim): $readmemh 0-latency arrays. HW_ROMS=1
-	// (Gunnail.sv and the gunnail_hw sim): every ROM through a cache over
+	// (NMK16_Gunnail.sv and the gunnail_hw sim): every ROM through a cache over
 	// rtl/sdram.sv, loaded via ioctl_download.
 	parameter HW_ROMS           = 0,
 	parameter DBG_MISS_PAINT    = 0,
@@ -137,7 +137,7 @@ module gunnail_core #(
 	// 23-43) and everything else use disjoint sound hardware, so each
 	// top-level builds only what its own games need and the other side's
 	// chips are left out of the netlist entirely:
-	//   Gunnail.sv     INCLUDE_AFEGA=0, INCLUDE_NMK=1  (ids 0-22, 44-51)
+	//   NMK16_Gunnail.sv     INCLUDE_AFEGA=0, INCLUDE_NMK=1  (ids 0-22, 44-51)
 	//   NMK16_Afega.sv INCLUDE_AFEGA=1, INCLUDE_NMK=0  (ids 23-43)
 	// These gate `generate if` blocks, NOT wire-level constants: Quartus
 	// does not prune a module instance just because an upstream wire is
@@ -154,7 +154,7 @@ module gunnail_core #(
 	input reset,          // async, active high
 
 	// Game select (2026-09-11) — see the game table below. Static for a
-	// session (from the .mra <switches> third byte in Gunnail.sv).
+	// session (from the .mra <switches> third byte in NMK16_Gunnail.sv).
 	input [5:0] game_sel,
 
 	// Hardware-mode-only ports (HW_ROMS=1) — see tdragon2_core.sv.
@@ -395,7 +395,7 @@ module gunnail_core #(
 	// dolmenk, puzlwrld). nmk16_state, not afega_state: twinactn_map is
 	// mustang_map with the NMK004 hookups replaced by ssmissin's Comad
 	// Z80+OKI board, so this is g_mustang's video on g_comad's sound --
-	// nothing Afega-hardware about it, and it belongs on Gunnail.rbf.
+	// nothing Afega-hardware about it, and it belongs on NMK16_Gunnail.rbf.
 	// 12 MHz 68000, set_hacky_interrupt_timing (no V-PROM), no FM chip.
 	// init_twinactn does NO rom decode (only OKI banking), and the map has
 	// no .mirror(), so neither ssmissin defect applies here.
@@ -3114,7 +3114,7 @@ module gunnail_core #(
 	// + NMK214 descramble, with the runtime layer configuration above.
 	// ------------------------------------------------------------------
 	video_macross2 #(
-		.SCREEN_H(INCLUDE_NMK ? 240 : 224),   // manybloc (id 54, Gunnail.rbf only) needs the 240-line plane
+		.SCREEN_H(INCLUDE_NMK ? 240 : 224),   // manybloc (id 54, NMK16_Gunnail.rbf only) needs the 240-line plane
 		.TX_EXTERNAL(1),
 		.FGTILE_FILE(FGTILE_FILE),
 		.BGTILE_FILE(BGTILE_FILE),

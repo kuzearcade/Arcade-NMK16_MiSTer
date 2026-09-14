@@ -1,5 +1,5 @@
 <!--
-  Thunder Dragon (4th Jun. 1991, protected) — NMK16 "Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 10).
+  Thunder Dragon (4th Jun. 1991, protected) — NMK16 "NMK16_Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 10).
   Clone of tdragon; files it shares with the parent are looked up in the parent zip.
 
   Transcribed from mame/src/mame/nmk/nmk16.cpp: GAME(... tdragon1 ...)
@@ -17,7 +17,7 @@
   <year>1991</year>
   <manufacturer>NMK (Tecmo license)</manufacturer>
   <category>Shooter</category>
-  <rbf>Gunnail</rbf>
+  <rbf>NMK16_Gunnail</rbf>
 
   <!-- ROT270 in nmk16.cpp -->
   <rotation>1</rotation>

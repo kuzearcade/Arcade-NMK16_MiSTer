@@ -20,7 +20,7 @@
 // Pixels are sampled CONTINUOUSLY during the main run loop, gated by
 // ce_pix_o/hblank_o/vblank_o, from rd_rgb driven by tdragon2_hw_top.sv's
 // own internally-computed rd_x/rd_y (tracking the core's live hcount_o/
-// vcount_o raster counters, exactly as Macross2.sv's own real hardware
+// vcount_o raster counters, exactly as NMK16_Macross2.sv's own real hardware
 // top does) — NOT a post-frame sweep setting rd_x/rd_y directly (an
 // earlier version of this testbench did that, matching the plain
 // HW_ROMS=0 sim testbenches' own long-established technique, but that

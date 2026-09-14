@@ -1,5 +1,5 @@
 <!--
-  Thunder Dragon (bootleg with Raiden sounds, encrypted) — NMK16 "Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 47).
+  Thunder Dragon (bootleg with Raiden sounds, encrypted) — NMK16 "NMK16_Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 47).
   Clone of tdragon; files it shares with the parent are looked up in the parent zip.
 
   Transcribed from mame/src/mame/nmk/nmk16.cpp: GAME(... tdragonb ...)
@@ -17,7 +17,7 @@
   <year>1991</year>
   <manufacturer>bootleg</manufacturer>
   <category>Shooter</category>
-  <rbf>Gunnail</rbf>
+  <rbf>NMK16_Gunnail</rbf>
 
   <!-- ROT270 in nmk16.cpp -->
   <rotation>1</rotation>

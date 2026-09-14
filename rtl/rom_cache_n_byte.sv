@@ -11,7 +11,7 @@
 // drawing of the current one; LINES >= 4 keeps both row halves and
 // their successors resident.
 // base_word (2026-09-11): the region's SDRAM word offset is a runtime
-// input, not a parameter — Macross2.rbf serves games whose .mra layouts
+// input, not a parameter — NMK16_Macross2.rbf serves games whose .mra layouts
 // differ (tdragon2/macross2 vs powerins), so the wrapper muxes it per
 // game. LAST_PAIR is the prefetch limit; the default is "no limit"
 // (a prefetch past a region's end fetches the next region's bytes into a

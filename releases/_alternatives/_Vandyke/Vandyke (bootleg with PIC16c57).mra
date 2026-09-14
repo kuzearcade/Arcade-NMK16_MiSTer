@@ -1,5 +1,5 @@
 <!--
-  Vandyke (bootleg with PIC16c57) — NMK16 "Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 21).
+  Vandyke (bootleg with PIC16c57) — NMK16 "NMK16_Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id 21).
   Clone of vandyke; files it shares with the parent are looked up in the parent zip.
 
   Transcribed from mame/src/mame/nmk/nmk16.cpp: GAME(... vandykeb ...)
@@ -17,7 +17,7 @@
   <year>1990</year>
   <manufacturer>bootleg</manufacturer>
   <category>Shooter</category>
-  <rbf>Gunnail</rbf>
+  <rbf>NMK16_Gunnail</rbf>
 
   <!-- ROT270 in nmk16.cpp -->
   <rotation>1</rotation>

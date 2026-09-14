@@ -5,8 +5,8 @@
 // radius of Makefiles/testbenches/Quartus sources for no functional gain).
 // Game selection is a genuine RUNTIME input (game_macross2 below), not a
 // synthesis-time parameter — see docs/hw-bringup.md: this is what lets one
-// Macross2.rbf boot either game, selected by a hidden status[] bit each
-// game's own .mra sets on load (see Macross2.sv's own header).
+// NMK16_Macross2.rbf boot either game, selected by a hidden status[] bit each
+// game's own .mra sets on load (see NMK16_Macross2.sv's own header).
 //
 // This merge exists because `tdragon2()` and `macross2()`'s own machine
 // configs (nmk16.cpp:5490-5533 / 5444-5488) are BYTE-FOR-BYTE IDENTICAL
@@ -342,12 +342,12 @@ module tdragon2_core #(
 	input  [15:0] dsw2_i,
 
 	// HW_ROMS=1 real hardware top only: hold por_rst's own countdown at
-	// 0 while this is asserted (Macross2.sv drives it with ~pll_locked
+	// 0 while this is asserted (NMK16_Macross2.sv drives it with ~pll_locked
 	// — see por_rst's own comment below for why). Every existing sim
 	// testbench leaves this floating; Verilator/Quartus both default an
 	// unconnected input to 0, which is "no extra hold" — por_rst's own
 	// countdown then behaves exactly as it did before this port existed,
-	// so this is a byte-for-byte no-op everywhere except Macross2.sv.
+	// so this is a byte-for-byte no-op everywhere except NMK16_Macross2.sv.
 	input extra_por_hold,
 
 	// DIAGNOSTIC ONLY — see rom_csum's own comment further down. Real
@@ -402,7 +402,7 @@ module tdragon2_core #(
 	output         dbg_bucket_touched_o,
 	// rom_fetch_bucket_touched_o (unlike the narrow mux above): this
 	// project's real hardware top itself, not a sim testbench, is the
-	// reader — Macross2.sv's own overlay display needs every bucket's
+	// reader — NMK16_Macross2.sv's own overlay display needs every bucket's
 	// live touched status at once (no C++/Verilator interop involved, so
 	// no need for the narrow-mux workaround here).
 	output [0:127] rom_fetch_bucket_touched_o,
@@ -529,7 +529,7 @@ module tdragon2_core #(
 	// complete before a real altpll has actually locked (lock time is
 	// typically tens of microseconds) — por_rst has no dependency on
 	// pll_locked at all otherwise, unlike the game-level `reset` input
-	// (which Macross2.sv does gate with ~pll_locked), so this countdown
+	// (which NMK16_Macross2.sv does gate with ~pll_locked), so this countdown
 	// could complete on a not-yet-stable/wrong-frequency clock right
 	// after FPGA configuration, latching sd0_inst/sd1_inst/oki_arb_inst
 	// into a corrupted internal state that never gets a second chance to
@@ -1607,7 +1607,7 @@ module tdragon2_core #(
 	endgenerate
 
 	// dbg_* taps are a testbench-only third read port (TB_DUMP_VRAM) —
-	// not wired to anything in the real hardware top (Macross2.sv), and
+	// not wired to anything in the real hardware top (NMK16_Macross2.sv), and
 	// a third port would complicate dual-port RAM inference for no
 	// benefit, so they're tied off at HW_ROMS=1 instead of adding real
 	// read logic for them.
@@ -2219,7 +2219,7 @@ module tdragon2_core #(
 		.VTIMING_FILE(VTIMING_FILE)
 	) irq_gen (
 		.clk_sys(clk_sys),
-		.table_sel({2'b0, game_powerins}), // V-PROM table 1 = powerins' 21.u71 (Macross2.sv loads a 512-line file)
+		.table_sel({2'b0, game_powerins}), // V-PROM table 1 = powerins' 21.u71 (NMK16_Macross2.sv loads a 512-line file)
 		.reset(reset),
 		.line_start(vt_line_start),
 		.vcount(vt_vcount),

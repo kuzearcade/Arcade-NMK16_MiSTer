@@ -6,7 +6,7 @@
 #
 # WARNING WARNING WARNING:
 # Do not add files to project in Quartus IDE! It will mess this file!
-# Add the files manually to files_raphero.qip instead.
+# Add the files manually to files_nmk16_raphero.qip instead.
 #
 # --------------------------------------------------------------------------
 
@@ -18,7 +18,7 @@ set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
 set_global_assignment -name LAST_QUARTUS_VERSION "17.0.0 Lite Edition"
 
 set_global_assignment -name GENERATE_RBF_FILE ON
-set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files_raphero
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files_nmk16_raphero
 set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
 set_global_assignment -name SAVE_DISK_SPACE OFF
 set_global_assignment -name SMART_RECOMPILE ON
@@ -53,7 +53,7 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
 
 source sys/sys.tcl
 source sys/sys_analog.tcl
-source files_raphero.qip
+source files_nmk16_raphero.qip
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
 
 set_global_assignment -name PRE_FLOW_SCRIPT_FILE "quartus_sh:sys/build_id.tcl"
@@ -212,7 +212,7 @@ set_global_assignment -name SEARCH_PATH rtl/third_party/jt6295/hdl
 set_global_assignment -name FAMILY "Cyclone V"
 set_global_assignment -name CDF_FILE jtag.cdf
 set_global_assignment -name QIP_FILE sys/sys.qip
-set_global_assignment -name SYSTEMVERILOG_FILE Raphero.sv
+set_global_assignment -name SYSTEMVERILOG_FILE NMK16_Raphero.sv
 set_global_assignment -name VERILOG_FILE rtl/pll.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/raphero/raphero_core.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/macross2/video_macross2.sv
@@ -233,7 +233,7 @@ set_global_assignment -name VERILOG_FILE rtl/third_party/jt6295/hdl/jt6295.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/third_party/fx68k/fx68k.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/third_party/fx68k/fx68kAlu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/third_party/fx68k/uaddrPla.sv
-set_global_assignment -name SDC_FILE Raphero.sdc
+set_global_assignment -name SDC_FILE NMK16_Raphero.sdc
 set_instance_assignment -name FAST_INPUT_REGISTER ON -to SDRAM_DQ[*]
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to HDMI_TX_CLK
 set_instance_assignment -name FAST_OUTPUT_REGISTER ON -to HDMI_TX_DE

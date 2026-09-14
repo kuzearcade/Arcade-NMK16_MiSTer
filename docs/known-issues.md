@@ -1,7 +1,7 @@
 # Known issues and areas for improvement — released cores
 
-Tracked list for the four RBFs shipped in `releases/` (`Macross2`,
-`Raphero`, `Gunnail`, `NMK16_Afega`). One entry per issue with a stable ID; update the
+Tracked list for the four RBFs shipped in `releases/` (`NMK16_Macross2`,
+`NMK16_Raphero`, `NMK16_Gunnail`, `NMK16_Afega`). One entry per issue with a stable ID; update the
 **Status** line in place rather than deleting entries, so the history
 stays readable. Details and evidence for each live in
 `docs/hw-bringup.md` (section named in **Ref**). Started 2026-09-10.
@@ -18,7 +18,7 @@ but not proven), `infra` (build/test/doc health).
 ## Cross-core
 
 ### NMK-1 · Sprites display one frame late
-- **Cores:** Macross2, Raphero, Gunnail · **Severity:** limitation · **Status:** not a bug (measured 2026-09-10 — the core matches MAME and the PCB exactly)
+- **Cores:** NMK16_Macross2, NMK16_Raphero, NMK16_Gunnail · **Severity:** limitation · **Status:** not a bug (measured 2026-09-10 — the core matches MAME and the PCB exactly)
 - **Ref:** "Lines through moving sprites, and flicker" (with its dated correction)
 - The premise was that MAME/the board show the DMA'd table on the
   *next* frame while the whole-plane renderer shows it a frame later.
@@ -61,7 +61,7 @@ but not proven), `infra` (build/test/doc health).
   as they are and the trims remain available for individual monitors.
 
 ### NMK-3 · Residual TLCS-90 register divergence vs MAME (NMI phase)
-- **Cores:** Gunnail, Raphero (shared `tlcs90.sv`) · **Severity:** gap · **Status:** closed — characterized as a benign boot-phase timer phase offset (2026-09-10)
+- **Cores:** NMK16_Gunnail, NMK16_Raphero (shared `tlcs90.sv`) · **Severity:** gap · **Status:** closed — characterized as a benign boot-phase timer phase offset (2026-09-10)
 - **Ref:** "Fifth pass: the residual is a 3-tick Timer-1 phase offset from boot"
 - The "port-toggle byte" is `$009C` in the NMK004 boot ROM's Timer-1
   handler — `ld a,($FF80); xor a,$08; ld (P4),a`, a heartbeat that
@@ -92,7 +92,7 @@ but not proven), `infra` (build/test/doc health).
   nothing GunNail's firmware executes.
 
 ### NMK-17 · Timer-1 "long-mode period" ~0.1% shorter than MAME's — not a timer difference
-- **Cores:** Gunnail, Raphero (NMK004 / bare TLCS-90) · **Severity:** gap · **Status:** closed — explained (2026-09-10)
+- **Cores:** NMK16_Gunnail, NMK16_Raphero (NMK004 / bare TLCS-90) · **Severity:** gap · **Status:** closed — explained (2026-09-10)
 - **Ref:** "Fifth pass…" (addendum); `nmk004_periph.sv` `+define+TIMER_TRACE`
 - Found while characterizing NMK-3: with partial intervals excluded,
   the free-running mode agrees to 0.01 cycles (40,319.99 vs 40,320.01 =
@@ -115,12 +115,12 @@ but not proven), `infra` (build/test/doc health).
   inaudible and already documented.
 
 ### NMK-4 · TLCS-90 standalone self-tests were silently not running
-- **Cores:** Gunnail, Raphero (+ every sim-only TLCS-90 game) · **Severity:** infra · **Status:** fixed (unreleased — harness only, no RBF change)
+- **Cores:** NMK16_Gunnail, NMK16_Raphero (+ every sim-only TLCS-90 game) · **Severity:** infra · **Status:** fixed (unreleased — harness only, no RBF change)
 - **Ref:** this file; `sim/rtl/tlcs90/`
 - All seven opcode self-tests (`banktest`, `blocktest`, `rldtest`,
   `muldivtest`, `ldarcallrtest`, `switest`, `extest`) and the base `run`
   target failed with every result reading `0x00`. Root cause: `tlcs90.sv`
-  gained a `cen` clock-enable input for Raphero's 14 MHz path; the
+  gained a `cen` clock-enable input for NMK16_Raphero's 14 MHz path; the
   NMK004/protection wrappers tie it high, but the eight raw-module
   testbenches never drove it, so Verilator left it 0 and the CPU never
   stepped. Fixed 2026-09-10 by setting `top.cen = 1` alongside reset in
@@ -129,7 +129,7 @@ but not proven), `infra` (build/test/doc health).
   bugs found via register tracing.
 
 ### NMK-5 · No regression test for the XCF-on-INC/DEC and SET/RES-on-register fixes
-- **Cores:** Gunnail, Raphero · **Severity:** infra · **Status:** fixed (unreleased until the Raphero/Gunnail RBF rebuild lands — see below)
+- **Cores:** NMK16_Gunnail, NMK16_Raphero · **Severity:** infra · **Status:** fixed (unreleased until the NMK16_Raphero/Gunnail RBF rebuild lands — see below)
 - **Ref:** "Fourth pass…"; `sim/rtl/tlcs90/gen_flagtest_rom.py`, `tb_flagtest.cpp`, `make run-flagtest` / `make run-selftests`
 - Added 2026-09-10: nine checks covering XCF recompute on 8-bit
   INC/DEC (set on zero, cleared on non-zero, CF preserved), INCX/DECX
@@ -148,7 +148,7 @@ but not proven), `infra` (build/test/doc health).
   execute `set/res b,g` with `g≠A`, so no audible/visible change is
   expected — the RBFs are rebuilt so `releases/` matches the RTL.
 
-## Gunnail
+## NMK16_Gunnail
 
 ### NMK-6 · Audio band correlation not re-measured since the sequencer fix
 - **Severity:** gap · **Status:** fixed (measured 2026-09-10)
@@ -156,7 +156,7 @@ but not proven), `infra` (build/test/doc health).
 - Last `tools/audio_compare.py` figure on hardware was 0.849 (90 s,
   +2.4 dB) *before* the TLCS-90 fixes; post-fix verification had been
   YM-write activity only. Re-measured on the board with the shipped
-  `Gunnail.rbf` (attract from boot, MAME `-wavwrite` 100 s vs board 110 s,
+  `NMK16_Gunnail.rbf` (attract from boot, MAME `-wavwrite` 100 s vs board 110 s,
   `--offset-search 20`): **0.919 mean band corr / 0.951 envelope over
   100 s, −1.1 dB**; **0.968 / 0.997 over the first 60 s, −1.3 dB** — the
   same range as Thunder Dragon 2 on hardware (0.987). The 100 s figure
@@ -167,7 +167,7 @@ but not proven), `infra` (build/test/doc health).
   2026-09-14**; the original "hardware-only" diagnosis was a
   misdiagnosis
 - **Ref:** `/home/vboxuser/archive_e6e7074/FINDINGS.md` (superseded on
-  this point), "Restoring ssmissin onto Gunnail.rbf" in
+  this point), "Restoring ssmissin onto NMK16_Gunnail.rbf" in
   `docs/hw-bringup.md`
 - S.S. Mission's highway/field scenes rendered with dense 1-pixel
   vertical striping. This was recorded as corruption appearing **only on
@@ -176,7 +176,7 @@ but not proven), `infra` (build/test/doc health).
   decode the port never implemented, which affected every path equally.
 
 **Confirmed fixed on the DE10-Nano (2026-09-14)** with the rebuilt
-`Arcade-Gunnail_20260913.rbf` (md5 `536a6426…`, 0 timing violations,
+`Arcade-NMK16_Gunnail_20260913.rbf` (md5 `536a6426…`, 0 timing violations,
 +0.640 ns, 26,560 ALMs), on the same attract city scene that produced
 the original report:
 
@@ -368,17 +368,17 @@ therefore never meant anything. Two specific traps:
 
 ### NMK-7 · Attract demo diverges from MAME after ~1 minute
 - **Severity:** limitation (verification only) · **Status:** wontfix
-- **Ref:** "GunNail (the "Gunnail" rbf)"
+- **Ref:** "GunNail (the "NMK16_Gunnail" rbf)"
 - RNG / non-cycle-exact timing; only static scenes are pixel-comparable
   on the board. Not a gameplay bug. Use `sim/rtl/video_state` (MAME RAM
   dump rendered through the video module) for pixel-exact checks of
   later scenes.
 
-## Macross2 (tdragon2 / macross2 / powerins)
+## NMK16_Macross2 (tdragon2 / macross2 / powerins)
 
 ### NMK-18 · powerins is drawn with an 8 MHz pixel clock, not the board's 7 MHz
-- **Cores:** Macross2 (powerins only) · **Severity:** limitation · **Status:** fixed (2026-09-11) — see "Video output at the board's pixel clock" in hw-bringup
-- **Ref:** "Power Instinct on the Macross2 rbf"
+- **Cores:** NMK16_Macross2 (powerins only) · **Severity:** limitation · **Status:** fixed (2026-09-11) — see "Video output at the board's pixel clock" in hw-bringup
+- **Ref:** "Power Instinct on the NMK16_Macross2 rbf"
 - The shared raster is 512 px at 8 MHz; the real board is 448 px at
   7 MHz (`set_screen_midres`). The line period is identical (64 us), so
   timing, interrupts and the frame rate were already exact, but the 320
@@ -398,7 +398,7 @@ therefore never meant anything. Two specific traps:
   games).
 
 ### NMK-19 · Power Instinct prototype sets have no .mra yet
-- **Cores:** Macross2 · **Severity:** gap · **Status:** fixed (2026-09-11)
+- **Cores:** NMK16_Macross2 · **Severity:** gap · **Status:** fixed (2026-09-11)
 - `powerinspu` / `powerinspj` use a different board layout in MAME —
   `ROM_LOAD16_BYTE` sprite pairs and split BG/OKI files. Both `.mra`
   files are now generated by `tools/gen_family_c_mra.py` (parent spec
@@ -413,7 +413,7 @@ therefore never meant anything. Two specific traps:
   different sound hardware (`powerinsa` has no Z80; `powerinsc` is not
   working in MAME either).
   **Update (2026-09-12/14):** `powerinsa` and `powerinsb` are no longer
-  out of scope — both were ported as Macross2 runtime clone modes and
+  out of scope — both were ported as NMK16_Macross2 runtime clone modes and
   ship (`powerinsa` really does have no Z80; its OKI is driven straight
   off the 68000). `powerinsc` does not: MAME cannot run it either
   (*"different sprites' format not implemented"*), and although the port
@@ -434,7 +434,7 @@ therefore never meant anything. Two specific traps:
   Button 3 is OR'd into Button 1 as a plain, non-autofire fire, exactly
   as on tdragon2. So the button a user is asked to define is the
   "hold-to-fire-normally" button when autofire is active, and only
-  unused when autofire is off. Documented as such in `Macross2.sv` and
+  unused when autofire is off. Documented as such in `NMK16_Macross2.sv` and
   the Autofire section rather than as a dead slot.
 
 ### NMK-9 · tdragon2 heavy-sprite slowdown: how much margin is left?
@@ -469,9 +469,9 @@ therefore never meant anything. Two specific traps:
   for future SDRAM changes; re-run the audit after any change to the
   ROM caches or port assignment.
 
-## Raphero
+## NMK16_Raphero
 
-### NMK-10 · Raphero build is at the edge of timing/utilization
+### NMK-10 · NMK16_Raphero build is at the edge of timing/utilization
 - **Severity:** infra · **Status:** fixed (2026-09-10) — see "Utilization: the palette and the duplicated VRAMs" in hw-bringup
 - **Ref:** "Rapid Hero / Arcadia", "OKI still…", "Flip screen option"
 - Was ~82% ALM / 94% M10K with `SEED` churning 7 → 19 → 23 → 43 and
@@ -492,9 +492,9 @@ therefore never meant anything. Two specific traps:
 
   | core | ALMs before → after | registers | M10K | setup slack |
   |---|---|---|---|---|
-  | Raphero | 34,179 (82 %) → 20,365 (49 %) | 46,135 → 28,694 | 520 (94 %) → 442 (80 %) | +0.296 → +0.533 ns |
-  | Macross2 | 29,548 (71 %) → 15,793 (38 %) | 39,114 → 21,504 | 517 (93 %) → 439 (79 %) | +0.135 → +0.320 ns |
-  | Gunnail | 27,023 (64 %) → 21,244 (51 %) | 36,924 → 25,485 | 407 (74 %) → 375 (68 %) | +0.403 → +0.535 ns |
+  | NMK16_Raphero | 34,179 (82 %) → 20,365 (49 %) | 46,135 → 28,694 | 520 (94 %) → 442 (80 %) | +0.296 → +0.533 ns |
+  | NMK16_Macross2 | 29,548 (71 %) → 15,793 (38 %) | 39,114 → 21,504 | 517 (93 %) → 439 (79 %) | +0.135 → +0.320 ns |
+  | NMK16_Gunnail | 27,023 (64 %) → 21,244 (51 %) | 36,924 → 25,485 | 407 (74 %) → 375 (68 %) | +0.403 → +0.535 ns |
 
 - Verified: the three hardware sims are frame-identical (422/422) and
   instruction-count-identical before and after each step; the three
@@ -518,7 +518,7 @@ therefore never meant anything. Two specific traps:
 - Vert 270 / Vert 90 / Flip screen were each verified by HDMI capture,
   but "Save settings → reload core → option still set" had only been
   checked for the original single-choice Orientation on tdragon2.
-- Verified now on tdragon2 (Macross2.rbf), gunnail and raphero, both
+- Verified now on tdragon2 (NMK16_Macross2.rbf), gunnail and raphero, both
   directions: set Orientation Vert 90 / Flip screen On / H Shift +14 /
   V Shift +20 → OSD > System > Save settings (cursor confirmed on
   "Save settings", not "Reset settings", before each Enter) → reload
@@ -543,7 +543,7 @@ therefore never meant anything. Two specific traps:
   section.
 
 ### NMK-15 · raphero_hw sim: one OKI0 sample byte unserved at latch
-- **Cores:** Raphero, Macross2 (both have NMK112) · **Severity:** gap (sim-observed residual) · **Status:** fixed (2026-09-10; all three RBFs rebuilt, deployed and board-checked)
+- **Cores:** NMK16_Raphero, NMK16_Macross2 (both have NMK112) · **Severity:** gap (sim-observed residual) · **Status:** fixed (2026-09-10; all three RBFs rebuilt, deployed and board-checked)
 - **Ref:** "NMK-15: the one OKI byte the fetch-hazard fix left" in hw-bringup; `rtl/nmk112/nmk112.sv` `hold`
 - Symptom: `raphero_hw`'s golden-byte audit reported `oki0 727249
   latches / 1 wrong`, also "unserved at latch" — i.e. the chip latched
@@ -562,7 +562,7 @@ therefore never meant anything. Two specific traps:
   combinationally inside that window. The chip's own address pipeline
   can't do this (its updates are cen-aligned, ten clocks apart); only
   clk-asynchronous CPU writes can, and only NMK112 bank writes are
-  (jt6295's phrase-start address load is cen4-aligned). Gunnail has no
+  (jt6295's phrase-start address load is cen4-aligned). NMK16_Gunnail has no
   NMK112 — hence its permanent 0/0.
 - Fix: `nmk112.sv` gains a `hold` input; each core drives it with "a
   gated OKI cen is passing this clock" and a write arriving then is
@@ -579,7 +579,7 @@ therefore never meant anything. Two specific traps:
   cache's timing, which is why the diagnostic was needed).
 
 ### NMK-16 · tdragon2 HUD text column differs from MAME on alternating frames (~130 px)
-- **Cores:** Macross2 (tdragon2 measured) · **Severity:** limitation (0.15% of the frame) · **Status:** closed — boot-phase software timing, not the video path (2026-09-10)
+- **Cores:** NMK16_Macross2 (tdragon2 measured) · **Severity:** limitation (0.15% of the frame) · **Status:** closed — boot-phase software timing, not the video path (2026-09-10)
 - **Ref:** "NMK-16: the HUD marquee is two frames out of phase with gameplay"
 - With the sim and MAME frame-aligned on gameplay (sim *S* = MAME
   *S-3*), 2 of every 4 frames differ by 126-141 px in one 14-px strip
