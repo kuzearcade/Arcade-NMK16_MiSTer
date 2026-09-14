@@ -107,6 +107,7 @@ SEL_gunnailb := 50
 SEL_tomagic  := 51
 # Comad Family F (2026-09-13): hex from `tools/gen_gunnail_mra.py --simroms ssmissin ../ssmissin/roms`
 SEL_ssmissin := 52
+SEL_airattck := 52
 SEL := $(SEL_$(GAME))
 # ROM hex directory: sim/rtl/<game>/roms, except bjtwin and cactus (sim/rtl/bjtwin/roms)
 ifneq ($(filter $(GAME),bjtwin cactus),)
@@ -119,11 +120,11 @@ endif
 ifeq ($(GAME),hachamfb)
 EXT := ../tlcs90/roms/hachamf_ext.hex
 endif
-ifneq ($(filter $(GAME),bjtwin bjtwinp bjtwinpa sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3 ssmissin $(AFEGA_SETS) $(FAME_SETS)),)
+ifneq ($(filter $(GAME),bjtwin bjtwinp bjtwinpa sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3 ssmissin airattck $(AFEGA_SETS) $(FAME_SETS)),)
 EXT :=
 endif
 AUDIOCPU :=
-ifneq ($(filter $(GAME),tharrier mustangb3 ssmissin $(AFEGA_SETS) $(FAME_SETS)),)
+ifneq ($(filter $(GAME),tharrier mustangb3 ssmissin airattck $(AFEGA_SETS) $(FAME_SETS)),)
 AUDIOCPU := $(R)_audiocpu.hex
 endif
 OKI2 := $(R)_oki2.hex

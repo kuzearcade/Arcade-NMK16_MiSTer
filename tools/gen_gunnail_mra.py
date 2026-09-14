@@ -602,6 +602,26 @@ SSMISSIN = dict(
         ("bgtile, 0x100000 (2 files)", [("ssm17.147", "c9c28455"), ("ssm18.148", "ebfdaad6")]),
         ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("ssm19.33", "b1943657"), ("ssm20.34", "a0c16c4d"))]),
         ("oki1, 0x0A0000 (fixed 0x20000 = ssm13.190, banked = ssm12.189's own 4 quarters)", [("ssm13.190", "618f66f0"), ("ssm12.189", "e8219c83")])])
+# Air Attack: ssmissin's board and game id 52 (same map, same
+# decode_ssmissin, same V-PROM). Its own INPUT_PORTS (SW2:6/5/4 are three
+# separate Unused switches where ssmissin has a Coin B field) and its own
+# ROMs. Unlike ssmissin it writes the TX layer EXCLUSIVELY through
+# ssmissin_map's .mirror(0x1800) -- see NMK-20.
+AIRATTCK_DIPS = [
+    ('0', "Flip Screen", "On,Off"), ('1', "Unused (SW1:7)", "On,Off"),
+    ('2,3', "Difficulty", "Hardest,Hard,Easy,Normal"), ('4', "Unused (SW1:4)", "On,Off"), ('5', "Unused (SW1:3)", "On,Off"),
+    ('6,7', "Lives", "1,2,4,3"), ('8', "Unused (SW2:8)", "On,Off"), ('9', "Demo Sounds", "Off,On"),
+    ('10', "Unused (SW2:6)", "On,Off"), ('11', "Unused (SW2:5)", "On,Off"), ('12', "Unused (SW2:4)", "On,Off"),
+    ('13,15', "Coinage", "4C_1C,2C_3C,2C_1C,1C_2C,3C_1C,1C_3C,3C_2C,1C_1C")]
+AIRATTCK = dict(
+    id=52, year=1996, manufacturer="Comad", rot=True, switches="FF,FF", dips=AIRATTCK_DIPS,
+    regions=[
+        ("maincpu, 0x040000", [pair(("ue10.bin", "71deb9d8"), ("uc10.bin", "1837d4ba"))]),
+        ("Z80 sound program, 0x008000", [("3.su6", "3e352370")]),
+        ("fgtile, 0x020000", [("4.ul10", "e9362ab4")]),
+        ("bgtile, 0x100000 (2 files)", [("9.uw9", "86e59966"), ("10.ux9", "122c8d04")]),
+        ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("7.uo81", "3c38d671"), ("8.uo82", "9a83e3d8"))]),
+        ("oki1, 0x0A0000 (fixed 0x20000 = 2.su12, banked = 1.su13's own 4 quarters)", [("2.su12", "93ab615b"), ("1.su13", "09a836bb")])])
 
 # ---------------------------------------------------------------------------
 # Afega boards (Family H, 2026-09-13): gunnail_core.sv ids 23-43, one per
@@ -925,6 +945,7 @@ SETS = [
     ("gunnailb",    "GunNail (bootleg)",                                           10798, GUNNAILB, "gunnail", {}),
     ("tomagic",     "Tom Tom Magic",                                               10778, TOMAGIC, None, {}),
     ("ssmissin",    "S.S. Mission",                                                10801, SSMISSIN, None, {}),
+    ("airattck",    "Air Attack (set 1)",                                          10803, AIRATTCK, None, {}),
 ]
 
 

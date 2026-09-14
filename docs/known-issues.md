@@ -252,9 +252,23 @@ archive's "477/477 pixel-exact" claim — missed them.
 
 Neither fix moves ssmissin's reference-sim score (54/62 before and
 after), as expected: frames 20-81 exercise neither path. They were found
-by reading the driver source, and defect 1 is now **confirmed on
-hardware** (table above). Defect 2 remains **unverified in play** — it is
-inert for ssmissin by measurement, and needs airattck's sim ROMs to test.
+by reading the driver source. Defect 1 is **confirmed on hardware**
+(table above); defect 2 is **confirmed in simulation on airattck**:
+
+| airattck vs MAME, frames 20-81 | pixel-exact |
+|---|---|
+| **with** the TX mirror fix | **55/62** |
+| without it (control, same build) | 10/62 |
+
+  The 7 remaining misses are 6 boot-lag black frames (`sim nonblack 0`)
+  and one transition frame — the usual shape. Visually the unfixed build
+  draws a column of garbage blocks down the right edge of the AIR ATTACK
+  title, which is precisely the "vertical streaks" airattck was recorded
+  as suffering; the fixed build is pixel-identical to MAME there. So the
+  prediction made from reading `.mirror(0x1800)` — that ssmissin is inert
+  but airattck loses its whole TX layer — is borne out, and **airattck is
+  now a shipping candidate** (sim ROMs extracted, generator entry added;
+  it still needs a `.mra` and a hardware test).
 Note the same-scene `video_state` harness still disagrees with MAME for
 unrelated, unresolved reasons (see below), so it played no part in
 validating either fix.
