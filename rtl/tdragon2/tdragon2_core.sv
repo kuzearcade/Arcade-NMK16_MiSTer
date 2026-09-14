@@ -129,6 +129,11 @@ module tdragon2_core #(
 	// through rom_cache1/sdram_arb over the real rtl/sdram.sv controller,
 	// loaded via ioctl_download rather than $readmemh.
 	parameter HW_ROMS        = 0,
+	// SIM_DSW=1 lets a HW_ROMS=0 reference sim drive dsw1_i/dsw2_i instead of
+	// reading the hardcoded 0xFFFF below. Without it the sim cannot exercise
+	// anything the DIPs select -- screen flip among them (gunnail_core has the
+	// same parameter for the same reason).
+	parameter SIM_DSW        = 0,
 	// DIAGNOSTIC passthrough to video_macross2.sv — see its own comment.
 	parameter DBG_MISS_PAINT = 0,
 	// DIAGNOSTIC: paint four 8x8 live status blocks in the top-left corner
@@ -2189,8 +2194,8 @@ module tdragon2_core #(
 		else if (sel_pia_oki) rdata = {8'h00, oki0_chip_dout};
 		else if (sel_in0)     rdata = HW_ROMS ? in0_i  : 16'hFFFF;
 		else if (sel_in1)     rdata = HW_ROMS ? in1_i  : 16'hFFFF;
-		else if (sel_dsw1)    rdata = HW_ROMS ? dsw1_i : 16'hFFFF;
-		else if (sel_dsw2)    rdata = HW_ROMS ? dsw2_i : 16'hFFFF;
+		else if (sel_dsw1)    rdata = (HW_ROMS || (SIM_DSW != 0)) ? dsw1_i : 16'hFFFF;
+		else if (sel_dsw2)    rdata = (HW_ROMS || (SIM_DSW != 0)) ? dsw2_i : 16'hFFFF;
 		else                  rdata = 16'hFFFF; // unmapped
 	end
 	assign iEdb = rdata;
@@ -2247,6 +2252,34 @@ module tdragon2_core #(
 	// (see this file's own header).
 	// ------------------------------------------------------------------
 	wire [23:0] rd_rgb_video;   // video's pixel; rd_rgb below may overlay DBG_SND_PAINT blocks
+
+	// ------------------------------------------------------------------
+	// Screen flip (2026-09-15). The games read their Flip Screen DIP and
+	// write bit 0 of the flipscreen register (nmk16_v.cpp flipscreen_w ->
+	// flip_screen_set + m_spritegen->set_flip_screen); the register was
+	// being latched here and then ignored, so the DIP did nothing on any
+	// core. MAME flips the tilemaps and mirrors the sprite coordinates
+	// internally, but for a full-screen window the net result is exactly a
+	// 180-degree rotation of the visible area -- measured, not assumed:
+	// tdragon2 frame 600 with the DIP on is bit-identical to rot180 of the
+	// same frame with it off (0 of 86,016 pixels differ; a vertical-only
+	// mirror differs by 57,822 and a horizontal-only by 21,854). So the
+	// readback coordinates are mirrored here, which reproduces MAME by
+	// construction and leaves the tilemap/sprite/prefetch pipeline alone.
+	//
+	// Blanking-safe: rd_x/rd_y arrive with the active-window origin already
+	// subtracted, so off-screen positions are >= the visible size (the
+	// truncated subtraction underflows) and video_macross2's rd_in_range
+	// reads them as "not visible". The mirror below underflows in the same
+	// modular way -- for every mode here, W-1-rd_x on an out-of-range rd_x
+	// wraps back into [W, 2^n-1] -- so out-of-range stays out of range.
+	// ------------------------------------------------------------------
+	wire       flip_screen = flip_screen_reg[0];
+	wire [8:0] flip_w_m1   = game_powerins ? 9'd319 : 9'd383;   // screen_w_vis - 1
+	wire [7:0] flip_h_m1   = 8'd223;
+	wire [8:0] rd_x_flip = flip_screen ? (flip_w_m1 - rd_x) : rd_x;
+	wire [7:0] rd_y_flip = flip_screen ? (flip_h_m1 - rd_y) : rd_y;
+
 	video_macross2 #(
 		.TX_EXTERNAL(1),
 		.FGTILE_FILE(FGTILE_FILE),
@@ -2274,7 +2307,7 @@ module tdragon2_core #(
 		.nmk214_cfg_we(1'b0), .nmk214_cfg_data(8'h00),
 		.bg_bank(bgbank_reg),
 		.tilerambank(tilerambank_reg),
-		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb_video),
+		.rd_x(rd_x_flip), .rd_y(rd_y_flip), .rd_rgb(rd_rgb_video),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),
 		.sd_dout(sd2_dout), .sd_dout_pair(sd2_dout_pair), .sd_req(sd2_req), .sd_ack(sd2_ack),
 		.sd_b_addr(sd1_addr), .sd_b_req(sd1_req), .sd_b_dout(sd1_dout), .sd_b_dout_pair(sd1_dout_pair), .sd_b_ack(sd1_ack),

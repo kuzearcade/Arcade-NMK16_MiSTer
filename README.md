@@ -132,7 +132,11 @@ verification results.
    name the exact zips and the checksums they were generated from. ROMs
    are not included in this repository.
 3. DIP switches are exposed in the OSD. Player inputs follow MAME's
-   default key layout. Vertical games have an orientation option.
+   default key layout. Vertical games have an orientation option. A
+   game's own Flip Screen DIP works too, and is separate from the OSD's
+   Flip screen option: the DIP is the PCB's own cocktail-cabinet
+   setting that the game program acts on, the OSD one rotates the
+   finished picture in the framework's scaler.
 
 ## Building
 

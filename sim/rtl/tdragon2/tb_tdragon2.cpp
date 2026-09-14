@@ -41,6 +41,11 @@ int main(int argc, char **argv) {
 	NmkTraceWriter trace("tdragon2_video.trace", "tdragon2", 10000000, "", "program", 0, 0xffffff, ":screen");
 	Crc32 crc;
 
+	// The .mra <switches> bytes, as the board would deliver them (the core is
+	// built with SIM_DSW=1). tdragon2's Flip Screen is DSW1 bit 2, 1 = Off:
+	// TB_DSW1=F3 turns it on.
+	top.dsw1_i = 0xFF00 | (std::getenv("TB_DSW1") ? strtoul(std::getenv("TB_DSW1"), nullptr, 16) : 0xFF);
+	top.dsw2_i = 0xFF00 | (std::getenv("TB_DSW2") ? strtoul(std::getenv("TB_DSW2"), nullptr, 16) : 0xFF);
 	top.reset = 1;
 
 	uint64_t clk_sys_ticks = 0;
@@ -209,7 +214,8 @@ int main(int argc, char **argv) {
 
 			if (std::getenv("TB_DUMP_PPM") != nullptr) {
 				char fname[64];
-				std::snprintf(fname, sizeof(fname), "tdragon2_frame_%02u.ppm", frame_count);
+				std::snprintf(fname, sizeof(fname), "%stdragon2_frame_%02u.ppm",
+				              std::getenv("TB_PREFIX") ? std::getenv("TB_PREFIX") : "", frame_count);
 				FILE *ppm = std::fopen(fname, "wb");
 				std::fprintf(ppm, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
 				for (int y = 0; y < SCREEN_H; y++) {

@@ -148,6 +148,48 @@ but not proven), `infra` (build/test/doc health).
   execute `set/res b,g` with `g≠A`, so no audible/visible change is
   expected — the RBFs are rebuilt so `releases/` matches the RTL.
 
+### NMK-21 · Flip Screen DIP did nothing on any core
+- **Cores:** all four · **Severity:** bug · **Status:** fixed (2026-09-15)
+- The games read their Flip Screen DIP and write bit 0 of the flipscreen
+  register (`nmk16_v.cpp`'s `flipscreen_w` -> `flip_screen_set` +
+  `m_spritegen->set_flip_screen`). Every core decoded that write and latched
+  it into `flip_screen_reg` — and **nothing ever read that register**.
+  `video_macross2.sv` had no screen-flip input at all (`spr_flip_en` is the
+  unrelated per-sprite attribute flip). So the DIP was wired correctly all
+  the way to the 68000 and then dropped on the floor.
+- Confirmed the chain is intact up to that point by tapping MAME's 68000
+  writes: tdragon2 writes `0x100014 = 0000` with the DIP off and `0001` with
+  it on (566 times over 600 frames — re-asserted per frame); gunnail writes
+  `0x080014` once at boot, `0000` vs `0001`.
+- **What flip actually is, measured rather than assumed:** MAME flips the
+  tilemaps and mirrors the sprite coordinates internally, but for a
+  full-screen window the net result is exactly a 180-degree rotation of the
+  visible area. tdragon2 frame 600 with the DIP on is bit-identical to
+  rot180 of the same frame with it off — 0 of 86,016 pixels differ, where a
+  vertical-only mirror differs by 57,822 and a horizontal-only by 21,854.
+  gunnail agrees on 229 of 260 frames, the other 31 being the boot frames
+  *before* its single register write lands.
+- Fixed by mirroring the readback coordinates in each core
+  (`rd_x_flip`/`rd_y_flip` feeding `video_macross2`), which reproduces MAME
+  by construction and leaves the tilemap/sprite/prefetch pipeline untouched.
+  The mirror is blanking-safe: off-screen positions arrive >= the visible
+  size and the modular subtraction keeps them there. `vandyke`/`vandykeb`
+  take the inverted sense (`vandyke_flipscreen_w` calls `flipscreen_w(~data)`).
+- Verified in simulation against MAME for both DIP settings:
+
+  | | RTL flip == rot180(no flip) | vs MAME, flip off | vs MAME, flip on |
+  |---|---|---|---|
+  | tdragon2 | 211/211 frames | 194/211 pixel-exact | 194/211, same frames |
+  | gunnail | 85/85 frames | 69/85 pixel-exact | 69/85, same frames |
+
+  In both games every non-exact frame is a blank boot-lag frame (`sim
+  nonblack 0`), and the statistics are *identical* with the DIP on and off —
+  turning flip on costs nothing in fidelity.
+- `tdragon2_core.sv` gained a `SIM_DSW` parameter (as `gunnail_core.sv`
+  already had) so a HW_ROMS=0 reference sim can drive the DIPs at all;
+  without it `sel_dsw1` reads a hardcoded 0xFFFF and no DIP-selected
+  behaviour can be exercised.
+
 ## NMK16_Gunnail
 
 ### NMK-6 · Audio band correlation not re-measured since the sequencer fix

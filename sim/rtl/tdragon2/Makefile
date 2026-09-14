@@ -72,6 +72,7 @@ $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_tdragon2.cpp $(FX68K_DIR)/fx68k.sv \
 	roms/tdragon2_vtiming.hex roms/tdragon2_fgtile.hex roms/tdragon2_bgtile.hex roms/tdragon2_sprites.hex
 	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT --top-module $(TOP) $(EXTRA_VFLAGS) \
 		-y $(FX68K_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl \
+		-GSIM_DSW=1 \
 		-GROM_FILE=\"roms/tdragon2_maincpu.hex\" \
 		-GAUDIOCPU_FILE=\"roms/tdragon2_audiocpu.hex\" \
 		-GOKI1_ROM_FILE=\"roms/tdragon2_oki1.hex\" \

@@ -3113,6 +3113,34 @@ module gunnail_core #(
 	// Video — video_macross2.sv, gfx_macross parameters + per-line scroll
 	// + NMK214 descramble, with the runtime layer configuration above.
 	// ------------------------------------------------------------------
+
+	// ------------------------------------------------------------------
+	// Screen flip (2026-09-15). The games read their Flip Screen DIP and
+	// write bit 0 of the flipscreen register (nmk16_v.cpp flipscreen_w ->
+	// flip_screen_set + m_spritegen->set_flip_screen); the register was
+	// being latched here and then ignored, so the DIP did nothing on any
+	// core. MAME flips the tilemaps and mirrors the sprite coordinates
+	// internally, but for a full-screen window the net result is exactly a
+	// 180-degree rotation of the visible area -- measured, not assumed:
+	// tdragon2 frame 600 with the DIP on is bit-identical to rot180 of the
+	// same frame with it off (0 of 86,016 pixels differ; a vertical-only
+	// mirror differs by 57,822 and a horizontal-only by 21,854). So the
+	// readback coordinates are mirrored here, which reproduces MAME by
+	// construction and leaves the tilemap/sprite/prefetch pipeline alone.
+	//
+	// Blanking-safe: rd_x/rd_y arrive with the active-window origin already
+	// subtracted, so off-screen positions are >= the visible size (the
+	// truncated subtraction underflows) and video_macross2's rd_in_range
+	// reads them as "not visible". The mirror below underflows in the same
+	// modular way -- for every mode here, W-1-rd_x on an out-of-range rd_x
+	// wraps back into [W, 2^n-1] -- so out-of-range stays out of range.
+	// ------------------------------------------------------------------
+	wire       flip_screen = (g_vandyke | g_vandykeb) ? ~flip_screen_reg[0] : flip_screen_reg[0];
+	wire [8:0] flip_w_m1   = lowres ? 9'd255 : 9'd383;      // screen_w_vis - 1
+	wire [7:0] flip_h_m1   = g_manybloc ? 8'd239 : 8'd223;  // screen_h_vis - 1
+	wire [8:0] rd_x_flip = flip_screen ? (flip_w_m1 - rd_x) : rd_x;
+	wire [7:0] rd_y_flip = flip_screen ? (flip_h_m1 - rd_y) : rd_y;
+
 	video_macross2 #(
 		.SCREEN_H(INCLUDE_NMK ? 240 : 224),   // manybloc (id 54, NMK16_Gunnail.rbf only) needs the 240-line plane
 		.TX_EXTERNAL(1),
@@ -3158,7 +3186,7 @@ module gunnail_core #(
 		.gfx_swap34(g_gfx_swap34), .spr_bitrev(g_tomagic),
 		.base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE_A), .base_word_sprites(BASE_WORD_SPRITES),
 		.tilerambank(2'd0),
-		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),
+		.rd_x(rd_x_flip), .rd_y(rd_y_flip), .rd_rgb(rd_rgb),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),
 		.sd_dout(sd2_dout), .sd_dout_pair(sd2_dout_pair), .sd_req(sd2_req), .sd_ack(sd2_ack),
 		.sd_b_addr(sd1_addr), .sd_b_req(sd1_req), .sd_b_dout(sd1_dout), .sd_b_dout_pair(sd1_dout_pair), .sd_b_ack(sd1_ack),
