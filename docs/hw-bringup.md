@@ -3260,7 +3260,7 @@ one game per gated module:
 | mustang | `nmk004_core` + `jt03` | clean |
 | tomagic | `seibu_sound` + `jtopl2` | clean |
 
-### Reference-sim campaign (40 sets)
+### Reference-sim campaign, part 1 (40 sets)
 
 Each set was then rebuilt in `sim/rtl/gunnail_mg` with **the family
 parameters of the rbf that ships it** (`EXTRA_VFLAGS=-GINCLUDE_AFEGA=..
@@ -3287,6 +3287,45 @@ on a retry at lower concurrency. Also note `roms/gunnail_multi_vtiming.hex`
 must match `nmk_irq.sv`'s array size: a 2304-line (9-table) file against
 the 2048-entry array aborts every Verilator run with "$readmem file
 address beyond bounds of array", where Quartus only warns.
+
+### Reference-sim campaign, part 2 (the remaining 14 sets)
+
+The 17 sets skipped above were skipped only for want of extracted sim
+ROMs. Sixteen were then extracted (`cactus` turned out not to be missing
+at all — it lives in `sim/rtl/bjtwin/roms/`, so it was 16, not 17), MAME
+references were generated for them, and the same comparison was run.
+`redhawkc` does not exist in the MAME 0.285 build used here — it is only
+in the newer source checkout — but it costs no coverage, since it is
+game id 23 and that id was already 62/62 via `stagger1`.
+
+All 14 are Afega sets, so all ran with `INCLUDE_AFEGA=1, INCLUDE_NMK=0`:
+
+| result | sets |
+|---|---|
+| 62/62 pixel-exact | bubl2000a, grdnstrmau, grdnstrmg, grdnstrmj, grdnstrmv, hotbubl, hotbubla, redfoxwp2a, redhawke, redhawkg, redhawkk, redhawksa |
+| 61/62 | spec2kh (id 42) |
+| 23/62 | redfoxwp2 (id 35) |
+
+Both partials were re-run on the **unsplit** core as controls and scored
+identically — spec2kh 61/62, redfoxwp2 23/62 — so both are pre-existing
+differences against MAME, not split regressions. Combined with part 1,
+**zero regressions are attributable to the split**, and simulation
+coverage now reaches **48 of the 57 game ids** (up from 38). The nine
+still unverified in simulation are id 0 (`gunnail` itself, which the
+board table above covers directly) and eight with no sim ROMs.
+
+**The trap that cost the most time here: `-norotate` suppresses
+`ORIENTATION_FLIP_Y`, not just rotation.** `machine.video:snapshot()`
+honours the driver's orientation, so ROT270 sets come out 224x256 where
+the core emits 256x224; `-norotate` fixes that. But four Afega sets
+(grdnstrm, grdnstrmau, firehawk, spec2k/spec2kh) are `ORIENTATION_FLIP_Y`
+as well, and `-norotate` drops the flip too — so their references come
+out upside down relative to the core and score 0/62. grdnstrmau scored
+0/62 until an orientation search reported "0 px differing, MAME frame 40,
+orientation 'vflip'" — a perfect match, upside down. Vertically flipping
+the references for those sets took grdnstrmau to 62/62 and spec2kh to
+61/62. If a set reads 0/62 with a plausible-looking picture, test the
+flip before hunting for an RTL bug.
 
 ## Status
 
