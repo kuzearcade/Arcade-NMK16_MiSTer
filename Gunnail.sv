@@ -302,7 +302,9 @@ end
 // mustang and tharrier read ONE 16-bit DSW port at 0x080004 (SW2 in the
 // low byte, SW1 in the high byte), so their second switch byte rides in
 // dsw1's high half; every other board reads two byte-wide ports.
-wire        game_mustang = (game_sel == 6'd3) | (game_sel == 6'd12) | (game_sel == 6'd20) | (game_sel == 6'd22) | ((game_sel >= 6'd23) & (game_sel <= 6'd44)) | (game_sel == 6'd52); // mustang, mustangs, tharrier, mustangb3, every Afega board and mustangb: one 16-bit DSW port; ssmissin reads one too (0x0C0006)
+wire        game_mustang = (game_sel == 6'd3) | (game_sel == 6'd12) | (game_sel == 6'd20) | (game_sel == 6'd22) | ((game_sel >= 6'd23) & (game_sel <= 6'd44)) | (game_sel == 6'd52) | (game_sel == 6'd53) | (game_sel == 6'd56); // mustang, mustangs, tharrier, mustangb3, every Afega board and mustangb: one 16-bit DSW port; ssmissin reads one too (0x0C0006), and the twinactn family reads mustang's own at 0x080004
+// NB: the reference sim cannot catch a miss here -- it drives TB_DSW1/TB_DSW2
+// all-FF, so both halves read 0xFF whether or not the game is in this list.
 // acrobatmbl reads its DSW1 word with SW1 in the HIGH byte ("changed from move.w to move.b"), DSW2 as acrobatm
 wire        game_dsw1_hi = (game_sel == 6'd45);
 wire [15:0] dsw1_i = game_dsw1_hi ? {dip_sw[0], 8'hFF} : {game_mustang ? dip_sw[1] : 8'hFF, dip_sw[0]};

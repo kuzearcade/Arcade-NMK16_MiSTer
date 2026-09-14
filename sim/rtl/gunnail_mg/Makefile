@@ -109,6 +109,11 @@ SEL_tomagic  := 51
 SEL_ssmissin := 52
 SEL_airattck := 52
 SEL_airattcka := 52
+# Afega-published Mustang hacks (2026-09-14): ids 53/56, Gunnail.rbf
+SEL_dolmen   := 53
+SEL_puzlwrld := 53
+SEL_twinactn := 56
+SEL_dolmenk  := 56
 SEL := $(SEL_$(GAME))
 # ROM hex directory: sim/rtl/<game>/roms, except bjtwin and cactus (sim/rtl/bjtwin/roms)
 ifneq ($(filter $(GAME),bjtwin cactus),)
@@ -121,11 +126,11 @@ endif
 ifeq ($(GAME),hachamfb)
 EXT := ../tlcs90/roms/hachamf_ext.hex
 endif
-ifneq ($(filter $(GAME),bjtwin bjtwinp bjtwinpa sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3 ssmissin airattck airattcka $(AFEGA_SETS) $(FAME_SETS)),)
+ifneq ($(filter $(GAME),bjtwin bjtwinp bjtwinpa sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3 ssmissin airattck airattcka twinactn dolmen dolmenk puzlwrld $(AFEGA_SETS) $(FAME_SETS)),)
 EXT :=
 endif
 AUDIOCPU :=
-ifneq ($(filter $(GAME),tharrier mustangb3 ssmissin airattck airattcka $(AFEGA_SETS) $(FAME_SETS)),)
+ifneq ($(filter $(GAME),tharrier mustangb3 ssmissin airattck airattcka twinactn dolmen dolmenk puzlwrld $(AFEGA_SETS) $(FAME_SETS)),)
 AUDIOCPU := $(R)_audiocpu.hex
 endif
 OKI2 := $(R)_oki2.hex

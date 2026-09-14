@@ -389,8 +389,23 @@ module gunnail_core #(
 	// vertical striping. Long recorded as hardware-only corruption; that
 	// was disproven 2026-09-14 (the board is byte-identical to the
 	// SDRAM-free reference sim there). See docs/known-issues.md.
-	localparam [5:0] G_SSMISSIN = 6'd52,   // ssmissin: ssmissin_map, 8 MHz
-	                 G_LAST = 6'd52;
+	localparam [5:0] G_SSMISSIN = 6'd52,   // ssmissin, airattck, airattcka: ssmissin_map, 8 MHz
+	// 2026-09-14: the Afega-PUBLISHED hacks of Mustang (twinactn, dolmen,
+	// dolmenk, puzlwrld). nmk16_state, not afega_state: twinactn_map is
+	// mustang_map with the NMK004 hookups replaced by ssmissin's Comad
+	// Z80+OKI board, so this is g_mustang's video on g_comad's sound --
+	// nothing Afega-hardware about it, and it belongs on Gunnail.rbf.
+	// 12 MHz 68000, set_hacky_interrupt_timing (no V-PROM), no FM chip.
+	// init_twinactn does NO rom decode (only OKI banking), and the map has
+	// no .mirror(), so neither ssmissin defect applies here.
+	// ids 54/55 stay reserved for manybloc/tharrierb.
+	                 G_TWINACTN = 6'd53,   // dolmen, puzlwrld
+	                 G_TWINACTN_A = 6'd56, // twinactn and dolmenk: their own ROMs boot-test IN1 bits
+	                                       // 0x0080/0x8000, which their INPUT_PORTS declare
+	                                       // IP_ACTIVE_HIGH (so: read as 0) where dolmen/puzlwrld
+	                                       // declare them IP_ACTIVE_LOW (read as 1). One shared id
+	                                       // for both -- that is the ONLY core-visible difference.
+	                 G_LAST = 6'd56;
 	wire g_gunnail  = (game_sel == G_GUNNAIL) || (game_sel > G_LAST); // unknown ids fall back to gunnail
 	wire g_macross  = (game_sel == G_MACROSS);
 	wire g_blkheart = (game_sel == G_BLKHEART);
@@ -412,11 +427,13 @@ module gunnail_core #(
 	wire g_gunnailb = (game_sel == G_GUNNAILB);
 	wire g_tomagic  = (game_sel == G_TOMAGIC);
 	wire g_ssmissin = (game_sel == G_SSMISSIN);
-	wire g_comad    = g_ssmissin;                 // the Comad-shape Z80+OKI board (ssmissin_sound_map): ROM 0-7FFF, RAM 8000-87FF, OKI bank at 0x9000 (memory write), OKI r/w 0x9800, soundlatch read 0xA000, no FM — latch pending drives the Z80's IRQ0 directly
+	wire g_twinactn_a = (game_sel == G_TWINACTN_A);         // twinactn/dolmenk: the IN1 boot-test override
+	wire g_twinactn = (game_sel == G_TWINACTN) | g_twinactn_a;
+	wire g_comad    = g_ssmissin | g_twinactn;                 // the Comad-shape Z80+OKI board (ssmissin_sound_map): ROM 0-7FFF, RAM 8000-87FF, OKI bank at 0x9000 (memory write), OKI r/w 0x9800, soundlatch read 0xA000, no FM — latch pending drives the Z80's IRQ0 directly
 	wire g_seibu    = g_mustangb | g_acrobatmbl | g_hachamfb2 | g_tdragonb | g_strahljbl; // the Seibu Sound System board (seibu_sound_map)
 	wire g_m2snd    = g_gunnailb | g_tomagic;                                            // macross2-style banked Z80 (gunnailb_sound_map / tomagic_sound_map)
 	wire g_opl      = g_seibu | g_tomagic;                                               // YM3812 (jtopl2)
-	wire g_mustang  = (game_sel == G_MUSTANG) || (game_sel == G_MUSTANGS) || g_mustangb3 || g_mustangb; // mustang's map, scroll register and video for all
+	wire g_mustang  = (game_sel == G_MUSTANG) || (game_sel == G_MUSTANGS) || g_mustangb3 || g_mustangb || g_twinactn; // mustang's map, scroll register and video for all (twinactn_map is mustang_map minus the NMK004 hookups)
 	wire g_bioship  = (game_sel == G_BIOSHIP);
 	wire g_vandyke  = (game_sel == G_VANDYKE);
 	wire g_acrobatm = (game_sel == G_ACROBATM) || g_acrobatmbl;
@@ -455,14 +472,14 @@ module gunnail_core #(
 
 	wire lowres          = ~(g_gunnail | g_bjtwin | g_m2snd);            // set_screen_lowres (gunnail, gunnailb, tomagic and bjtwin are hires)
 	wire cpu_8mhz        = g_blkheart | g_mustang | (g_tdragon & ~g_tdragonb) | g_tdragon1 | g_acrobatmbl | g_hachamfb2 | g_ssmissin; // mustangb3: XTAL(8 MHz) verified on PCB; acrobatmbl/hachamfb2 8_MHz_XTAL; tdragonb 10 MHz; ssmissin 8 MHz
-	wire cpu_12mhz       = g_strahl | g_afega | g_tomagic;               // strahl "12 MHz ?"; afega XTAL(12 MHz) verified; tomagic "12? MHz"
+	wire cpu_12mhz       = g_strahl | g_afega | g_tomagic | g_twinactn;               // strahl "12 MHz ?"; afega XTAL(12 MHz) verified; tomagic "12? MHz"
 	wire has_prot        = g_gunnail | g_macross | (g_hachamf & ~g_hachamfp & ~g_hachamfb2) | g_tdragon1 | g_bjtwin_prot; // NMK-215 / NMK-113 / NMK-110 (hachamfp/hachamfb/hachamfb2: none)
 	wire has_214         = g_gunnail | g_macross | g_bjtwin_prot | g_cactus | g_gunnailb; // base_nmk214_215: bgtile + sprites scrambled (cactus/gunnailb: same data, config injected below)
 	wire prot_rom_16k    = g_hachamf | g_tdragon1;                       // TMP91640 (NMK-110/113): 16 KB firmware
 	wire nmi_invert      = g_bioship;                                    // nmk004_bioship_x0016_w
 	wire mainram_strange = g_macross | g_blkheart | g_mustang | g_bioship | g_vandyke | g_tharrier | g_vandykeb | g_afega; // macross_map/mustang_map/bioship_map/vandyke_map/tharrier_map/afega_map mainram_strange_w
 	wire bg2             = g_bioship | g_strahl | g_afega_8bpp;          // screen_update_strahl: two BG layers; afega 8bpp: layer B = the high nibble
-	wire irq_hacky       = g_strahl | g_cactus | g_vandykeb | g_mustangb3 | g_afega | g_seibu | g_m2snd; // set_hacky_interrupt_timing (no V-PROM)
+	wire irq_hacky       = g_strahl | g_cactus | g_vandykeb | g_mustangb3 | g_afega | g_seibu | g_m2snd | g_twinactn; // twinactn: set_hacky_interrupt_timing // set_hacky_interrupt_timing (no V-PROM)
 	wire spr_plain       = g_bioship | g_strahl | g_acrobatm | (g_afega & ~g_afega_spr_pair); // sprite ROMs are plain ROM_LOAD byte files (the rest: WORD_SWAP / odd-first byte pairs), see video_macross2 spr_swap
 	wire [3:0] vprom_sel = (g_blkheart | g_bioship | g_vandyke) ? 4'd1 : // 98ed1c97
 	                       (g_tdragon | g_tdragon1)             ? 4'd2 : // e6ead349
@@ -504,7 +521,7 @@ module gunnail_core #(
 		case (game_sel)
 			G_MACROSS:  begin cfg_bga_mask = 14'h3FFF; end                                  // bgtile 0x200000
 			G_BLKHEART, G_SSMISSIN: begin cfg_spr_units = 18'd8192; end                   // ssmissin: sprites 0x100000, bgtile 0x100000 (default mask)
-			G_MUSTANG, G_MUSTANGB3, G_MUSTANGB: begin cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd8192; end // bgtile 0x80000
+			G_MUSTANG, G_MUSTANGB3, G_MUSTANGB, G_TWINACTN, G_TWINACTN_A: begin cfg_bga_mask = 14'h0FFF; cfg_spr_units = 18'd8192; end // twinactn family: bgtile 0x80000, sprites 0x100000 (puzlwrld's smaller ROMs are padded to the family slots by the .mra) // bgtile 0x80000
 			G_TOMAGIC:  begin cfg_bga_mask = 14'h0FFF; end                                  // bgtile 0x80000, sprites 0x200000
 			G_ACROBATMBL, G_STRAHLJBL, G_TDRAGONB, G_TDRAGONB3, G_HACHAMFB2: begin // the parents' gfx_macross/gfx_strahl configurations
 			            if (game_sel == G_ACROBATMBL) cfg_spr_units = 18'd12288;
@@ -1020,6 +1037,9 @@ module gunnail_core #(
 			end
 			G_SSMISSIN: begin // maincpu 0x40000, z80 0x8000, fg 0x20000, bg 0x100000, spr 0x100000, oki 0xA0000 (fixed+4 banks, canonical order)
 				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h048000; BASE_BYTE_BGTILE = 24'h068000; BASE_BYTE_SPRITES = 24'h168000; BASE_BYTE_OKI1 = 24'h268000; BASE_BYTE_OKI2 = 24'h308000;
+			end
+			G_TWINACTN, G_TWINACTN_A: begin // maincpu 0x40000, z80 0x10000 (dolmenk's own is the largest; the rest are padded), fg 0x20000, bg 0x80000, spr 0x100000, oki 0xA0000
+				BASE_BYTE_NMK004_EXT = 24'h040000; BASE_BYTE_FGTILE = 24'h050000; BASE_BYTE_BGTILE = 24'h070000; BASE_BYTE_SPRITES = 24'h0F0000; BASE_BYTE_OKI1 = 24'h1F0000; BASE_BYTE_OKI2 = 24'h290000;
 			end
 			default: begin // gunnail
 				BASE_BYTE_NMK004_EXT = 24'h080000; BASE_BYTE_PROT = 24'h092000; BASE_BYTE_FGTILE = 24'h094000;
@@ -2799,13 +2819,18 @@ module gunnail_core #(
 		else if (sel_bgvram)  rdata = bgvram_dout;
 		else if (sel_bgvram2) rdata = bgvram2_dout;
 		else if (sel_txvram)  rdata = txvram_dout;
-		else if (sel_nmk004_r) rdata = g_vandykeb ? 16'h0000 : {8'h00, nmk004_to_host_latch}; // vandykeb_r: 0; tharrier: soundlatch2
+		else if (sel_nmk004_r) rdata = (g_vandykeb | g_comad) ? 16'h0000 : {8'h00, nmk004_to_host_latch}; // vandykeb_r: 0; tharrier: soundlatch2; comad boards have no NMK004 there -- twinactn_map noprw()s 0x08000E-F and ssmissin_map leaves it out entirely, both reading 0 in MAME
 		else if (sel_oki0)    rdata = {8'h00, oki1_chip_dout};
 		else if (sel_oki1)    rdata = {8'h00, oki2_chip_dout};
 		else if (sel_mb3_prot) rdata = mb3_prot_val;
 		else if (sel_aunk)    rdata = 16'h0100; // afega_unknown_r
 		else if (sel_in0)     rdata = g_tharrier ? th_in0 : g_redhawkb ? ~in0_eff : (in0_eff & ~{9'd0, g_vandykeb, 6'd0}); // redhawkb: every input active high; vandykeb: IN0 bit 6 is IP_ACTIVE_HIGH "tested on boot" — reading it 1 drops the game into its service-mode test loop (WRAM check / tile / grid screens)
-		else if (sel_in1)     rdata = g_tharrier ? (LDSn ? {th_mcu_val, 8'h00} : th_in1) : g_redhawkb ? ~in1_eff : (HW_ROMS ? in1_i : 16'hFFFF); // tharrier: upper-byte-only reads = the MCU
+		else if (sel_in1)     rdata = g_tharrier ? (LDSn ? {th_mcu_val, 8'h00} : th_in1) : g_redhawkb ? ~in1_eff :
+		                             // twinactn/dolmenk boot-test IN1 bits 0x0080/0x8000, which their own
+		                             // INPUT_PORTS declare IP_ACTIVE_HIGH (unpressed = 0) where
+		                             // dolmen/puzlwrld declare them IP_ACTIVE_LOW (unpressed = 1).
+		                             g_twinactn_a ? ((HW_ROMS ? in1_i : 16'hFFFF) & ~16'h8080) :
+		                             (HW_ROMS ? in1_i : 16'hFFFF); // tharrier: upper-byte-only reads = the MCU
 		else if (sel_in2)     rdata = th_in2;
 		else if (sel_dsw1)    rdata = (HW_ROMS || (SIM_DSW != 0)) ? dsw1_i : 16'hFFFF;
 		else if (sel_dsw2)    rdata = (HW_ROMS || (SIM_DSW != 0)) ? dsw2_i : 16'hFFFF;
@@ -2817,7 +2842,7 @@ module gunnail_core #(
 		// unmapped space at PC 0x5F0C56 forever -- a black screen from frame
 		// ~50 on. Matched to MAME for this map only, to keep the blast radius
 		// off every other game on the rbf.
-		else                  rdata = g_ssmissin ? 16'h0000 : 16'hFFFF; // unmapped (incl. the write-only scroll registers)
+		else                  rdata = g_comad ? 16'h0000 : 16'hFFFF; // unmapped (incl. the write-only scroll registers)
 	end
 	assign iEdb = rdata;
 

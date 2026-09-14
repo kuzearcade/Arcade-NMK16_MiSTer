@@ -635,6 +635,62 @@ AIRATTCKA = dict(
         ("bgtile, 0x100000 (2 files)", [("9.uw9", "86e59966"), ("10.ux9", "122c8d04")]),
         ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("7.uo81", "3c38d671"), ("8.uo82", "9a83e3d8"))]),
         ("oki1, 0x0A0000 (fixed 0x20000 = 2.su12, banked = 1.su13's own 4 quarters)", [("2.su12", "93ab615b"), ("1.su13", "09a836bb")])])
+# ---------------------------------------------------------------------------
+# Afega-published hacks of Mustang (2026-09-14): nmk16_state, not afega_state.
+# twinactn_map is mustang_map with the NMK004 replaced by ssmissin's Comad
+# Z80+OKI board, so these are gunnail_core ids 53/56 on Gunnail.rbf, NOT the
+# Afega rbf. init_twinactn does no ROM decode; the map has no .mirror().
+# The family shares one set of SDRAM slots, so puzlwrld's smaller bgtile and
+# sprite ROMs are padded up to them.
+# ---------------------------------------------------------------------------
+OKI_TWIN_NOTE = ("oki1, 0x0A0000 -- init_twinactn banks from the region BASE (not +0x80000 as "
+                 "ssmissin does), so the canonical [fixed][bank0..3] slots are: su12, su12, the "
+                 "region's own 0x20000-0x3FFFF GAP (MAME leaves it unfilled = zeros; su13 sits "
+                 "at 0x40000), then su13's two halves.")
+TWINACTN_DIPS = [
+    ('0', "Unknown (SW2:8)", "On,Off"), ('1', "Demo Sounds", "Off,On"), ('2,4', "Coin B", COIN8_FREE), ('5,7', "Coin A", COIN8_FREE),
+    ('8', "Flip Screen", "On,Off"), ('9', "Unknown (SW1:7)", "On,Off"), ('10,11', "Difficulty", "Easy,Normal,Hard,Hardest"),
+    ('12', "Unknown (SW1:4)", "On,Off"), ('13', "Unknown (SW1:3)", "On,Off"), ('14,15', "Lives", "2,3,4,5")]
+DOLMEN_DIPS = [
+    ('0', "Unknown (SW1:8)", "On,Off"), ('1', "Unknown (SW1:7)", "On,Off"), ('2,3', "Difficulty", "Easy,Normal,Hard,Hardest"),
+    ('4', "Unknown (SW1:4)", "On,Off"), ('5', "Unknown (SW1:3)", "On,Off"), ('6,7', "Free Credit", "1500k,1000k,800k,500k"),
+    ('8', "Unknown (SW2:8)", "On,Off"), ('9', "Demo Sounds", "Off,On"), ('10,12', "Coin B", COIN8_FREE), ('13,15', "Coin A", COIN8_FREE)]
+TWINACTN = dict(
+    id=56, year=1995, manufacturer="Afega", rot=False, switches="FF,FF", dips=TWINACTN_DIPS,
+    regions=[
+        ("maincpu, 0x040000", [pair(("afega.uj13", "9187701d"), ("afega.uj12", "fe8cff9c"))]),
+        ("Z80 sound program, 0x008000 (padded to the family's 0x010000 slot)", [("afega.su6", "3a52dc88"), ("fill", 0x8000)]),
+        ("fgtile, 0x020000", [("afega.uj11", "3f439e92")]),
+        ("bgtile, 0x080000", [("afega.ui20", "237c8f92")]),
+        ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("afega.ub11", "287f20d8"), ("afega.ub13", "f525f819"))]),
+        (OKI_TWIN_NOTE, [("afega.su12", "91d665f3"), ("afega.su12", "91d665f3"), ("fill", 0x20000), ("afega.su13", "30e1c306")])])
+DOLMEN = dict(
+    id=53, year=1995, manufacturer="Afega", rot=False, switches="FF,FF", dips=DOLMEN_DIPS,
+    regions=[
+        ("maincpu, 0x040000", [pair(("afega8.uj3", "f1b73e4c"), ("afega7.uj2", "c91bda0b"))]),
+        ("Z80 sound program, 0x008000 (padded to the family's 0x010000 slot)", [("afega1.su6", "166b53cb"), ("fill", 0x8000)]),
+        ("fgtile, 0x020000", [("afega6.uj11", "13fa4415")]),
+        ("bgtile, 0x080000", [("afega9.ui20", "b3fa7be6")]),
+        ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("afega4.ub11", "5a259393"), ("afega5.ub13", "7f6a683d"))]),
+        (OKI_TWIN_NOTE, [("afega2.su12", "1a2ce1c2"), ("afega2.su12", "1a2ce1c2"), ("fill", 0x20000), ("afega3.su13", "d3531018")])])
+DOLMENK = dict(
+    id=56, year=1995, manufacturer="Afega", rot=False, switches="FF,FF", dips=DOLMEN_DIPS,
+    regions=[
+        ("maincpu, 0x040000", [pair(("afega_6.uj3", "834cc396"), ("afega_5.uj2", "38491cad"))]),
+        ("Z80 sound program, 0x010000 (1st and 2nd half identical)", [("afega_1.su6", "3d52d5f4")]),
+        ("fgtile, 0x020000", [("afega_4.uj11", "13fa4415")]),
+        ("bgtile, 0x080000", [("afega_9.ui20", "b3fa7be6")]),
+        ("sprites, 0x100000 (ROM_LOAD16_BYTE pair)", [pair(("afega_7.ub11", "f32554d4"), ("afega_8.ub13", "65f85cfe"))]),
+        (OKI_TWIN_NOTE, [("afega_2.su12", "1a2ce1c2"), ("afega_2.su12", "1a2ce1c2"), ("fill", 0x20000), ("afega_3.su13", "d3531018")])])
+PUZLWRLD = dict(
+    id=53, year=1996, manufacturer="Afega", rot=False, switches="FF,FF", dips=DOLMEN_DIPS,
+    regions=[
+        ("maincpu, 0x040000", [pair(("afega8.uj3", "be64d452"), ("afega7.uj2", "d812eca4"))]),
+        ("Z80 sound program, 0x008000 (padded to the family's 0x010000 slot)", [("afega1.su6", "17e11c06"), ("fill", 0x8000)]),
+        ("fgtile, 0x020000", [("afega6.uj11", "8db1a7c1")]),
+        ("bgtile, 0x040000 (padded to the family's 0x080000 slot)", [("afega9.ui20", "7edd3c4e"), ("fill", 0x40000)]),
+        ("sprites, 0x080000 (pair, padded to the family's 0x100000 slot)", [pair(("afega4.ub11", "ba1d2fde"), ("afega5.ub13", "223da2b4")), ("fill", 0x80000)]),
+        (OKI_TWIN_NOTE, [("afega2.su12", "667c208a"), ("afega2.su12", "667c208a"), ("fill", 0x20000), ("afega3.su13", "1f042b9c")])])
 
 # ---------------------------------------------------------------------------
 # Afega boards (Family H, 2026-09-13): gunnail_core.sv ids 23-43, one per
@@ -960,6 +1016,10 @@ SETS = [
     ("ssmissin",    "S.S. Mission",                                                10801, SSMISSIN, None, {}),
     ("airattck",    "Air Attack (set 1)",                                          10803, AIRATTCK, None, {}),
     ("airattcka",   "Air Attack (set 2)",                                          10804, AIRATTCKA, "airattck", {}),
+    ("twinactn",    "Twin Action",                                                 10807, TWINACTN, None, {}),
+    ("dolmen",      "Dolmen",                                                      10809, DOLMEN, None, {}),
+    ("dolmenk",     "Goindol (Afega)",                                             10810, DOLMENK, "dolmen", {}),
+    ("puzlwrld",    "Puzzle World",                                                10813, PUZLWRLD, None, {}),
 ]
 
 
