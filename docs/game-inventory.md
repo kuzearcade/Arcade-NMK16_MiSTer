@@ -161,17 +161,36 @@ Screen resolution class (low/mid/hi) is at the **family** level per prior resear
 | Family | Count |
 |---|---|
 | A | 3 |
-| B | 17 |
-| C | 20 |
+| B | 16 |
+| C | 18 |
 | D | 12 |
 | E | 12 |
 | F | 3 |
-| G | 4 |
-| H | 27 |
+| G | 5 |
+| H | 28 |
 | I | 4 |
-| **Total** | **102*** |
+| **Total** | **101** |
 
-\* Sums to 102 against the true total of 101 — `puzlwrld`'s parent field points to `dolmen` rather than `twinactn` in the source (likely a MAME data quirk, not a hardware difference) but it's counted once under family I; recheck this arithmetic against `/tmp/nmkwork/games.txt`-style raw grep during Tier 0 RTL work — not a blocker for this inventory.
+Reconciled against the tables above on 2026-09-14. The counts had been
+hand-written and never re-derived, so four were wrong (B 17, C 20, G 4,
+H 27) and the total came to 102 against a true 101. The old footnote blamed
+`puzlwrld`'s parent field pointing at `dolmen` rather than `twinactn`; that
+is a real MAME data quirk but it is **not** what caused the discrepancy — a
+parent field cannot add a set. Two of the four were staleness (the `manybloc`
+row was later reclassified from family B to family G, which is B−1/G+1 and
+was never reflected here) and two were plain miscounts.
+
+**The row data itself was and is complete**: the per-family tables list all
+101 setnames, each exactly once, with no entry that is absent from
+`nmk16.cpp`. Verified by extracting the first column of every table row and
+diffing it against the driver's own `GAME(` lines.
+
+When re-checking, make the parser assert its own completeness against
+`grep -c "^GAME(" nmk16.cpp` before trusting it. A regex of
+`^GAMEL?\(\s*(\d{4})\s*,` looks exhaustive and is not: `macrossbl` is
+dated `199?`, so a four-digit-year pattern drops it silently and reports 100.
+That happened on 2026-09-14 and briefly cost `macrossbl` its place in the
+README's list of unshipped sets.
 
 ## Revised `.rbf` build estimate
 
