@@ -1,3 +1,16 @@
+// NMK16 MiSTerFPGA project — real hardware top-level for the
+// "NMK16_Afega" RBF: the 27 Afega-hardware sets (Stagger I / Red Hawk,
+// Guardian Storm / Hong Hu Zhanji II, Bubble 2000 / Hot Bubble, Pop's
+// Pop's, Mang-Chi, Spectrum 2000, Fire Hawk), game ids 23-43 of
+// rtl/gunnail/gunnail_core.sv. Split out of Gunnail.rbf on 2026-09-13:
+// identical framework wiring, but gunnail_core is built with
+// INCLUDE_AFEGA(1)/INCLUDE_NMK(0), so the NMK004/protection TLCS-90
+// cores, the YM2203 and the Seibu/YM3812 sound board are elaborated
+// away and only the Afega games' own hardware is in the netlist.
+// Gunnail.rbf is the mirror image (INCLUDE_AFEGA(0)) and keeps ids
+// 0-22 and 44-51. See docs/hw-bringup.md.
+//
+// (original Gunnail.sv header follows)
 // NMK16 MiSTerFPGA project — real hardware top-level for the "Gunnail"
 // RBF: GunNail (gunnail, gunnailp — nmk16.cpp gunnail_prot()) and, since
 // 2026-09-11, the nine lowres NMK004 boards (macross, blkheart, mustang,
@@ -50,7 +63,7 @@ assign VIDEO_ARY = (!ar) ? (video_rotated ? 12'd4 : 12'd3) : 12'd0;
 
 `include "build_id.v"
 localparam CONF_STR = {
-	"Gunnail;;",
+	"NMK16_Afega;;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	// A vertical (MAME ROT270) game drawn on its side by the board; the
@@ -385,11 +398,7 @@ wire [7:0] rd_y_screen = game_flip_y ? (8'd223 - rd_y_raw) : rd_y_raw; // out-of
 // 91070.10), 3: de156d99 (mustangs 90058-10), 4-7: table 0 again — a
 // 2048-line file. Generate it locally before quartus_map (ROM dump
 // content, never committed): see docs/hw-bringup.md.
-// 2026-09-13: the 27 Afega sets (ids 23-43) moved to their own
-// NMK16_Afega.rbf, so this build leaves their YM2151 out of the
-// netlist (INCLUDE_AFEGA(0)) and keeps everything else. Measured:
-// 27,554 -> 26,554 ALMs and +0.393 -> +0.585 ns slack.
-gunnail_core #(.HW_ROMS(1), .VTIMING_FILE("roms/gunnail_multi_vtiming.hex"), .INCLUDE_AFEGA(0), .INCLUDE_NMK(1)) core
+gunnail_core #(.HW_ROMS(1), .VTIMING_FILE("roms/gunnail_multi_vtiming.hex"), .INCLUDE_AFEGA(1), .INCLUDE_NMK(0)) core
 (
 	.clk_sys(clk_sys), .reset(reset), .game_sel(game_sel),
 	.extra_por_hold(~pll_locked),

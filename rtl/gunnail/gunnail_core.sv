@@ -114,7 +114,23 @@ module gunnail_core #(
 	// HW_ROMS=0 only: 1 = the DIP switches come from dsw1_i/dsw2_i (the
 	// testbench drives the .mra defaults, so the MAME comparison covers
 	// language/demo-sound dependent screens); 0 = 0xFFFF as before.
-	parameter SIM_DSW           = 0
+	parameter SIM_DSW           = 0,
+	// 2026-09-13: family split across two rbfs. The Afega boards (ids
+	// 23-43) and everything else use disjoint sound hardware, so each
+	// top-level builds only what its own games need and the other side's
+	// chips are left out of the netlist entirely:
+	//   Gunnail.sv     INCLUDE_AFEGA=0, INCLUDE_NMK=1  (ids 0-22, 44-51)
+	//   NMK16_Afega.sv INCLUDE_AFEGA=1, INCLUDE_NMK=0  (ids 23-43)
+	// These gate `generate if` blocks, NOT wire-level constants: Quartus
+	// does not prune a module instance just because an upstream wire is
+	// provably constant (proven on this design in an earlier attempt —
+	// see docs/hw-bringup.md), so the instantiations must be elaborated
+	// away. Sim harnesses pass 1/1 and keep testing every game.
+	//   INCLUDE_AFEGA=0 drops: jt51 (YM2151)
+	//   INCLUDE_NMK=0   drops: nmk004_core + nmk_prot_core (two TLCS-90
+	//                          cores), jt03 (YM2203), seibu_sound, jtopl2
+	parameter INCLUDE_AFEGA     = 1,
+	parameter INCLUDE_NMK       = 1
 ) (
 	input clk_sys,        // 40 MHz (68000 clk_sys/4 = 10 MHz, /5 = 8 MHz, 3/10 = 12 MHz; NMK004/pixel clk_sys/5 = 8 MHz; protection MCU clk_sys/10 = 4 MHz)
 	input reset,          // async, active high
@@ -1733,30 +1749,67 @@ module gunnail_core #(
 	wire       ym_chip_irq_n;
 	wire [7:0] oki1_chip_dout, oki2_chip_dout;
 
-	nmk004_core #(
-		.BOOT_ROM_FILE(NMK004_BOOT_FILE),
-		.EXT_ROM_FILE(NMK004_EXT_FILE),
-		.USE_CEN(1),
-		.ROM_EXTERNAL(HW_ROMS)
-	) nmk004 (
-		.clk(clk_sys), .cen(snd_cen), .reset(reset | ~has_nmk004),
-		.rom_addr(nmk004_rom_addr), .rom_rd(nmk004_rom_rd), .rom_din(nmk004_rom_din), .rom_ready(nmk004_rom_ready), .rom_stall(nmk004_rom_stall),
-		.nmi(nmi_level),
-		.ym_cs(ym_cs), .ym_we(ym_we), .ym_addr_sel(ym_addr_sel),
-		.ym_dout(ym_dout), .ym_din(ym_chip_dout), .ym_irq_n(ym_chip_irq_n),
-		.oki0_cs(oki0_cs), .oki0_we(oki0_we), .oki0_dout(oki0_dout), .oki0_din(oki1_chip_dout),
-		.oki1_cs(oki1_cs), .oki1_we(oki1_we), .oki1_dout(oki1_dout), .oki1_din(oki2_chip_dout),
-		.oki0_bank_we(oki0_bank_we), .oki0_bank(oki0_bank),
-		.oki1_bank_we(oki1_bank_we), .oki1_bank(oki1_bank),
-		.host_to_mcu(nmk004_host_to_mcu),
-		.mcu_to_host(nmk004_mcu_to_host), .mcu_to_host_we(nmk004_mcu_to_host_we),
-		.dbg_pc(dbg_nmk004_pc), .dbg_valid(dbg_nmk004_valid),
-		.dbg_a(dbg_nmk004_a), .dbg_f(dbg_nmk004_f), .dbg_hl(dbg_nmk004_hl),
-		.dbg_ram_hl(dbg_nmk004_ram_hl),
-		.dbg_de(dbg_nmk004_de), .dbg_bc(dbg_nmk004_bc), .dbg_ix(dbg_nmk004_ix),
-		.dbg_iy(dbg_nmk004_iy), .dbg_sp(dbg_nmk004_sp),
-		.p4(nmk004_p4), .bx(), .by()
-	);
+	// NMK004 sound MCU (TLCS-90 + peripherals): never present on Afega
+	// boards (see INCLUDE_NMK). All strobes stub inactive.
+	generate
+	if (INCLUDE_NMK) begin : g_nmk004
+		nmk004_core #(
+			.BOOT_ROM_FILE(NMK004_BOOT_FILE),
+			.EXT_ROM_FILE(NMK004_EXT_FILE),
+			.USE_CEN(1),
+			.ROM_EXTERNAL(HW_ROMS)
+		) nmk004 (
+			.clk(clk_sys), .cen(snd_cen), .reset(reset | ~has_nmk004),
+			.rom_addr(nmk004_rom_addr), .rom_rd(nmk004_rom_rd), .rom_din(nmk004_rom_din), .rom_ready(nmk004_rom_ready), .rom_stall(nmk004_rom_stall),
+			.nmi(nmi_level),
+			.ym_cs(ym_cs), .ym_we(ym_we), .ym_addr_sel(ym_addr_sel),
+			.ym_dout(ym_dout), .ym_din(ym_chip_dout), .ym_irq_n(ym_chip_irq_n),
+			.oki0_cs(oki0_cs), .oki0_we(oki0_we), .oki0_dout(oki0_dout), .oki0_din(oki1_chip_dout),
+			.oki1_cs(oki1_cs), .oki1_we(oki1_we), .oki1_dout(oki1_dout), .oki1_din(oki2_chip_dout),
+			.oki0_bank_we(oki0_bank_we), .oki0_bank(oki0_bank),
+			.oki1_bank_we(oki1_bank_we), .oki1_bank(oki1_bank),
+			.host_to_mcu(nmk004_host_to_mcu),
+			.mcu_to_host(nmk004_mcu_to_host), .mcu_to_host_we(nmk004_mcu_to_host_we),
+			.dbg_pc(dbg_nmk004_pc), .dbg_valid(dbg_nmk004_valid),
+			.dbg_a(dbg_nmk004_a), .dbg_f(dbg_nmk004_f), .dbg_hl(dbg_nmk004_hl),
+			.dbg_ram_hl(dbg_nmk004_ram_hl),
+			.dbg_de(dbg_nmk004_de), .dbg_bc(dbg_nmk004_bc), .dbg_ix(dbg_nmk004_ix),
+			.dbg_iy(dbg_nmk004_iy), .dbg_sp(dbg_nmk004_sp),
+			.p4(nmk004_p4), .bx(), .by()
+		);
+	end else begin : g_nmk004_off
+		assign nmk004_rom_addr       = 16'd0;
+		assign nmk004_rom_rd         = 1'b0;
+		assign ym_cs                 = 1'b0;
+		assign ym_we                 = 1'b0;
+		assign ym_addr_sel           = 1'b0;
+		assign ym_dout               = 8'h00;
+		assign oki0_cs               = 1'b0;
+		assign oki0_we               = 1'b0;
+		assign oki0_dout             = 8'h00;
+		assign oki1_cs               = 1'b0;
+		assign oki1_we               = 1'b0;
+		assign oki1_dout             = 8'h00;
+		assign oki0_bank_we          = 1'b0;
+		assign oki0_bank             = 8'h00;
+		assign oki1_bank_we          = 1'b0;
+		assign oki1_bank             = 8'h00;
+		assign nmk004_mcu_to_host    = 8'h00;
+		assign nmk004_mcu_to_host_we = 1'b0;
+		assign nmk004_p4             = 8'h00;
+		assign dbg_nmk004_pc         = 16'd0;
+		assign dbg_nmk004_valid      = 1'b0;
+		assign dbg_nmk004_a          = 8'h00;
+		assign dbg_nmk004_f          = 8'h00;
+		assign dbg_nmk004_hl         = 16'd0;
+		assign dbg_nmk004_ram_hl     = 8'h00;
+		assign dbg_nmk004_de         = 16'd0;
+		assign dbg_nmk004_bc         = 16'd0;
+		assign dbg_nmk004_ix         = 16'd0;
+		assign dbg_nmk004_iy         = 16'd0;
+		assign dbg_nmk004_sp         = 16'd0;
+	end
+	endgenerate
 	assign dbg_nmk004_cen   = snd_cen;
 	assign dbg_nmk004_stall = snd_stall;
 
@@ -1864,14 +1917,26 @@ module gunnail_core #(
 	wire ym_addr_eff = (ym_wr_hold != 6'd0) ? ym_addr_latch : ym_addr_src;
 
 	wire signed [15:0] ym_snd;
-	jt03 ym_chip (
-		.rst(reset), .clk(clk_sys), .cen(ym_cen),
-		.din(ym_din_latch), .addr(ym_addr_eff), .cs_n(1'b0), .wr_n(ym_wr_n),
-		.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),
-		.IOA_in(8'hFF), .IOB_in(8'hFF), .IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
-		.psg_A(), .psg_B(), .psg_C(), .fm_snd(dbg_fm_snd), .psg_snd(dbg_psg_snd), .snd(ym_snd), .snd_sample(),
-		.debug_view()
-	);
+	// YM2203: every family except Afega (see INCLUDE_NMK). irq_n idles
+	// HIGH (active low) so the shared z80_int_n mux stays inactive.
+	generate
+	if (INCLUDE_NMK) begin : g_ym2203
+		jt03 ym_chip (
+			.rst(reset), .clk(clk_sys), .cen(ym_cen),
+			.din(ym_din_latch), .addr(ym_addr_eff), .cs_n(1'b0), .wr_n(ym_wr_n),
+			.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),
+			.IOA_in(8'hFF), .IOB_in(8'hFF), .IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
+			.psg_A(), .psg_B(), .psg_C(), .fm_snd(dbg_fm_snd), .psg_snd(dbg_psg_snd), .snd(ym_snd), .snd_sample(),
+			.debug_view()
+		);
+	end else begin : g_ym2203_off
+		assign ym_chip_dout  = 8'hFF;
+		assign ym_chip_irq_n = 1'b1;
+		assign dbg_fm_snd    = 16'sd0;
+		assign dbg_psg_snd   = 10'd0;
+		assign ym_snd        = 16'sd0;
+	end
+	endgenerate
 
 	// ------------------------------------------------------------------
 	// OKIM6295 x2 — jt6295, NMK004-driven banking: 0x00000-0x1FFFF fixed,
@@ -2150,23 +2215,45 @@ module gunnail_core #(
 
 	wire [9:0] vt_hcount, vt_vcount;
 	wire prot_halt_raw;
-	nmk_prot_core #(
-		.BOOT_ROM_FILE(PROT_BOOT_FILE),
-		.ROM_SIZE(16384), .RAM_BASE(16'hfdc0), .RAM_SIZE(512),
-		.USE_CEN(1)
-	) prot_mcu (
-		.clk(clk_sys), .cen(prot_cen), .reset(reset | ~has_prot | prot_loading),
-		.p7_ext_en_i(g_hachamf), .p7_ext_val_i(8'h0C), // NMK-113 selects its Hacha Mecha Fighter codepath by this port-7 constant
-		.rom_we(prot_rom_we), .rom_waddr(prot_rom_waddr), .rom_wdata(prot_rom_wdata),
-		.bus_addr(prot_addr), .bus_rd(prot_rd), .bus_wr(prot_wr),
-		.bus_wdata(prot_wdata), .bus_rdata(prot_rdata),
-		.vpos_div4(vt_vcount[9:2]),
-		.halt_68k(prot_halt_raw),
-		.nmk214_cfg_we(nmk214_cfg_we), .nmk214_cfg_data(nmk214_cfg_data),
-		.dbg_pc(dbg_prot_pc), .dbg_valid(dbg_prot_valid),
-		.dbg_hl(dbg_prot_hl), .dbg_a(dbg_prot_a), .dbg_de(dbg_prot_de), .dbg_iy(dbg_prot_iy),
-		.dbg_int_ram_at_hl(dbg_prot_int_ram_at_hl)
-	);
+	// NMK-215/113/110 protection MCU (TLCS-90): never present on Afega
+	// boards (see INCLUDE_NMK). halt_68k MUST stub low — a stuck-high
+	// stub would freeze the 68000 of every game on this rbf.
+	generate
+	if (INCLUDE_NMK) begin : g_prot_mcu
+		nmk_prot_core #(
+			.BOOT_ROM_FILE(PROT_BOOT_FILE),
+			.ROM_SIZE(16384), .RAM_BASE(16'hfdc0), .RAM_SIZE(512),
+			.USE_CEN(1)
+		) prot_mcu (
+			.clk(clk_sys), .cen(prot_cen), .reset(reset | ~has_prot | prot_loading),
+			.p7_ext_en_i(g_hachamf), .p7_ext_val_i(8'h0C), // NMK-113 selects its Hacha Mecha Fighter codepath by this port-7 constant
+			.rom_we(prot_rom_we), .rom_waddr(prot_rom_waddr), .rom_wdata(prot_rom_wdata),
+			.bus_addr(prot_addr), .bus_rd(prot_rd), .bus_wr(prot_wr),
+			.bus_wdata(prot_wdata), .bus_rdata(prot_rdata),
+			.vpos_div4(vt_vcount[9:2]),
+			.halt_68k(prot_halt_raw),
+			.nmk214_cfg_we(nmk214_cfg_we), .nmk214_cfg_data(nmk214_cfg_data),
+			.dbg_pc(dbg_prot_pc), .dbg_valid(dbg_prot_valid),
+			.dbg_hl(dbg_prot_hl), .dbg_a(dbg_prot_a), .dbg_de(dbg_prot_de), .dbg_iy(dbg_prot_iy),
+			.dbg_int_ram_at_hl(dbg_prot_int_ram_at_hl)
+		);
+	end else begin : g_prot_mcu_off
+		assign prot_addr       = 20'd0;
+		assign prot_rd         = 1'b0;
+		assign prot_wr         = 1'b0;
+		assign prot_wdata      = 8'h00;
+		assign prot_halt_raw   = 1'b0;
+		assign nmk214_cfg_we   = 1'b0;
+		assign nmk214_cfg_data = 8'h00;
+		assign dbg_prot_pc            = 16'd0;
+		assign dbg_prot_valid         = 1'b0;
+		assign dbg_prot_hl            = 16'd0;
+		assign dbg_prot_a             = 8'h00;
+		assign dbg_prot_de            = 16'd0;
+		assign dbg_prot_iy            = 16'd0;
+		assign dbg_prot_int_ram_at_hl = 8'h00;
+	end
+	endgenerate
 	assign halt_68k = prot_halt_raw & has_prot;
 
 	// Shared-bus read mux (byte) and the ready/stall logic.
@@ -2396,15 +2483,31 @@ module gunnail_core #(
 			if (~UDSn) mustb_data_r[15:8] <= oEdb[15:8];
 		end
 	end
-	seibu_sound seibu (
-		.clk_sys(clk_sys), .reset(reset | ~g_seibu),
-		.z80_addr(z80_a), .z80_dout(z80_do), .z80_sel(sel_z80_seibu), .z80_we(z80_mem_we), .z80_re(z80_mem_re),
-		.z80_din(seibu_z80_din), .z80_m1_n(z80_m1_n), .z80_iorq_n(z80_iorq_n),
-		.z80_iack_vector(seibu_iack_vector), .z80_iack_active(seibu_iack_active), .z80_int_n(seibu_int_n),
-		.m68k_mustb_we(mustb_we_d & ~mustb_we_level), .m68k_mustb_data(mustb_data_r), .m68k_mustb_lds(1'b1), .m68k_mustb_uds(1'b1),
-		.ym_cs(), .ym_we(seibu_ym_we), .ym_addr_sel(seibu_ym_a0), .ym_wdata(seibu_ym_wdata), .ym_rdata(opl_dout), .ym_irq_n(opl_irq_n),
-		.bank_sel(seibu_bank_sel)
-	);
+	// Seibu Sound System: Family E bootlegs only (see INCLUDE_NMK).
+	// z80_int_n idles HIGH; iack_active low so the shared vector mux on
+	// the Z80 data bus stays out of the way.
+	generate
+	if (INCLUDE_NMK) begin : g_seibu_snd
+		seibu_sound seibu (
+			.clk_sys(clk_sys), .reset(reset | ~g_seibu),
+			.z80_addr(z80_a), .z80_dout(z80_do), .z80_sel(sel_z80_seibu), .z80_we(z80_mem_we), .z80_re(z80_mem_re),
+			.z80_din(seibu_z80_din), .z80_m1_n(z80_m1_n), .z80_iorq_n(z80_iorq_n),
+			.z80_iack_vector(seibu_iack_vector), .z80_iack_active(seibu_iack_active), .z80_int_n(seibu_int_n),
+			.m68k_mustb_we(mustb_we_d & ~mustb_we_level), .m68k_mustb_data(mustb_data_r), .m68k_mustb_lds(1'b1), .m68k_mustb_uds(1'b1),
+			.ym_cs(), .ym_we(seibu_ym_we), .ym_addr_sel(seibu_ym_a0), .ym_wdata(seibu_ym_wdata), .ym_rdata(opl_dout), .ym_irq_n(opl_irq_n),
+			.bank_sel(seibu_bank_sel)
+		);
+	end else begin : g_seibu_snd_off
+		assign seibu_z80_din      = 8'hFF;
+		assign seibu_iack_vector  = 8'h00;
+		assign seibu_iack_active  = 1'b0;
+		assign seibu_int_n        = 1'b1;
+		assign seibu_ym_we        = 1'b0;
+		assign seibu_ym_a0        = 1'b0;
+		assign seibu_ym_wdata     = 8'h00;
+		assign seibu_bank_sel     = 1'b0;
+	end
+	endgenerate
 `ifdef VERILATOR
 	// Family E bring-up counters (sim only)
 	reg [31:0] fe_m1 = 0, fe_mustb = 0, fe_seibu_wr = 0, fe_opl_wr = 0, fe_oki_wr = 0, fe_iack = 0, fe_int_low = 0;
@@ -2462,11 +2565,20 @@ module gunnail_core #(
 	wire opl_we   = g_seibu ? seibu_ym_we : (z80_io_we & sel_io_opl);
 	wire opl_a0   = g_seibu ? seibu_ym_a0 : z80_a[0];
 	wire signed [15:0] opl_snd;
-	jtopl2 opl_chip (
-		.rst(reset | ~g_opl), .clk(clk_sys), .cen(z80_cen),
-		.din(z80_do), .addr(opl_a0), .cs_n(~opl_we), .wr_n(~opl_we),
-		.dout(opl_dout), .irq_n(opl_irq_n), .snd(opl_snd), .sample()
-	);
+	// YM3812: Family E / tomagic only (see INCLUDE_NMK).
+	generate
+	if (INCLUDE_NMK) begin : g_opl2
+		jtopl2 opl_chip (
+			.rst(reset | ~g_opl), .clk(clk_sys), .cen(z80_cen),
+			.din(z80_do), .addr(opl_a0), .cs_n(~opl_we), .wr_n(~opl_we),
+			.dout(opl_dout), .irq_n(opl_irq_n), .snd(opl_snd), .sample()
+		);
+	end else begin : g_opl2_off
+		assign opl_dout  = 8'hFF;
+		assign opl_irq_n = 1'b1;
+		assign opl_snd   = 16'sd0;
+	end
+	endgenerate
 	// spec2k_oki1_banking_w: 0xFE = bank 0, 0xFF = bank 1 of the 0x80000 oki2 ROM
 	reg fh_oki2_bank = 1'b0;
 	always @(posedge clk_sys) begin
@@ -2495,12 +2607,24 @@ module gunnail_core #(
 	end
 	wire [7:0] ym51_dout;
 	wire signed [15:0] ym51_l, ym51_r;
-	jt51 ym51_chip (
-		.rst(reset | ~g_afega), .clk(clk_sys), .cen(ym51_cen), .cen_p1(ym51_cen_p1),
-		.cs_n(1'b0), .wr_n(~ym51_wr_pulse), .a0(ym51_a0_r), .din(ym51_din_r), .dout(ym51_dout),
-		.ct1(), .ct2(), .irq_n(ym51_irq_n), .sample(),
-		.left(ym51_l), .right(ym51_r), .xleft(), .xright()
-	);
+	// YM2151: Afega boards only (see INCLUDE_AFEGA). irq_n idles HIGH —
+	// z80_int_n above is active low and ORs ~ym51_irq_n in, so a stuck-low
+	// stub would wedge the Z80 of every game on the other rbf.
+	generate
+	if (INCLUDE_AFEGA) begin : g_ym51
+		jt51 ym51_chip (
+			.rst(reset | ~g_afega), .clk(clk_sys), .cen(ym51_cen), .cen_p1(ym51_cen_p1),
+			.cs_n(1'b0), .wr_n(~ym51_wr_pulse), .a0(ym51_a0_r), .din(ym51_din_r), .dout(ym51_dout),
+			.ct1(), .ct2(), .irq_n(ym51_irq_n), .sample(),
+			.left(ym51_l), .right(ym51_r), .xleft(), .xright()
+		);
+	end else begin : g_ym51_off
+		assign ym51_dout  = 8'hFF;
+		assign ym51_irq_n = 1'b1;
+		assign ym51_l     = 16'sd0;
+		assign ym51_r     = 16'sd0;
+	end
+	endgenerate
 	always @(*) begin
 		if (~z80_iorq_n) begin
 			if (g_seibu)         z80_di = seibu_iack_active ? seibu_iack_vector : 8'hFF; // IM0: the RST vector on the bus during the acknowledge

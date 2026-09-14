@@ -958,11 +958,20 @@ def part_lines(parts, overrides):
     return "".join(out)
 
 
+def rbf_for_id(game_id):
+    """2026-09-13: the 27 Afega-hardware sets (ids 23-43) build into their
+    own NMK16_Afega.rbf — gunnail_core with INCLUDE_AFEGA(1)/INCLUDE_NMK(0),
+    so the NMK004/protection TLCS-90 cores, the YM2203 and the Seibu/YM3812
+    board are elaborated out. Every other id stays on Gunnail.rbf."""
+    return "NMK16_Afega" if 23 <= game_id <= 43 else "Gunnail"
+
+
 def mra(setname, desc, game_line, spec, parent, overrides):
     zips = [setname + ".zip"] + ([parent + ".zip"] if parent else []) + ["nmk004.zip"]
+    rbf = rbf_for_id(spec["id"])
     out = []
     out.append(f"""<!--
-  {desc} — NMK16 "Gunnail" rbf (rtl/gunnail/gunnail_core.sv game id {spec['id']}).
+  {desc} — NMK16 "{rbf}" rbf (rtl/gunnail/gunnail_core.sv game id {spec['id']}).
   {'Clone of ' + parent + '; files it shares with the parent are looked up in the parent zip.' if parent else 'Parent set.'}
 
   Transcribed from mame/src/mame/nmk/nmk16.cpp: GAME(... {setname} ...)
@@ -980,7 +989,7 @@ def mra(setname, desc, game_line, spec, parent, overrides):
   <year>{spec['year']}</year>
   <manufacturer>{spec['manufacturer']}</manufacturer>
   <category>Shooter</category>
-  <rbf>Gunnail</rbf>
+  <rbf>{rbf}</rbf>
 """)
     if spec["rot"]:
         out.append("\n  <!-- ROT270 in nmk16.cpp -->\n  <rotation>1</rotation>\n")

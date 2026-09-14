@@ -1,7 +1,7 @@
 # Known issues and areas for improvement — released cores
 
-Tracked list for the three RBFs shipped in `releases/` (`Macross2`,
-`Raphero`, `Gunnail`). One entry per issue with a stable ID; update the
+Tracked list for the four RBFs shipped in `releases/` (`Macross2`,
+`Raphero`, `Gunnail`, `NMK16_Afega`). One entry per issue with a stable ID; update the
 **Status** line in place rather than deleting entries, so the history
 stays readable. Details and evidence for each live in
 `docs/hw-bringup.md` (section named in **Ref**). Started 2026-09-10.

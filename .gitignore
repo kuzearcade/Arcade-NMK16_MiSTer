@@ -43,6 +43,7 @@ output_files/
 output_files_sdramtest/
 output_files_raphero/
 output_files_gunnail/
+output_files_nmk16_afega/
 db/
 incremental_db/
 greybox_tmp/

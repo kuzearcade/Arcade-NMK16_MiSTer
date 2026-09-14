@@ -2894,7 +2894,7 @@ undeciphered sprite ROMs. One harness lesson: MiSTer takes ~15 s to
 bring a new core up, so anything that reads /tmp/CORENAME or takes a
 screenshot earlier sees the previous set.
 
-## The Afega boards on the Gunnail rbf (2026-09-13, Family H)
+## The Afega boards (2026-09-13, Family H) — now their own NMK16_Afega rbf
 
 All 27 Afega-hardware sets (`afega_state` in nmk16.cpp: Stagger I / Red
 Hawk, Guardian Storm / Hong Hu Zhanji II, Bubble 2000 / Hot Bubble,
@@ -3189,16 +3189,91 @@ native screenshots, and their 60 s attract audio against MAME
 | gunnailb | 0.841 (MAME's own output carries a large DC; the set is MACHINE_IMPERFECT_SOUND there) | -2.3 dB |
 | tomagic | 0.936 | -2.1 dB |
 
+## Splitting the Afega boards into their own rbf (2026-09-13)
+
+The 27 Afega sets (game ids 23-43) moved from `Gunnail.rbf` to their own
+`NMK16_Afega.rbf`. Both are the same `rtl/gunnail/gunnail_core.sv`; the
+two top levels differ only in the family parameters:
+
+    Gunnail.sv      INCLUDE_AFEGA(0), INCLUDE_NMK(1)   ids 0-22, 44-51
+    NMK16_Afega.sv  INCLUDE_AFEGA(1), INCLUDE_NMK(0)   ids 23-43
+
+The parameters gate `generate if` blocks around the family-specific chip
+instances, so the other side's hardware is elaborated away:
+`INCLUDE_AFEGA=0` drops `jt51` (YM2151); `INCLUDE_NMK=0` drops
+`nmk004_core` and `nmk_prot_core` (two TLCS-90 cores), `jt03` (YM2203),
+`seibu_sound` and `jtopl2`. Every gated instance has an `else` branch
+stubbing its outputs — active-low `irq_n` lines idle HIGH and the
+protection MCU's `halt_68k` stubs LOW, since a stuck stub there would
+wedge the 68000 or the Z80 of every game on the other rbf.
+
+**This has to be `generate if`, not wire-level constants.** An earlier
+attempt (archived, see `/home/vboxuser/archive_post_492c82a/`) remapped
+`game_sel` so the excluded family's `g_*` wires were provably constant 0
+and expected Quartus to prune the dead logic. It did not: register and
+DSP counts came back identical, and `seibu_sound` was still fully
+instantiated in a build where it was unreachable. Elaboration-time
+gating does work — measured below.
+
+| build | ALMs | worst setup slack |
+|---|---|---|
+| Gunnail, all 71 sets (before the split) | 27,554 (66%) | +0.393 ns |
+| Gunnail, 44 sets (`INCLUDE_AFEGA(0)`) | 26,554 (63%) | +0.585 ns |
+| NMK16_Afega, 27 sets (`INCLUDE_NMK(0)`) | 18,494 (44%) | +0.534 ns |
+
+Both close timing with 0 violations. The Afega rbf keeps 56% of the
+device free, which is the headroom the capacity work had been chasing.
+
+### The SDC trap this exposed
+
+The first split build of `Gunnail` came back at **-9.563 ns** — a 10 ns
+miss on a 25 ns clock, not a marginal one. `Gunnail.sdc` gives both
+TLCS-90 cores a multicycle exception matched by exact hierarchy path:
+
+    get_registers {*|gunnail_core:core|nmk004_core:nmk004|tlcs90:cpu|* ...}
+
+Wrapping the instances in `generate if` renamed them to
+`nmk004_core:g_nmk004.nmk004` and `nmk_prot_core:g_prot_mcu.prot_mcu`,
+so those patterns matched nothing and both CPUs were suddenly analysed
+at full single-cycle speed. **`get_registers` matching nothing is not an
+error** — the constraint vanishes silently and only the slack number
+shows it. The patterns now wildcard the generate scope
+(`nmk004_core:*nmk004`), which matches with or without it; the rebuild
+returned to exactly +0.585 ns. Check this whenever an instance moves
+into or out of a generate block.
+
+### Verification
+
+`.mra` routing is generated: `tools/gen_gunnail_mra.py`'s `rbf_for_id()`
+emits `<rbf>NMK16_Afega</rbf>` for ids 23-43 and `<rbf>Gunnail</rbf>`
+for the rest — 44/27, with the 44 Gunnail files regenerating
+byte-identically. MiSTer prefix-matches the `<rbf>` tag against the
+`Arcade-<Core>_YYYYMMDD.rbf` filename, so no other change was needed.
+
+Board (2026-09-13, all 93 files checksum-verified against `releases/`),
+one game per gated module:
+
+| set | exercises | result |
+|---|---|---|
+| stagger1 | `jt51` on the new rbf | loads `Arcade-NMK16_Afega_20260913.rbf`, title correct |
+| gunnail | `nmk_prot_core` + `nmk004_core` + `jt03` | in-game, sprites/starfield/HUD clean |
+| mustang | `nmk004_core` + `jt03` | clean |
+| tomagic | `seibu_sound` + `jtopl2` | clean |
+
+That is 4 of 71 sets — a smoke test covering every gated module, not
+full per-game coverage.
+
 ## Status
 
-Three RBFs run on the DE10-Nano and are tracked in `releases/`:
+Four RBFs run on the DE10-Nano and are tracked in `releases/`:
 `Macross2` (tdragon2, macross2, powerins and their clones — one
-runtime-selected core), `Raphero` (raphero, rapheroa, arcadian) and
+runtime-selected core), `Raphero` (raphero, rapheroa, arcadian),
 `Gunnail` (gunnail, gunnailp and, since 2026-09-11, the nine lowres
 NMK004 boards with their clones, the Bombjack Twin and Task Force
-Harrier boards, the Afega boards and, since 2026-09-14, the Family E
-bootlegs — 71 sets on one runtime-selected core, see the sections
-above). Each one boots through the `.mra` loader with its ROM image
+Harrier boards and, since 2026-09-14, the Family E bootlegs — 44 sets
+on one runtime-selected core) and, since 2026-09-13, `NMK16_Afega`
+(the 27 Afega-hardware sets, game ids 23-43, split out of `Gunnail`
+— see "Splitting the Afega boards into their own rbf" below). Each one boots through the `.mra` loader with its ROM image
 matching simulation, renders its attract demo without the smearing,
 tearing or missing-sprite problems the sections above walk through,
 and is pixel-identical to MAME in native screenshots of the scenes
