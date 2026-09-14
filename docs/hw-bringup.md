@@ -3385,15 +3385,17 @@ stops), so 70M cycles is enough for this comparison window.
 
 ## Restoring ssmissin onto Gunnail.rbf (2026-09-13)
 
-S.S. Mission was added back to `Gunnail.rbf` as game id 52, on request,
-with the defect that got it withdrawn still unresolved. Read NMK-20 in
-`docs/known-issues.md` first — but note that on 2026-09-14 its
-"hardware-only" diagnosis was **disproven**: a board frame of a striped
-city scene is byte-identical to the reference sim's frame, and the
-hardware-path sim matches the reference sim 224/224 over that window at
-the correct 96MHz-equivalent clock ratio. The memory path is exonerated;
-what remains open is whether the RTL differs from MAME on those scenes
-at all.
+S.S. Mission was added back to `Gunnail.rbf` as game id 52, and the
+defect that got it withdrawn is now **fixed and confirmed on hardware**
+(2026-09-14). The "hardware-only" diagnosis was a misdiagnosis: a board
+frame of a striped city scene proved byte-identical to the reference
+sim's, and the hardware-path sim matched the reference sim 224/224 over
+that window at the correct 96MHz-equivalent clock ratio — the memory
+path was never involved. The actual cause was `decode_ssmissin()`, a
+bit-3/4 permutation of the `bgtile`/`sprites` regions that MAME applies
+at init and this port never implemented; a second defect (the
+`txvideoram` `.mirror(0x1800)` consumed as an address bit, fatal for
+airattck) was found alongside it. See NMK-20 in `docs/known-issues.md`.
 
 It was ported by hand rather than by applying the archived patch.
 `archive/e6e7074-five-sets` bundles five sets plus the m68705 core and

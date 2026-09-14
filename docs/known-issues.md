@@ -163,15 +163,41 @@ but not proven), `infra` (build/test/doc health).
   is pulled down by NMK-7 (demo diverges after ~1 min), not by audio.
 
 ### NMK-20 · ssmissin BG "corruption": two missing driver behaviours
-- **Severity:** bug · **Status:** two defects found and fixed
-  2026-09-14; the original "hardware-only" diagnosis is **disproven**
+- **Severity:** bug · **Status:** **FIXED and confirmed on hardware
+  2026-09-14**; the original "hardware-only" diagnosis was a
+  misdiagnosis
 - **Ref:** `/home/vboxuser/archive_e6e7074/FINDINGS.md` (superseded on
   this point), "Restoring ssmissin onto Gunnail.rbf" in
   `docs/hw-bringup.md`
-- S.S. Mission's highway/field scenes render with dense 1-pixel vertical
-  striping. This was recorded as corruption that appears **only on real
-  hardware** — the reason the set was withdrawn from `master`. That
-  premise is wrong.
+- S.S. Mission's highway/field scenes rendered with dense 1-pixel
+  vertical striping. This was recorded as corruption appearing **only on
+  real hardware** — the reason the set was withdrawn from `master`. That
+  premise was wrong: the cause was `decode_ssmissin()`, a graphics ROM
+  decode the port never implemented, which affected every path equally.
+
+**Confirmed fixed on the DE10-Nano (2026-09-14)** with the rebuilt
+`Arcade-Gunnail_20260913.rbf` (md5 `536a6426…`, 0 timing violations,
++0.640 ns, 26,560 ALMs), on the same attract city scene that produced
+the original report:
+
+| terrain box | h-run | v/h |
+|---|---|---|
+| board **before** | 1.18 | **3.74** (hard 1-px vertical stripes) |
+| board **after** | 7.62 | **0.30** |
+| MAME, city scene | 2.13 | 1.55 |
+
+  The zoomed terrain now shows the same **isotropic green/tan dither**
+  MAME draws, with clean horizontal lane markings. (The residual numeric
+  gap to MAME is only a different scroll position inside the crop box —
+  the texture character is the thing that matters, and it matches.)
+
+**No collateral damage** — both changed signals are shared, so four sets
+were re-checked on the same bitstream: **tdragonb** (the other
+`gfx_swap34` user, the one set that would break if the OR were wrong) —
+coastline/boats/foliage correct; **Bombjack Twin** (exercises the
+`txvram_addr` mux with a busy TX layer) — round 1-1 and HUD correct;
+GunNail — in-game starfield/sprites/HUD clean; US AAF Mustang — Normandy
+map intact.
 
 **What was measured (2026-09-14):**
 
@@ -225,10 +251,13 @@ archive's "477/477 pixel-exact" claim — missed them.
    0x1000 with bit 12 as its mirror.
 
 Neither fix moves ssmissin's reference-sim score (54/62 before and
-after), as expected: its compared frames exercise neither path. They are
-justified against the driver source, **not** by a pixel match, and the
-same-scene harness still disagrees with MAME for unrelated reasons (see
-below) — so do not treat that harness as having validated them.
+after), as expected: frames 20-81 exercise neither path. They were found
+by reading the driver source, and defect 1 is now **confirmed on
+hardware** (table above). Defect 2 remains **unverified in play** — it is
+inert for ssmissin by measurement, and needs airattck's sim ROMs to test.
+Note the same-scene `video_state` harness still disagrees with MAME for
+unrelated, unresolved reasons (see below), so it played no part in
+validating either fix.
 
 **Also disproven, each with evidence:**
 - *Prefetch-cache false hit on an in-flight entry* — `tile_prefetch_byte`
