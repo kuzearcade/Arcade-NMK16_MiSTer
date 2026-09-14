@@ -3260,8 +3260,33 @@ one game per gated module:
 | mustang | `nmk004_core` + `jt03` | clean |
 | tomagic | `seibu_sound` + `jtopl2` | clean |
 
-That is 4 of 71 sets — a smoke test covering every gated module, not
-full per-game coverage.
+### Reference-sim campaign (40 sets)
+
+Each set was then rebuilt in `sim/rtl/gunnail_mg` with **the family
+parameters of the rbf that ships it** (`EXTRA_VFLAGS=-GINCLUDE_AFEGA=..
+-GINCLUDE_NMK=..`) and compared against MAME over frames 20-81. Building
+the sim with the default 1/1 parameters would have tested the *unsplit*
+core and proven nothing about the gating, so that step is essential.
+
+40 of the 57 distinct game ids could run (the other 17 have no extracted
+sim ROMs yet): **27 pixel-exact on all 62 compared frames, 13 partial.**
+
+The 13 partials were then re-run on the **pre-split** core
+(`INCLUDE_AFEGA=1, INCLUDE_NMK=1`) as a control. Every one scored
+identically — acrobatm 59/62, acrobatmbl 53/62, bioship 26/62, grdnstrm
+59/62, gunnailb 56/62, hachamf 37/62, hachamfb 3/62, hachamfb2 0/62,
+mangchi 61/62, spec2k 61/62, tdragon1 17/62, tdragonb 61/62, tomagic
+56/62 — so those are pre-existing early-boot differences against MAME,
+not split regressions. **Zero regressions attributable to the split.**
+
+Harness notes for anyone repeating this: run no more than ~6-8 Verilator
+builds in parallel. At 16 the build step races and dies with "opening
+dependency file ...d: No such file or directory" — 13 spurious build
+failures, with disk, inodes and fd limits all healthy; every one passed
+on a retry at lower concurrency. Also note `roms/gunnail_multi_vtiming.hex`
+must match `nmk_irq.sv`'s array size: a 2304-line (9-table) file against
+the 2048-entry array aborts every Verilator run with "$readmem file
+address beyond bounds of array", where Quartus only warns.
 
 ## Status
 
