@@ -32,7 +32,7 @@
     <dip bits="14,15" name="Difficulty" ids="Hardest,Easy,Hard,Normal"/>
   </switches>
 
-  <buttons names="Button 1,Button 2,Button 3,Button 4,Start,Coin" default="Y,B,A,X,Start,R"/>
+  <buttons names="LP,LK,HP,HK,Start,Coin" default="Y,B,A,X,Start,R"/>
 
   <rom index="0" zip="powerinsa.zip|powerins.zip" md5="none">
     <!-- maincpu, 0x100000 @ 0x000000 (2 files, ROM_LOAD16_WORD_SWAP) -->

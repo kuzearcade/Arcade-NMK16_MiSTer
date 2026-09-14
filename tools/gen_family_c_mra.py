@@ -97,7 +97,13 @@ POWERINS = dict(
         ('13', "Game Time", "Short,Normal"),
         ('14,15', "Difficulty", "Hardest,Easy,Hard,Normal"),
     ],
-    buttons=("Button 1,Button 2,Button 3,Button 4,Start,Coin", "Y,B,A,X,Start,R"),
+    # Power Instinct is the one game on these rbfs that really uses all four
+    # buttons, so they are named for what they do rather than numbered. The
+    # COUNT (6) and the defaults are unchanged: MiSTer's default gamepad
+    # mapping is positional against this list, so the entry count must keep
+    # matching the shared core's fixed CONF_STR (see MACROSS2's own note).
+    # POWERINSP and POWERINSA/B/C inherit this.
+    buttons=("LP,LK,HP,HK,Start,Coin", "Y,B,A,X,Start,R"),
     # powerins' SDRAM layout (tdragon2_core.sv BASE_WORD_* with game_powerins=1)
     shared=[
         ("d3d7a782", "93095-4.u109", None),
