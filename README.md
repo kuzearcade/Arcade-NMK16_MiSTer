@@ -90,19 +90,23 @@ peripheral wrapper, verified against MAME's m6805 for 960,794
 instructions and 13 interrupts with zero mismatches (see
 `docs/tier7-tharrierb.md`).
 
-`nmk16.cpp` declares 100 romsets and 97 of them ship. **All three that
+`nmk16.cpp` declares 101 romsets and 97 of them ship. **All four that
 do not are `MACHINE_NOT_WORKING` in MAME itself**, for reasons MAME
 states on its own `GAME` lines:
 
 | Set | MAME's reason | Here |
 |---|---|---|
 | `powerinsc` | *"different sprites' format not implemented"* | Ported and boots; sprites draw wrong exactly as they do in MAME, so its `.mra` is generated into the gitignored `.non-working/` instead of `releases/` and is never shipped or deployed. `tools/gen_family_c_mra.py`'s `NON_WORKING` set routes it there. |
+| `macrossbl` | *"not looked at yet"* | Not attempted — MAME has not characterised this bootleg at all, so there is nothing to port against. |
 | `tdragonb2` | *"runs too quickly, Oki sounds terrible (IRQ problems?)"* | Not attempted — it would mean diverging from MAME's own known-broken timing. |
 | `firehawkv` | *"incomplete dump, vertical mode gfx not dumped"* | Not attempted — three `NO_DUMP` ROMs and a `BAD_DUMP` stand-in. |
 
 That count is checked rather than carried: parse every `GAME`/`GAMEL`
 line out of `nmk16.cpp` and diff the setnames against `<setname>` in
-`releases/*.mra` and `releases/_alternatives/*/*.mra`.
+`releases/*.mra` and `releases/_alternatives/*/*.mra`. Make the parser
+assert its own completeness against a plain `grep -c '^GAME('` first —
+one entry is dated `199?` rather than a four-digit year, and a regex
+that assumes `\d{4}` drops it without a word.
 
 `docs/known-issues.md` is the tracked list of open bugs, limitations
 and verification gaps in the released cores (stable IDs, status per
