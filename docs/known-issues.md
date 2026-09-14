@@ -162,9 +162,9 @@ but not proven), `infra` (build/test/doc health).
   same range as Thunder Dragon 2 on hardware (0.987). The 100 s figure
   is pulled down by NMK-7 (demo diverges after ~1 min), not by audio.
 
-### NMK-20 · ssmissin BG "corruption" is NOT hardware-specific (misdiagnosed)
-- **Severity:** unresolved · **Status:** reclassified 2026-09-14; the
-  original "hardware-only" diagnosis is **disproven**
+### NMK-20 · ssmissin BG "corruption": two missing driver behaviours
+- **Severity:** bug · **Status:** two defects found and fixed
+  2026-09-14; the original "hardware-only" diagnosis is **disproven**
 - **Ref:** `/home/vboxuser/archive_e6e7074/FINDINGS.md` (superseded on
   this point), "Restoring ssmissin onto Gunnail.rbf" in
   `docs/hw-bringup.md`
@@ -189,6 +189,47 @@ but not proven), `infra` (build/test/doc health).
   `tile_prefetch_byte` caches are exonerated**, on the failing scene and
   at the correct clock ratio.
 
+**The two defects, both found by reading nmk16.cpp rather than pixels
+(2026-09-14).** Neither is observable in any ssmissin attract/title
+frame, which is exactly why every pixel-based test — including the
+archive's "477/477 pixel-exact" claim — missed them.
+
+1. **`decode_ssmissin()` was never implemented** (`gunnail_core.sv`,
+   `g_gfx_swap34`). MAME permutes every byte of the **`bgtile` and
+   `sprites`** regions at init with `{0x7,0x6,0x5,0x3,0x4,0x2,0x1,0x0}`
+   — i.e. **bits 3 and 4 swapped** — and that table is byte-identical to
+   `decode_data_tdragonbgfx`; the source comment says so outright
+   ("Like Thunder Dragon Bootleg without the Program Rom Swapping").
+   This core already had the exact transform as video_macross2's
+   `gfx_swap34`, applied to BG tiles and sprites, but wired only to
+   tdragonb. It now reads `g_gfx_swap34 = g_tdb_dec | g_ssmissin`, which
+   needs its **own** signal: `g_tdb_dec` also drives the program-ROM word
+   swap, and `decode_ssmissin` explicitly does not touch the program ROM.
+   Corrupts BG and sprite *graphics* wherever real artwork is drawn —
+   ssmissin's title and early attract have an all-tile-0 BG, so they look
+   perfect.
+
+2. **`txvideoram`'s `.mirror(0x1800)` was treated as address bits**
+   (`gunnail_core.sv`, `txvram_addr`). `ssmissin_map` maps 1024 words at
+   0x0D0000-0x0D07FF with bits 12 **and 11** don't-care. The index was
+   `byte_addr[11:1]`, which consumes bit 11, so a mirrored write lands at
+   word 1024+ instead of aliasing into 0-1023. Measured in MAME over 1200
+   frames: **ssmissin 4096 base / 0 mirrored; airattck 0 base / 4096
+   mirrored** — airattck writes through the mirror *exclusively*, using
+   both bits. So this is inert for ssmissin and **fatal for
+   airattck/airattcka**, which share this map and game id 52: their TX
+   layer would be entirely lost. That is a strong candidate for
+   airattck's own long-standing "vertical streaks over the background/
+   starfield". Now masked for this map only — every other board maps
+   0x800 of TX with no mirror (bit 11 never set), and tomagic maps a real
+   0x1000 with bit 12 as its mirror.
+
+Neither fix moves ssmissin's reference-sim score (54/62 before and
+after), as expected: its compared frames exercise neither path. They are
+justified against the driver source, **not** by a pixel match, and the
+same-scene harness still disagrees with MAME for unrelated reasons (see
+below) — so do not treat that harness as having validated them.
+
 **Also disproven, each with evidence:**
 - *Prefetch-cache false hit on an in-flight entry* — `tile_prefetch_byte`
   writes tags only together with `sd_valid`.
@@ -206,25 +247,51 @@ but not proven), `infra` (build/test/doc health).
   bitstreams and separate power cycles**. Marginal analog behaviour does
   not repeat bit-exactly.
 
-**What is actually still open:** whether this project's video output
-differs from MAME on these scenes at all, or whether a highway of
-parallel lanes over furrowed fields simply looks like this. It cannot be
-settled by frame index: by frame ~5255 the attract demo has drifted from
-MAME (best same-index match is 34% differing — see NMK-7), and the
-striped scenes only appear that late. **The next step is the video-state
-harness** (`sim/rtl/video_state`, built precisely for "the demo has
-drifted"): dump MAME's VRAM/scroll/palette/sprite state at a striped
-frame and render it through `video_macross2` for a guaranteed same-scene
-pixel comparison. It currently assumes gunnail's raster-scroll tables and
-needs adapting to ssmissin's four scroll registers. A BG VRAM dump of a
-city frame already exists as a starting point.
+**What is still open:** whether the two fixes above fully account for
+the reported appearance. They cannot be confirmed against ssmissin's own
+attract frames (which exercise neither), and the striped scenes only
+appear ~5000 frames in, by which point the demo has drifted from MAME
+(best same-index match 34% differing — see NMK-7).
+
+`sim/rtl/video_state` was extended for exactly this: it now takes the
+runtime layer configuration as parameters (`RASTER`, `LOWRES`,
+`NMK214_EN`, `CFG_RT`, palette bases/masks) plus whole-layer scroll
+inputs for non-raster games, and `gunnail_core.sv` gained `STATE_*` file
+parameters with `VIDEO_ONLY=1` so a MAME dump can be rendered through the
+**full shipping core** instead of a hand-mirrored standalone
+`video_macross2` (`make GCGAME=ssmissin GCSEL=52 GCDUMP=<dir>/ssm_
+gcrun`). The gunnail control renders byte-identical to the committed
+`render_05394.ppm`, and injection is verified live by a zeroed-VRAM
+probe.
+
+**That harness still disagrees with MAME on ssmissin (~52% at frame 900)
+for reasons not yet isolated, so it has NOT validated the two fixes.**
+What has been checked and is correct: the BG VRAM dump equals MAME's own
+`:bgvideoram0` share; the tile ROM equals MAME's region; the snapshot is
+the right frame; `m_scroll[0]` is genuinely {0,0,0,0} (no writes at all
+in frames 898-901); the BG VRAM index mapping matches MAME's geometry
+(marker probe: VRAM row N renders at screen row N-1, which is right
+because `set_raw(...,278,16,240)` puts the visible area at y>=16 against
+our `BITMAP_Y0=16`, and x cancels via `scrolldx(92)` vs visible-x-92);
+and the core's tile decode is bit-identical to an independent Python
+decode. Two dead ends worth not repeating: a Lua `write_u16` marker probe
+into MAME's VRAM proves nothing, because the debug path writes the RAM
+share **without** calling `bgvideoram_w`, so `mark_tile_dirty` never
+fires and MAME keeps rendering cached tiles; and `register_frame_done`
+state produces frame N+1, not N.
 
 **The methodological lesson, which is the most reusable part.** This bug
-has now carried four wrong conclusions — stale-serve, a 1-pixel shift,
-timing closure, and "hardware-only" — plus several more during the
-2026-09-14 session (sprite load, SDRAM bandwidth via `TB_RAM_PER2`, the
-whole analog-timing line). **Every one of them traces to comparing
-frames that were not the same scene.** The archive's own headline
+carried four wrong conclusions — stale-serve, a 1-pixel shift, timing
+closure, and "hardware-only" — plus several more during the 2026-09-14
+session (sprite load, SDRAM bandwidth via `TB_RAM_PER2`, the whole
+analog-timing line). **Every one of them traces to comparing frames that
+were not the same scene.** The defects were then found in about twenty
+minutes by reading `nmk16.cpp`'s `ssmissin_map()` and `init_ssmissin()`
+line by line against the RTL. **When a game-specific rendering fault
+resists pixel comparison, diff the driver source against the port before
+investing further in measurement** — a missing `init_*` decode or a
+mishandled `.mirror()` is invisible to every frame statistic and cheap to
+find by reading. The archive's own headline
 numbers — terrain mean colour-run 1.34 (hw) / 1.74 (MAME) / 2.28
 (reference sim) — were measured on non-corresponding frames and
 therefore never meant anything. Two specific traps:

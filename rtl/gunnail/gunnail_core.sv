@@ -107,6 +107,23 @@ module gunnail_core #(
 	// rtl/sdram.sv, loaded via ioctl_download.
 	parameter HW_ROMS           = 0,
 	parameter DBG_MISS_PAINT    = 0,
+	// ------------------------------------------------------------------
+	// Same-scene MAME comparison (2026-09-14, HW_ROMS=0 sim only, inert
+	// unless the files are given). The attract demo drifts from MAME
+	// within a minute (NMK-7), so a late scene cannot be compared by frame
+	// index. These load a MAME video-state dump straight into this core's
+	// own VRAM/palette arrays and hold the 68000 in reset, so the picture
+	// is rendered by the FULL core -- every per-game mux exactly as it
+	// ships -- rather than by a standalone video_macross2 whose ~20
+	// parameters would have to be hand-mirrored (and, being hand-mirrored,
+	// could not be trusted). sim/rtl/video_state's own header has the
+	// dump recipe. With the CPU held, the scroll/bank registers stay at
+	// their reset value, which is what ssmissin's own state is anyway.
+	parameter STATE_BGVRAM_FILE    = "",
+	parameter STATE_TXVRAM_FILE    = "",
+	parameter STATE_PALETTE_FILE   = "",
+	parameter STATE_SPRITERAM_FILE = "",   // words, loaded at mainram word 0x4000 (the sprite DMA source)
+	parameter VIDEO_ONLY           = 0,    // 1: hold the 68000 in reset (state injection only)
 	// cactus: the NMK214 configs the NMK-215 sends sabotenb (see the
 	// cactus block; verified against the sabotenb reference sim's trace)
 	parameter [7:0] CACTUS_CFG_SPR = 8'h02,
@@ -384,6 +401,13 @@ module gunnail_core #(
 	wire g_tdragonb = (game_sel == G_TDRAGONB) || (game_sel == G_TDRAGONB3);
 	wire g_tdragonb3 = (game_sel == G_TDRAGONB3);
 	wire g_tdb_dec  = (game_sel == G_TDRAGONB);   // decode_tdragonb (the program words and the BG/sprite bytes); tdragonb3 is unencrypted
+	// decode_ssmissin() is decode_tdragonb's GFX half and nothing else --
+	// nmk16.cpp calls it "Like Thunder Dragon Bootleg without the Program Rom
+	// Swapping", and its table is byte-identical to decode_data_tdragonbgfx:
+	// {7,6,5,3,4,2,1,0}, i.e. bits 3 and 4 swapped in every bgtile and sprites
+	// byte. The .mra streams the raw files, so the swap happens per fetch here.
+	// Program ROM is NOT swapped, so this must not reuse g_tdb_dec.
+	wire g_gfx_swap34 = g_tdb_dec | g_ssmissin;
 	wire g_strahljbl = (game_sel == G_STRAHLJBL);
 	wire g_gunnailb = (game_sel == G_GUNNAILB);
 	wire g_tomagic  = (game_sel == G_TOMAGIC);
@@ -644,7 +668,7 @@ module gunnail_core #(
 	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | mainram_dma_wait | palette_wait | bgvram_wait | bgvram2_wait | txvram_wait;
 
 	wire [7:0] nmk004_p4;
-	wire m68k_extReset = reset | (nmk004_p4[0] & has_nmk004) | prot_loading; // prot_loading: see the protection firmware loader
+	wire m68k_extReset = reset | (nmk004_p4[0] & has_nmk004) | prot_loading | (VIDEO_ONLY != 0); // prot_loading: see the protection firmware loader; VIDEO_ONLY: state-injection render, nothing may overwrite the injected RAM
 
 	wire halt_68k;
 	assign dbg_halt_68k = halt_68k;
@@ -1261,6 +1285,39 @@ module gunnail_core #(
 	// Lane arrays + true-dual-port shared port, as mainram above (NMK-10).
 	reg [7:0] bgvram_hi [0:8191];
 	reg [7:0] bgvram_lo [0:8191];
+
+	// MAME video-state injection (see the STATE_* parameters). Word files;
+	// split into this core's own byte lanes. Inert when the file is "".
+`ifdef SIMULATION
+	reg [15:0] st_bg [0:8191];
+	reg [15:0] st_tx [0:2047];
+	reg [15:0] st_sp [0:2047];
+	integer st_i;
+	initial begin
+		if (STATE_BGVRAM_FILE != "") begin
+			$readmemh(STATE_BGVRAM_FILE, st_bg);
+			for (st_i = 0; st_i < 8192; st_i = st_i + 1) begin
+				bgvram_hi[st_i] = st_bg[st_i][15:8];
+				bgvram_lo[st_i] = st_bg[st_i][7:0];
+			end
+		end
+		if (STATE_TXVRAM_FILE != "") begin
+			$readmemh(STATE_TXVRAM_FILE, st_tx);
+			for (st_i = 0; st_i < 2048; st_i = st_i + 1) begin
+				txvram_hi[st_i] = st_tx[st_i][15:8];
+				txvram_lo[st_i] = st_tx[st_i][7:0];
+			end
+		end
+		if (STATE_PALETTE_FILE != "") $readmemh(STATE_PALETTE_FILE, palette);
+		if (STATE_SPRITERAM_FILE != "") begin
+			$readmemh(STATE_SPRITERAM_FILE, st_sp);
+			for (st_i = 0; st_i < 2048; st_i = st_i + 1) begin
+				mainram_hi[15'h4000 + st_i] = st_sp[st_i][15:8];
+				mainram_lo[15'h4000 + st_i] = st_sp[st_i][7:0];
+			end
+		end
+	end
+`endif
 	wire [12:0] bgvram_addr = byte_addr[13:1];
 	reg  [15:0] bgvram_dout;
 	wire        bgvram_ready;
@@ -1363,7 +1420,17 @@ module gunnail_core #(
 	// Lane arrays + true-dual-port shared port, as mainram above (NMK-10).
 	reg [7:0] txvram_hi [0:2047];
 	reg [7:0] txvram_lo [0:2047];
-	wire [10:0] txvram_addr = byte_addr[11:1];
+	// ssmissin_map's TX is 0x0D0000-0x0D07FF .mirror(0x1800): only 1024
+	// words, with address bits 12 and 11 DON'T-CARE. Bit 12 falls out of
+	// this 11-bit index already, but bit 11 must be masked or a mirrored
+	// write lands at word 1024+ instead of aliasing into 0-1023. ssmissin
+	// itself never uses the mirror, but airattck/airattcka (the same map and
+	// game id) write through it EXCLUSIVELY -- 4096 of 4096 writes measured
+	// in MAME -- so without this their TX layer is entirely lost.
+	// Every other board here maps 0x800 of TX with no mirror (bit 11 never
+	// set), and tomagic maps a real 0x1000 with bit 12 as its mirror, so the
+	// unmasked index stays correct for them.
+	wire [10:0] txvram_addr = g_ssmissin ? {1'b0, byte_addr[10:1]} : byte_addr[11:1];
 	reg  [15:0] txvram_dout;
 	wire        txvram_ready;
 	wire        prot_txvram_ready;
@@ -2839,7 +2906,7 @@ module gunnail_core #(
 		.spr_flip_en(g_tharrier | g_afega), .spr_lag1(g_bjtwin), .vis_start(vt_line_start & (vt_vcount == 10'd16)),
 		.bg_bank(bgbank_reg),
 		.game_powerins(1'b0), .tile_lsb(g_redhawkb), .bg_8bpp(g_afega_8bpp), .bg_code_mod12k((game_sel == G_BUBL2000) || (game_sel == G_HOTBUBLA)), .tx_xscroll(g_afega ? afega_txx : 9'd0), .tx_off(g_afega & g_afega_tx_off), .spr_off(g_afega_spr_off),
-		.gfx_swap34(g_tdb_dec), .spr_bitrev(g_tomagic),
+		.gfx_swap34(g_gfx_swap34), .spr_bitrev(g_tomagic),
 		.base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE_A), .base_word_sprites(BASE_WORD_SPRITES),
 		.tilerambank(2'd0),
 		.rd_x(rd_x), .rd_y(rd_y), .rd_rgb(rd_rgb),

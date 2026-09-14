@@ -1,23 +1,54 @@
 // Video-only harness: rtl/macross2/video_macross2.sv (HW_ROMS=0) fed with a
-// MAME video-state dump (scroll tables, BG/TX VRAM, palette, the sprite RAM
-// copy, tilebank) of one frame, so a single rendered frame can be compared
-// pixel-for-pixel with MAME's snapshot of that same frame. Used to verify
-// the per-line (raster) scroll path with real per-row table contents, which
-// the attract demo only exercises after the sim and MAME have drifted apart.
-// Parameters select the game's own video configuration (gunnail here).
+// MAME video-state dump (scroll, BG/TX VRAM, palette, the sprite RAM copy,
+// tilebank) of one frame, so a single rendered frame can be compared
+// pixel-for-pixel with MAME's snapshot of that same frame. This is the tool
+// for any check the attract demo cannot give, because sim and MAME drift
+// apart within a minute (NMK-7) and frame indices then stop corresponding.
+//
+// Two scroll shapes are supported (RASTER):
+//   RASTER=1 (gunnail, the original use) — per-line scroll tables, read
+//            through scrollram/scrollramy.
+//   RASTER=0 (ssmissin, 2026-09-14) — the four byte-wide scroll registers
+//            at 0x0C4000-7 (scroll_w<0>, umask16(0x00ff)), supplied whole as
+//            the BG_XSCROLL/BG_YSCROLL inputs. Added to settle NMK-20: its
+//            striped scenes only appear ~5000 frames in, long after the demo
+//            has drifted, so a same-scene MAME comparison needs this harness.
+//
+// The runtime layer configuration below mirrors what gunnail_core.sv passes
+// to video_macross2 for the game in question; the defaults reproduce the
+// original gunnail set-up exactly.
 module video_state_top #(
 	parameter FGTILE_FILE = "", parameter BGTILE_FILE = "", parameter SPRITES_FILE = "",
 	parameter SCROLLRAM_FILE = "", parameter SCROLLRAMY_FILE = "", parameter BGVRAM_FILE = "",
 	parameter TXVRAM_FILE = "", parameter PALETTE_FILE = "", parameter SPRITERAM_FILE = "",
 	parameter integer SPRITES_BYTES = 2097152,
 	parameter SPR_COLOUR_BITS = 4, parameter [9:0] TX_PAL_BASE_P = 10'h200, parameter BG_CODE_BITS = 13,
-	parameter NMK214 = 1, parameter [7:0] NMK214_CFG_SPR = 8'h02, parameter [7:0] NMK214_CFG_BG = 8'h0E
+	parameter NMK214 = 1, parameter [7:0] NMK214_CFG_SPR = 8'h02, parameter [7:0] NMK214_CFG_BG = 8'h0E,
+	// --- runtime layer configuration (gunnail_core.sv's own values) ---
+	parameter RASTER      = 1,          // runtime gate: 1 per-line scroll tables, 0 the scroll registers
+	// gunnail_core.sv ALWAYS instantiates video_macross2 with RASTER_SCROLL(1)
+	// and TX_EXTERNAL(1), gating the per-line path at runtime instead, so mirror
+	// that here rather than switching the parameter -- they are not equivalent.
+	parameter RASTER_SCROLL_P = 1,
+	parameter TX_EXTERNAL_P   = 1,
+	parameter LOWRES      = 0,          // set_screen_lowres: 256 visible, bitmap_x0 92
+	parameter NMK214_EN   = 1,
+	parameter SPR_SWAP    = 1,
+	parameter CFG_RT      = 0,          // 1: take the palette bases / masks from the *_I parameters below
+	parameter [10:0] BGA_PAL_I = 11'h000, parameter [10:0] BGB_PAL_I = 11'h000,
+	parameter [10:0] SPR_PAL_I = 11'h000, parameter [10:0] TX_PAL_I  = 11'h000,
+	parameter [13:0] BGA_MASK_I = 14'h0000, parameter [13:0] BGB_MASK_I = 14'h0000,
+	parameter [17:0] SPR_UNITS_I = 18'd0,
+	parameter [14:0] SPRDMA_WORD = 15'h4000
 ) (
 	input clk_sys, input reset,
 	input [7:0] bg_bank,
 	input [1:0] tilerambank,
 	input sprite_dma_trigger,
 	output sprite_dma_busy,
+	// RASTER=0 only: the whole-layer scroll, from the game's scroll registers.
+	input [15:0] bg_xscroll_i, input [15:0] bg_yscroll_i,
+	input [7:0]  tx_yscroll_i,
 	input [8:0] rd_x, input [7:0] rd_y, output [23:0] rd_rgb
 );
 	reg [15:0] scrollram [0:255];  reg [15:0] scrollramy [0:255];
@@ -45,13 +76,13 @@ module video_state_top #(
 	end
 	video_macross2 #(
 		.FGTILE_FILE(FGTILE_FILE), .BGTILE_FILE(BGTILE_FILE), .SPRITES_FILE(SPRITES_FILE),
-		.HW_ROMS(0), .RASTER_SCROLL(1), .SPRITES_BYTES(SPRITES_BYTES),
+		.HW_ROMS(0), .RASTER_SCROLL(RASTER_SCROLL_P), .TX_EXTERNAL(TX_EXTERNAL_P), .SPRITES_BYTES(SPRITES_BYTES),
 		.SPR_COLOUR_BITS(SPR_COLOUR_BITS), .TX_PAL_BASE_P(TX_PAL_BASE_P), .BG_CODE_BITS(BG_CODE_BITS), .NMK214(NMK214)
 	) video (
 		.clk_sys(clk_sys), .reset(reset),
 		.game_powerins(1'b0), .tile_lsb(1'b0), .bg_8bpp(1'b0), .bg_code_mod12k(1'b0), .tx_xscroll(9'd0), .tx_off(1'b0), .spr_off(1'b0), .gfx_swap34(1'b0), .spr_bitrev(1'b0), .base_word_fgtile(23'd0), .base_word_bgtile(23'd0), .base_word_sprites(23'd0),
-		.lowres(1'b0), .raster_scroll(1'b1), .cfg_rt(1'b0), .bga_pal_base_i(11'd0), .bgb_pal_base_i(11'd0), .spr_pal_base_i(11'd0), .tx_pal_base_i(11'd0),
-		.bga_code_mask_i(14'd0), .bgb_code_mask_i(14'd0), .spr_units_i(18'd0), .sprdma_word_base(15'h4000), .nmk214_en(1'b1), .spr_swap(1'b1), .tx_bg_mode(1'b0), .tx_yscroll(8'd0), .tx_bank_off(24'd0), .spr_flip_en(1'b0), .spr_lag1(1'b0), .vis_start(1'b0),
+		.lowres((LOWRES != 0)), .raster_scroll((RASTER != 0)), .cfg_rt((CFG_RT != 0)), .bga_pal_base_i(BGA_PAL_I), .bgb_pal_base_i(BGB_PAL_I), .spr_pal_base_i(SPR_PAL_I), .tx_pal_base_i(TX_PAL_I),
+		.bga_code_mask_i(BGA_MASK_I), .bgb_code_mask_i(BGB_MASK_I), .spr_units_i(SPR_UNITS_I), .sprdma_word_base(SPRDMA_WORD), .nmk214_en((NMK214_EN != 0)), .spr_swap((SPR_SWAP != 0)), .tx_bg_mode(1'b0), .tx_yscroll(tx_yscroll_i), .tx_bank_off(24'd0), .spr_flip_en(1'b0), .spr_lag1(1'b0), .vis_start(1'b0),
 		.bg2_en(1'b0), .bga_rom2(1'b0), .bgb_rom2(1'b0), .base_word_bgtile_b(23'd0), .bgvram_b_addr(), .bgvram_b_data(16'd0), .bgb_xscroll(16'd0), .bgb_yscroll(16'd0),
 		.txc_addr(), .txc_req(), .txc_busy(1'b0), .txc_valid(1'b0), .txc_dout(16'd0), .txc_dout_pair(32'd0),
 		.sprite_dma_trigger(sprite_dma_trigger), .sprite_dma_busy(sprite_dma_busy),
@@ -60,7 +91,7 @@ module video_state_top #(
 		.palette_addr(pal_addr), .palette_data(palette[pal_addr]),
 		.spr_palette_addr(spal_addr), .spr_palette_data(palette[spal_addr]),
 		.mainram_addr(mainram_addr), .mainram_data(mainram[mainram_addr]), .mainram_ready(1'b1),
-		.bg_xscroll(16'd0), .bg_yscroll(16'd0),
+		.bg_xscroll(bg_xscroll_i), .bg_yscroll(bg_yscroll_i),
 		.scrollram_0(scrollram[0]), .scrollramy_0(scrollramy[0]),
 		.scroll_row_addr(row), .scrollram_row(scrollram[row]), .scrollramy_row(scrollramy[row]),
 		.nmk214_cfg_we(cfg_we), .nmk214_cfg_data(cfg_data),
