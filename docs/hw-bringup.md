@@ -3448,6 +3448,115 @@ it was assumed to be blind to NMK-20. On 2026-09-14 the board was shown
 to produce output byte-identical to that same reference sim on a striped
 scene, which is what disproved the hardware-only diagnosis. See NMK-20.
 
+## Many Block on the Gunnail rbf (2026-09-14) — the 256x240 screen and the scroll RAM
+
+`manybloc` (game id 54) is the last NMK16 board in `nmk16.cpp` that has
+never been in this tree. It had been left out for one reason, recorded
+in the archived attempt's own comment: its 4 KB "scroll" RAM was written
+with three combinational reads (the CPU read port and one tap per scroll
+word), Quartus could not infer M10K from them, and the 2048 x 16 array
+landed as flops — **65K to 163K logic cells**, more than the device has.
+
+### What the board actually is
+
+Read against MAME rather than assumed from the archive:
+
+- `manybloc()` is `tharrier()`'s sound board exactly — Z80 on
+  `tharrier_sound_map` (ROM 0-BFFF, RAM C000-C7FF, soundlatch F000,
+  OKIs F400/F500, their banks F600/F700, YM2203 on I/O 00/01) — with
+  one difference, a 3 MHz Z80 instead of 4.9152 MHz (`z80_inc` 7500).
+  `gfx_tharrier`, `get_sprite_flip`, two OKIs at 4 MHz pin 7 low, and
+  `init_tharrier`'s `+0x20000` bank entries with a write of 3 ignored.
+  `oki2`'s ROM_REGION is `ROMREGION_ERASE00` with nothing in it: the
+  chip is fitted and clocked but silent, so the `.mra` zero-fills its
+  0x80000 slot to keep the region offsets contiguous.
+- `manybloc_map` is its own: I/O at 0x080000 with **DSW1 as one 16-bit
+  port at +4** (SW1 low byte, SW2 high — the opposite of mustang's and
+  tharrier's), `flipscreen_w` at +0x15, and soundlatch write **and**
+  soundlatch2 read sharing 0x08001F (every other board here reads the
+  latch at +0xE). Palette 0x088000 (512 entries), bgvideoram 0x090000,
+  the scroll RAM 0x09C000-0x09CFFF, txvideoram 0x09D000, mainram
+  0x0F0000.
+- **Every input and DIP bit is `IP_ACTIVE_HIGH`.** IN0 carries no input
+  at all (0x7fff `IPT_UNUSED` active high, bit 15 an active-low
+  `IPT_UNKNOWN`), so it is the constant 0x8000; IN1 is tharrier's own
+  IN2 bit order with start1/coin1/start2/coin2 filling the four spare
+  corners at bits 0/7/8/15. Unmapped reads therefore return 0x0000 here
+  (MAME's unmap value), not the 0xFFFF the NMK boards use — 0xFFFF on
+  this board reads as "everything pressed". The `.mra` `<switches>`
+  default is the raw MAME default word `08,00`, not all-ones.
+- `manybloc_scanline` is not a V-PROM: sprite DMA **and** IRQ4 at
+  scanline 248, IRQ2 at scanline 0, IRQ1 from `set_periodic_int(56 Hz)`
+  — pinned to a mid-frame scanline in `nmk_irq_hacky.sv`, since the
+  screen runs at 56 Hz too and the periodic timer's phase against the
+  raster is arbitrary. The DMA is a single buffer (`old2 <- mainram`,
+  drawn next frame), which is `spr_lag1`, bjtwin's shape.
+- `manybloc_scroll_w` keeps the whole 4 KB as plain `.ram()` and
+  re-derives the BG scroll from two fixed words on every write to the
+  region: `0x82/2` (word 0x41) is scrollx, `0xc2/2` (word 0x61)
+  scrolly. `bg_update()` takes its per-line branch only when **both**
+  `m_gunnail_scrollram` and `m_gunnail_scrollramy` exist; manybloc
+  shares only the first, so it is the plain single-scroll draw.
+
+### The scroll RAM, done as M10K
+
+Byte-lane arrays with a **single registered read port** and a
+`manybloc_scr_ready` comparator in the DTACK chain (the same shape as
+`g_txvram_hw`), with the two scroll words mirrored into ordinary
+registers on write so the video side never reads the array at all.
+Cost: the Gunnail fit went from 26,554 ALMs to **26,492** and 413/553
+M10K, worst setup slack +0.577 ns — i.e. the whole game fits in the
+noise, against the +98K logic cells the async version cost.
+
+### The 256x240 screen
+
+`manybloc` is the only board in this driver that calls neither
+`set_screen_lowres` nor `_midres`/`_hires`: `set_size(256,256)` with
+`set_visarea(0,255,8,247)` and **no `set_videoshift`**, i.e. 240 visible
+lines whose bitmap origin is (0,8). Three modules take a `tall240`
+input for it:
+
+- `video_timing.sv` — vactive 8..247 instead of 16..239. VTOTAL (278)
+  and the 64 us line are unchanged, so the frame rate is
+  8 MHz/512/278 = 56.2 Hz, which is `set_refresh_hz(56)`, and MAME's
+  scanline callbacks at vpos 0/248 line up with `vcount` 0/248 exactly.
+- `video_macross2.sv` — `bitmap_y0` 8 instead of 16 (both for `bm_y`
+  and for the sprite `s_sy`), and a `screen_h_vis` of 240. The
+  **horizontal** pair needs nothing: every x expression here is
+  `rd_x + bitmap_x0 - VIDEOSHIFT`, and MAME's `bitmap_x0` and
+  `scrolldx`/`videoshift` are 92/92 for lowres and 0/0 here, so the
+  difference cancels exactly. `SCREEN_H` became a parameter (224
+  default, 240 from `gunnail_core`) so the Macross2/Raphero rbfs do not
+  pay the extra ~12 M10K of sprite plane for a mode they cannot enter.
+- `video_retime.sv` — the same window on both the write and read sides,
+  and `vrel` measured from line 248, so the regenerated VSync sits 24
+  lines into the 30-line vblank instead of the usual 38.
+
+### Verification
+
+Reference sim (`make GAME=manybloc` in `sim/rtl/gunnail_mg`, 320M
+cycles, 450 frames, `TB_DSW1=0008` for the active-high defaults) against
+MAME 0.289 frames captured through `screen:pixels()` — **not**
+`machine.video:snapshot()`, which under `-video none` hands back a stale
+bitmap and made MAME's first ~50 frames look like colour bars while its
+palette RAM was provably all zero.
+
+390 frames compared from the first non-black one: **352 pixel-exact**.
+The 38 that are not: one 100 % frame at the boot flash (a one-frame
+timing difference), two transition frames, two frames where the
+blinking "PLEASE INSERT COIN" is on in the sim and off in the MAME
+frame the +-8 search could reach, and a run of **4-7 px** differences
+during the demo — one column of a fireball that moves ~1 px per frame,
+with the two timelines one frame apart.
+
+Hardware: `Arcade-Gunnail_20260914.rbf` on the DE10-Nano outputs
+256x240, boots, plays its attract demo and sounds right. Native
+screenshots taken one second apart from the core load: **9 of 13 are
+byte-identical to a MAME frame**, the title screen among them; the other
+four are in the moving demo, where the two runs' timelines diverge as
+they do for every game here. A separate 16-shot and a 40-shot burst
+added three more exact matches.
+
 ## Status
 
 Four RBFs run on the DE10-Nano and are tracked in `releases/`:

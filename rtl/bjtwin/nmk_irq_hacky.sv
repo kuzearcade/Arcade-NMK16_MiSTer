@@ -30,6 +30,19 @@ module nmk_irq_hacky (
 	input        iack_cycle,   // FC=111 & ~ASn, from bjtwin_core
 	input  [3:1] iack_level,   // eab[3:1] during an iack cycle == level being acked
 
+	// manybloc (nmk16.cpp manybloc_scanline + set_periodic_int, 2026-09-14):
+	// a different fixed table on a 240-line screen --
+	//   scanline 248 -> sprite DMA, then IRQ4   (both in the same callback,
+	//                   the memcpy first: vpos 248 is the line after the
+	//                   last visible one, visarea y = 8..247)
+	//   scanline   0 -> IRQ2
+	//   IRQ1         -> set_periodic_int(attotime::from_hz(56)), i.e. once
+	//                   per frame at a phase unrelated to the raster (the
+	//                   screen also runs at 56 Hz). Pinned to a mid-frame
+	//                   scanline here so it never lands on either of the
+	//                   other two.
+	input        manybloc,
+
 	output [2:0] ipl_level,    // 0,1,2,4 — see bjtwin_core's IPLn encoding
 	output       sprite_dma_trigger
 );
@@ -43,6 +56,10 @@ module nmk_irq_hacky (
 	reg pending1, pending2, pending4;
 	reg sprdma_pulse;
 
+	localparam MB_IRQ4_SPRDMA = 248;
+	localparam MB_IRQ2        = 0;
+	localparam MB_IRQ1        = 128;
+
 	always @(posedge clk_sys) begin
 		sprdma_pulse <= 1'b0;
 
@@ -52,6 +69,14 @@ module nmk_irq_hacky (
 			pending4 <= 1'b0;
 		end else begin
 			if (line_start) begin
+				if (manybloc) begin
+					case (vcount)
+						MB_IRQ4_SPRDMA: begin pending4 <= 1'b1; sprdma_pulse <= 1'b1; end
+						MB_IRQ2:        pending2 <= 1'b1;
+						MB_IRQ1:        pending1 <= 1'b1;
+						default: ;
+					endcase
+				end else
 				case (vcount)
 					SL_IRQ2:   pending2 <= 1'b1;
 					SL_IRQ1_A: pending1 <= 1'b1;

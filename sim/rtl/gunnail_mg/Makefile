@@ -62,6 +62,7 @@ SEL_nouryoku := 17
 SEL_cactus   := 18
 SEL_nouryokup := 19
 SEL_tharrier := 20
+SEL_manybloc := 54
 SEL_vandykeb := 21
 SEL_mustangb3 := 22
 # Afega (Family H): ids 23-43, see gunnail_core.sv; hex from `tools/gen_gunnail_mra.py --simroms <set> ../<set>/roms`
@@ -126,11 +127,11 @@ endif
 ifeq ($(GAME),hachamfb)
 EXT := ../tlcs90/roms/hachamf_ext.hex
 endif
-ifneq ($(filter $(GAME),bjtwin bjtwinp bjtwinpa sabotenb nouryoku cactus nouryokup tharrier vandykeb mustangb3 ssmissin airattck airattcka twinactn dolmen dolmenk puzlwrld $(AFEGA_SETS) $(FAME_SETS)),)
+ifneq ($(filter $(GAME),bjtwin bjtwinp bjtwinpa sabotenb nouryoku cactus nouryokup tharrier manybloc vandykeb mustangb3 ssmissin airattck airattcka twinactn dolmen dolmenk puzlwrld $(AFEGA_SETS) $(FAME_SETS)),)
 EXT :=
 endif
 AUDIOCPU :=
-ifneq ($(filter $(GAME),tharrier mustangb3 ssmissin airattck airattcka twinactn dolmen dolmenk puzlwrld $(AFEGA_SETS) $(FAME_SETS)),)
+ifneq ($(filter $(GAME),tharrier manybloc mustangb3 ssmissin airattck airattcka twinactn dolmen dolmenk puzlwrld $(AFEGA_SETS) $(FAME_SETS)),)
 AUDIOCPU := $(R)_audiocpu.hex
 endif
 OKI2 := $(R)_oki2.hex
@@ -177,8 +178,13 @@ $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gc.cpp $(FX68K_DIR)/fx68k.sv
 		-o V$(TOP)
 	cp $(FX68K_DIR)/microrom.mem $(FX68K_DIR)/nanorom.mem .
 
+SCREEN_H := 224
+ifeq ($(GAME),manybloc)
+SCREEN_H := 240
+endif
+
 run: $(OBJ_DIR)/V$(TOP)
-	TB_GAME_SEL=$(SEL) TB_PREFIX=$(GAME) ./$(OBJ_DIR)/V$(TOP) $(CYCLES)
+	TB_GAME_SEL=$(SEL) TB_PREFIX=$(GAME) TB_SCREEN_H=$(SCREEN_H) ./$(OBJ_DIR)/V$(TOP) $(CYCLES)
 
 clean:
 	rm -rf obj_dir_* *_sys.trace *_cyc.trace *_68k.trace *_video.trace *_frame_*.ppm microrom.mem nanorom.mem

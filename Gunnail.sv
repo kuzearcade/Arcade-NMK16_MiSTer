@@ -121,8 +121,8 @@ wire        game_vertical = (game_sel == 6'd0) | (game_sel == 6'd1) | (game_sel 
                             (game_sel == 6'd35) | (game_sel == 6'd36) | (game_sel == 6'd41) |
                             // Family E ROT270 sets: acrobatmbl, tdragonb, tdragonb3, gunnailb
                             (game_sel == 6'd45) | (game_sel == 6'd47) | (game_sel == 6'd48) | (game_sel == 6'd50) |
-                            // ssmissin (52) is ROT270
-                            (game_sel == 6'd52);
+                            // ssmissin (52) is ROT270, manybloc (54) ROT270
+                            (game_sel == 6'd52) | (game_sel == 6'd54);
 // MAME ORIENTATION_FLIP_Y sets (grdnstrm, grdnstrmau, firehawk, spec2kh): the
 // board draws upside down for a monitor mounted that way; the picture is
 // read out bottom-up (rd_y mirrored) so it displays upright, as MAME does.
@@ -302,7 +302,7 @@ end
 // mustang and tharrier read ONE 16-bit DSW port at 0x080004 (SW2 in the
 // low byte, SW1 in the high byte), so their second switch byte rides in
 // dsw1's high half; every other board reads two byte-wide ports.
-wire        game_mustang = (game_sel == 6'd3) | (game_sel == 6'd12) | (game_sel == 6'd20) | (game_sel == 6'd22) | ((game_sel >= 6'd23) & (game_sel <= 6'd44)) | (game_sel == 6'd52) | (game_sel == 6'd53) | (game_sel == 6'd56); // mustang, mustangs, tharrier, mustangb3, every Afega board and mustangb: one 16-bit DSW port; ssmissin reads one too (0x0C0006), and the twinactn family reads mustang's own at 0x080004
+wire        game_mustang = (game_sel == 6'd3) | (game_sel == 6'd12) | (game_sel == 6'd20) | (game_sel == 6'd22) | ((game_sel >= 6'd23) & (game_sel <= 6'd44)) | (game_sel == 6'd52) | (game_sel == 6'd53) | (game_sel == 6'd54) | (game_sel == 6'd56); // mustang, mustangs, tharrier, mustangb3, every Afega board and mustangb: one 16-bit DSW port; ssmissin reads one too (0x0C0006), the twinactn family reads mustang's own at 0x080004, and manybloc has one at 0x080004 too (SW1 low, SW2 high, every bit ACTIVE HIGH)
 // NB: the reference sim cannot catch a miss here -- it drives TB_DSW1/TB_DSW2
 // all-FF, so both halves read 0xFF whether or not the game is in this list.
 // acrobatmbl reads its DSW1 word with SW1 in the HIGH byte ("changed from move.w to move.b"), DSW2 as acrobatm
@@ -379,7 +379,10 @@ wire signed [15:0] audio_l, audio_r;
 // 256-px one (the truncated subtraction underflows to >= the width during
 // blanking, which video_macross2.sv's rd_in_range reads as "not visible").
 wire [8:0] rd_x_screen = hcount_core[8:0] - (lowres ? 9'd92 : 9'd28);
-wire [7:0] rd_y_raw    = vcount_core[7:0] - 8'd16;
+// manybloc's window is 240 lines from raster line 8, not 224 from 16
+// (set_visarea(0,255,8,247), see video_timing.sv's tall240).
+wire       game_manybloc = (game_sel == 6'd54);
+wire [7:0] rd_y_raw    = vcount_core[7:0] - (game_manybloc ? 8'd8 : 8'd16);
 wire [7:0] rd_y_screen = game_flip_y ? (8'd223 - rd_y_raw) : rd_y_raw; // out-of-range (blanking) values stay >= 224 either way
 
 // VTIMING_FILE: nmk_irq.sv's V-PROMs are baked in at synthesis via
@@ -470,7 +473,7 @@ video_retime #(
 ) video_retime (
 	.clk_w(clk_sys), .reset_w(reset), .ce_w(ce_pix_core),
 	.hcount_w(hcount_core), .vcount_w(vcount_core), .rgb_w(rd_rgb),
-	.mode1(lowres), .hshift_sel(hshift_sel), .vshift_sel(vshift_sel),
+	.mode1(lowres), .tall240(game_manybloc), .hshift_sel(hshift_sel), .vshift_sel(vshift_sel),
 	.clk_r(clk_vid),
 	.ce_r(CE_PIXEL), .rgb_r(retimed_rgb), .hs_r(VGA_HS), .vs_r(VGA_VS), .de_r(VGA_DE)
 );

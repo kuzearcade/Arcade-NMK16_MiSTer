@@ -649,7 +649,7 @@ pll_video pll_video
 video_retime video_retime (
 	.clk_w(clk_sys), .reset_w(reset), .ce_w(ce_pix_core),
 	.hcount_w(hcount_core), .vcount_w(vcount_core), .rgb_w(final_rgb),
-	.mode1(game_powerins), .hshift_sel(hshift_sel), .vshift_sel(vshift_sel),
+	.mode1(game_powerins), .tall240(1'b0), .hshift_sel(hshift_sel), .vshift_sel(vshift_sel),
 	.clk_r(clk_vid),
 	.ce_r(CE_PIXEL), .rgb_r(retimed_rgb), .hs_r(VGA_HS), .vs_r(VGA_VS), .de_r(VGA_DE)
 );

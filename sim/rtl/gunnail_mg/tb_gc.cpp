@@ -17,19 +17,30 @@
 static constexpr uint64_t RESET_CYCLES = 200;
 static uint64_t RUN_CYCLES = 300000000; // override via argv[1]
 static constexpr int SCREEN_W = 384;
-static constexpr int SCREEN_H = 224;
+// 224 for every set but manybloc, whose window is 240 lines
+// (set_visarea(0,255,8,247)); TB_SCREEN_H=240 selects it.
+static constexpr int SCREEN_H_MAX = 240;
+static int SCREEN_H = 224;
 
 int main(int argc, char **argv) {
 	VerilatedContext contextp;
 	contextp.commandArgs(argc, argv);
 	if (argc > 1) RUN_CYCLES = strtoull(argv[1], nullptr, 0);
+	if (std::getenv("TB_SCREEN_H")) SCREEN_H = atoi(std::getenv("TB_SCREEN_H"));
 
 	Vgunnail_core top{&contextp};
 	const int game_sel = std::getenv("TB_GAME_SEL") ? atoi(std::getenv("TB_GAME_SEL")) : 0;
 	const std::string prefix = std::getenv("TB_PREFIX") ? std::getenv("TB_PREFIX") : "gunnail";
 	top.game_sel = game_sel;
-	// TB_DSW1/TB_DSW2: the .mra <switches> bytes (0xFF = every switch off); the core is built with SIM_DSW=1
-	top.dsw1_i = 0xFF00 | (std::getenv("TB_DSW1") ? strtoul(std::getenv("TB_DSW1"), nullptr, 16) : 0xFF);
+	// TB_DSW1/TB_DSW2: the .mra <switches> bytes (0xFF = every switch off); the core is built with SIM_DSW=1.
+	// A TB_DSW1 above 0xFF is taken as the whole 16-bit port instead (the
+	// one-port boards put switch byte 1 in its high half; manybloc needs
+	// that half, since every DIP bit on that board is ACTIVE HIGH and
+	// 0xFF would mean "every switch on", Test Mode included).
+	{
+		unsigned long d1 = std::getenv("TB_DSW1") ? strtoul(std::getenv("TB_DSW1"), nullptr, 16) : 0xFF;
+		top.dsw1_i = (d1 > 0xFF) ? d1 : (0xFF00 | d1);
+	}
 	top.dsw2_i = 0xFF00 | (std::getenv("TB_DSW2") ? strtoul(std::getenv("TB_DSW2"), nullptr, 16) : 0xFF);
 	if (game_sel == 3 || game_sel == 12 || game_sel == 20 || game_sel == 22 || (game_sel >= 23 && game_sel <= 44)) top.dsw1_i = (top.dsw2_i << 8) | (top.dsw1_i & 0xFF); // mustang/tharrier/afega/mustangb: one 16-bit port, SW1 in the high byte
 	else if (game_sel == 45) top.dsw1_i = ((top.dsw1_i & 0xFF) << 8) | 0xFF; // acrobatmbl: SW1 in the high byte of the DSW1 word, DSW2 as acrobatm
@@ -250,7 +261,7 @@ int main(int argc, char **argv) {
 
 		bool frame_done_now = top.frame_done;
 		if (!prev_frame_done && frame_done_now) {
-			uint8_t bytes[SCREEN_W * SCREEN_H * 3];
+			uint8_t bytes[SCREEN_W * SCREEN_H_MAX * 3];
 			size_t bi = 0;
 			for (int y = 0; y < SCREEN_H; y++) {
 				for (int x = 0; x < SCREEN_W; x++) {

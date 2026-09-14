@@ -33,6 +33,14 @@ module video_timing (
 	input        clk_sys,
 	input        ce_pix,     // 8MHz pixel-clock enable
 	input        reset,
+	// manybloc (2026-09-14) is the one board here whose screen is not
+	// set_screen_lowres: set_size(256,256) + set_visarea(0,255,8,247), so
+	// 240 visible lines from raster line 8 instead of 224 from line 16.
+	// VTOTAL and the line period are unchanged (512 px at 8 MHz = 64 us),
+	// which puts the frame rate at 8e6/512/278 = 56.2 Hz -- manybloc's own
+	// set_refresh_hz(56). MAME's manybloc_scanline fires off screen vpos,
+	// and vpos 0/248 line up with vcount 0/248 exactly under this window.
+	input        tall240,
 
 	output reg [9:0] hcount,  // 0..511
 	output reg [9:0] vcount,  // 0..277
@@ -47,11 +55,13 @@ module video_timing (
 	localparam HACTIVE_END   = 412; // exclusive
 	localparam VACTIVE_START = 16;
 	localparam VACTIVE_END   = 240; // exclusive
+	wire [9:0] vactive_start = tall240 ? 10'd8   : VACTIVE_START[9:0];
+	wire [9:0] vactive_end   = tall240 ? 10'd248 : VACTIVE_END[9:0];   // exclusive
 
 	always @(posedge clk_sys) begin
 		if (reset) begin
 			hcount <= 10'd0;
-			vcount <= VACTIVE_END[9:0]; // see header — matches MAME's own reset-time raster phase
+			vcount <= vactive_end;      // see header — matches MAME's own reset-time raster phase
 		end else if (ce_pix) begin
 			if (hcount == HTOTAL - 1) begin
 				hcount <= 10'd0;
@@ -64,6 +74,6 @@ module video_timing (
 
 	assign line_start = ce_pix & (hcount == 10'd0);
 	assign hblank = (hcount < HACTIVE_START) || (hcount >= HACTIVE_END);
-	assign vblank = (vcount < VACTIVE_START) || (vcount >= VACTIVE_END);
+	assign vblank = (vcount < vactive_start) || (vcount >= vactive_end);
 
 endmodule

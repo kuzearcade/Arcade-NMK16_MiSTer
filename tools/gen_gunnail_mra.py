@@ -693,6 +693,50 @@ PUZLWRLD = dict(
         (OKI_TWIN_NOTE, [("afega2.su12", "667c208a"), ("afega2.su12", "667c208a"), ("fill", 0x20000), ("afega3.su13", "1f042b9c")])])
 
 # ---------------------------------------------------------------------------
+# Many Block (Bee-Oh, 1991) -- gunnail_core id 54, Gunnail.rbf. tharrier's
+# board (Z80 + YM2203 + two OKIs, tharrier_sound_map, gfx_tharrier) with its
+# own 68000 map, its own 256x240 screen (set_size(256,256) +
+# set_visarea(0,255,8,247), no set_videoshift -- see video_timing.sv's
+# tall240) and a 4 KB scroll RAM at 0x09C000 whose words 0x41/0x61 are the BG
+# scroll (manybloc_scroll_w). Interrupts are manybloc_scanline's own fixed
+# table, not a V-PROM: sprite DMA + IRQ4 at line 248, IRQ2 at line 0, IRQ1
+# periodic at 56 Hz.
+#
+# EVERY input and DIP bit on this board is IP_ACTIVE_HIGH, so unlike every
+# other set here the <switches> default is the raw MAME default word rather
+# than all-ones: only Cabinet (SW1:4, 0x0008) defaults on. DSW1 is one 16-bit
+# port at 0x080004 with SW1 in the LOW byte and SW2 in the HIGH byte (the
+# opposite of mustang/tharrier, which is why the ids below run SW1 first).
+#
+# oki2's ROM_REGION is ROMREGION_ERASE00 with nothing loaded -- the chip is
+# fitted and clocked but has no samples -- so the .mra zero-fills its 0x80000
+# slot to keep the region offsets the core computes contiguous.
+# ---------------------------------------------------------------------------
+MANYBLOC = dict(
+    id=54, year=1991, manufacturer="Bee-Oh", rot=True, switches="08,00", category="Puzzle",
+    dips=[
+        ('0', "Slot System", "Off,On"), ('1', "Explanation", "English,Japanese"),
+        ('2', "Demo Sounds", "On,Off"), ('3', "Cabinet", "Cocktail,Upright"),
+        ('4', "Test Mode", "Off,On"),
+        ('5,6', "Difficulty", "Normal,Hard,Hardest,Easy"), ('7', "Flip Screen", "Off,On"),
+        ('8,10', "Coin A", "1C_1C,1C_2C,1C_3C,1C_4C,2C_1C,3C_1C,4C_1C,5C_1C"),
+        ('11,13', "Coin B", "1C_1C,1C_2C,1C_3C,1C_4C,2C_1C,3C_1C,4C_1C,5C_1C"),
+        ('14,15', "Plate Probability", "Normal,Better,Best,Bad"),
+    ],
+    regions=[
+        ("maincpu, 0x040000", [pair(("2-u35.bin", "04acd8c1"), ("1-u33.bin", "07473154"))]),
+        ("Z80 sound program, 0x010000", [("3-u146.bin", "7bf5fafa")]),
+        ("fgtile, 0x010000", [("12-u39.bin", "413b5438")]),
+        ("bgtile, 0x080000 (2 files)", [("5-u97.bin", "536699e6"), ("4-u96.bin", "28af2640")]),
+        ("sprites, 0x080000 (two ROM_LOAD16_BYTE pairs)",
+         [pair(("8-u54b.bin", "03eede77"), ("10-u86b.bin", "9eab216f")),
+          pair(("9-u53b.bin", "dfcfa040"), ("11-u85b.bin", "fe747dd5"))]),
+        ("oki1, 0x080000 (fixed 0x20000 = the first quarter of 6-u131.bin; banks 0-2 are the rest)",
+         [("6-u131.bin", "79a4ae75"), ("7-u132.bin", "21db875e")]),
+        ("oki2, 0x080000 (ROM_REGION ERASE00 -- the chip is fitted but has no samples)", [("fill", 0x80000)]),
+    ])
+
+# ---------------------------------------------------------------------------
 # Afega boards (Family H, 2026-09-13): gunnail_core.sv ids 23-43, one per
 # distinct configuration (decryptcode table, screen_update variant, ROM
 # sizes); every set below carries its own region list transcribed from
@@ -972,6 +1016,7 @@ SETS = [
     ("nouryokup",   "Nouryoku Koujou Iinkai (prototype)",                          10761, NOURYOKUP, "nouryoku", {}),
     ("mustangb3",   "US AAF Mustang (Lettering bootleg)",                          10791, MUSTANGB3, "mustang", {}),
     ("tharrier",    "Task Force Harrier",                                          10699, THARRIER, None, {}),
+    ("manybloc",    "Many Block",                                                  10775, MANYBLOC, None, {}),
     ("tharrieru",   "Task Force Harrier (US)",                                     10700, THARRIER, "tharrier",
      {"2.18b": ("u_2.18b", "78923aaa"), "3.21b": ("u_3.21b", "99cea259"), "1.13b": ("1.13b", "c7402e4a")}),
     ("vandykeb",    "Vandyke (bootleg with PIC16c57)",                             10711, VANDYKEB, "vandyke", {}),
@@ -1110,7 +1155,7 @@ def mra(setname, desc, game_line, spec, parent, overrides):
   <setname>{setname}</setname>
   <year>{spec['year']}</year>
   <manufacturer>{spec['manufacturer']}</manufacturer>
-  <category>Shooter</category>
+  <category>{spec.get("category", "Shooter")}</category>
   <rbf>{rbf}</rbf>
 """)
     if spec["rot"]:

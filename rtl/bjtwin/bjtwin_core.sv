@@ -308,7 +308,7 @@ module bjtwin_core #(
 	wire [9:0] vt_hcount, vt_vcount;
 	wire vt_line_start, vt_hblank, vt_vblank;
 	video_timing vtiming (
-		.clk_sys(clk_sys), .ce_pix(ce_pix), .reset(reset),
+		.clk_sys(clk_sys), .ce_pix(ce_pix), .reset(reset), .tall240(1'b0),
 		.hcount(vt_hcount), .vcount(vt_vcount),
 		.line_start(vt_line_start), .hblank(vt_hblank), .vblank(vt_vblank)
 	);
@@ -322,6 +322,7 @@ module bjtwin_core #(
 	// ------------------------------------------------------------------
 	wire sprite_dma_trigger;
 	nmk_irq_hacky irq_gen (
+		.manybloc(1'b0),
 		.clk_sys(clk_sys),
 		.reset(reset),
 		.line_start(vt_line_start),

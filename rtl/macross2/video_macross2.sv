@@ -47,6 +47,7 @@
 // Everything else (palette decode, sprite double-buffer/draw FSM,
 // composite order) is video_macross.sv's own, unchanged.
 module video_macross2 #(
+	parameter integer SCREEN_H = 224,   // sprite-plane rows; 240 only where tall240 can be asserted (see below)
 	parameter FGTILE_FILE  = "",
 	parameter BGTILE_FILE  = "",
 	parameter SPRITES_FILE = "",
@@ -115,6 +116,16 @@ module video_macross2 #(
 	// 1 = the per-line tables, 0 = the bg_xscroll/bg_yscroll registers.
 	// ------------------------------------------------------------------
 	input        lowres,
+	// manybloc (2026-09-14): the one board here that is not
+	// set_screen_lowres/midres/hires. set_size(256,256) +
+	// set_visarea(0,255,8,247) -- a 256x240 window whose BITMAP origin is
+	// (0,8), and a sprite generator with NO set_videoshift (so videoshift
+	// 0). The x pair cancels exactly (bitmap_x0 == VIDEOSHIFT == 92 for
+	// lowres, 0 == 0 here, and every x expression below is
+	// bm_x - VIDEOSHIFT = rd_x + bitmap_x0 - VIDEOSHIFT), so only the
+	// vertical pair actually changes: bitmap y origin 8 instead of 16,
+	// and 240 visible lines instead of 224.
+	input        tall240,
 	input        raster_scroll,
 	input        cfg_rt,
 	input [10:0] bga_pal_base_i,   // layer A (gfx1's palette base in the game's GFXDECODE)
@@ -303,7 +314,12 @@ module video_macross2 #(
 );
 
 	localparam integer SCREEN_W = 384;
-	localparam integer SCREEN_H = 224;
+	// SCREEN_H is the sprite plane's row count: 224 everywhere except the
+	// Gunnail rbf, which passes 240 so the plane covers manybloc's taller
+	// window (tall240). Every other board still CLIPS at screen_h_vis
+	// (224) below, so the extra rows are simply never written -- but they
+	// cost ~12 M10K, which the Macross2/Raphero rbfs (nothing tall there)
+	// need not pay, hence the parameter rather than a flat 240.
 	localparam integer VIDEOSHIFT = 92; // set_scrolldx(28+64,28+64) and the sprite generator's videoshift(28+64) — both in MAME BITMAP coordinates, see BITMAP_X0 below
 	// MAME positions tilemaps and sprites in BITMAP coordinates: the bitmap
 	// spans the whole raster (512x278) and the visible area starts at
@@ -319,6 +335,8 @@ module video_macross2 #(
 	// snapshot on 96.5% of all pixels), pushing the rightmost 28 columns
 	// and bottom 16 rows off-screen — see docs/hw-bringup.md.
 	localparam integer BITMAP_Y0 = 16;
+	wire [9:0] bitmap_y0   = tall240 ? 10'd8   : BITMAP_Y0[9:0];   // manybloc: set_visarea y origin 8
+	wire [9:0] screen_h_vis = tall240 ? 10'd240 : 10'd224;
 
 	// ------------------------------------------------------------------
 	// Game-mode geometry (game_powerins, 2026-09-11). MAME set_screen_midres
@@ -688,7 +706,7 @@ module video_macross2 #(
 
 	wire [9:0]  bm_x      = rd_x + bitmap_x0;   // bitmap x of the pixel being drawn
 	wire [9:0]  bm_x_look = x_look + bitmap_x0; // ... and of the lookahead pixel
-	wire [8:0]  bm_y      = rd_y + BITMAP_Y0[8:0];
+	wire [8:0]  bm_y      = rd_y + bitmap_y0[8:0];
 	// Effective scroll for this line — see header (RASTER_SCROLL).
 	assign scroll_row_addr = bm_y[7:0];
 	wire [15:0] bg_xscroll_eff = (RASTER_SCROLL && raster_scroll) ? (scrollram_0 + scrollram_row)   : bg_xscroll;
@@ -925,7 +943,7 @@ module video_macross2 #(
 	reg        disp_buf;
 
 	wire [16:0] rd_addr = rd_y * SCREEN_W + rd_x;
-	wire        rd_in_range = (rd_x < screen_w_vis) && (rd_y < SCREEN_H);
+	wire        rd_in_range = (rd_x < screen_w_vis) && (rd_y < screen_h_vis);
 
 	// HW_ROMS=1 (real hardware) only: registered (synchronous) sprite-
 	// plane read, plus a matching 1-cycle delay on the TX/BG composite
@@ -1342,7 +1360,7 @@ module video_macross2 #(
 							// bitmap X+92 / Y, converted to screen coordinates (see
 							// bitmap_x0); coordinate mask and wrap modulus per mode.
 							s_sx <= (int'(head_w4) & spr_coord_mask) + VIDEOSHIFT - bitmap_x0;
-							s_sy <= ((int'(head_w6) & spr_coord_mask) + spr_wrap - BITMAP_Y0) & spr_wrap_mask;
+							s_sy <= ((int'(head_w6) & spr_coord_mask) + spr_wrap - int'(bitmap_y0)) & spr_wrap_mask;
 							s_ty <= 0; s_tx <= 0; s_py <= 0; s_px <= 0;
 							state <= S_SPR_UNIT;
 						end
@@ -1375,7 +1393,7 @@ module video_macross2 #(
 						reg        tile_visible, advance;
 						integer    px_eff, py_eff; // pixel position the advance logic sees (forced to the tile's last pixel when skipping)
 						tile_visible = ((s_pixel_x_base < screen_w_vis) || (s_pixel_x_base > spr_wrap - 16)) &&
-						               ((s_pixel_y_base < SCREEN_H) || (s_pixel_y_base > spr_wrap - 16));
+						               ((s_pixel_y_base < int'(screen_h_vis)) || (s_pixel_y_base > spr_wrap - 16));
 						advance = 1'b0; px_eff = s_px; py_eff = s_py;
 						if (!tile_visible) begin
 							// skip the whole tile: behave as if its last pixel was just done
@@ -1385,7 +1403,7 @@ module video_macross2 #(
 							sx = (s_pixel_x_base + s_px) & spr_wrap_mask; // wrap per pixel: a sprite straddling the
 							sy = (s_pixel_y_base + s_py) & spr_wrap_mask; // top/left edge shows its visible part
 							plot_addr = sy * SCREEN_W + sx;
-							if (s_pix_nib != 15 && !spr_off && sx < screen_w_vis && sy < SCREEN_H) begin
+							if (s_pix_nib != 15 && !spr_off && sx < screen_w_vis && sy < int'(screen_h_vis)) begin
 								sprite_plane[plot_addr + (draw_buf ? PLANE_PX : 0)] <= {s_colour[5:0], s_pix_nib[3:0]}; // see PLANE_EMPTY
 							end
 							advance = 1'b1;

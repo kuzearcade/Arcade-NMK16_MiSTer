@@ -47,6 +47,10 @@ module video_retime #(
 	input  [9:0]  vcount_w,         // 0..277, steps at the hcount wrap
 	input  [23:0] rgb_w,            // pixel hcount_w-x0 of line vcount_w, sampled at ce_w
 	input         mode1,            // 1: the M1_* geometry (powerins / lowres); 0: M0_*
+	// manybloc's 240-line window (raster lines 8..247 instead of 16..239);
+	// VTOTAL and the line period are unchanged, so only the vertical
+	// active window and the vblank-relative vsync placement move.
+	input         tall240,
 	input  [3:0]  hshift_sel,       // OSD H Shift, two's complement x2 px
 	input  [5:0]  vshift_sel,       // OSD V Shift, 0..20 = 0..+20, 21..40 = -20..-1
 
@@ -69,6 +73,9 @@ module video_retime #(
 	localparam [9:0] AW_8   = M0_AW,  AW_7   = M1_AW;    // active width
 	localparam [3:0] DIV_8  = M0_DIV, DIV_7  = M1_DIV;   // clk_r per pixel
 	localparam [9:0] VTOTAL = 10'd278;
+	wire [9:0] v_start = tall240 ? 10'd8   : 10'd16;
+	wire [9:0] v_end   = tall240 ? 10'd248 : 10'd240;   // exclusive: the first vblank line
+	wire [9:0] v_blank = VTOTAL - v_end;                // lines of vblank (30 / 38)
 
 	// ------------------------------------------------------------------
 	// Write side
@@ -77,7 +84,7 @@ module video_retime #(
 	wire [9:0] w_x0   = mode1 ? W_X0_7 : W_X0_8;
 	wire [9:0] w_aw   = mode1 ? AW_7   : AW_8;
 	wire [9:0] w_x    = hcount_w - w_x0;
-	wire       w_act  = (hcount_w >= w_x0) && (w_x < w_aw) && (vcount_w >= 10'd16) && (vcount_w < 10'd240);
+	wire       w_act  = (hcount_w >= w_x0) && (w_x < w_aw) && (vcount_w >= v_start) && (vcount_w < v_end);
 	reg        frame_tog = 1'b0;   // toggles at each write-side frame start
 	always @(posedge clk_w) begin
 		if (ce_w && w_act) buf_mem[{vcount_w[0], w_x[8:0]}] <= rgb_w;
@@ -94,6 +101,13 @@ module video_retime #(
 	reg  [1:0] mode_sync = 2'b00;
 	always @(posedge clk_r) mode_sync <= {mode_sync[0], mode1};
 	wire       m7 = mode_sync[1];
+	// tall240 crossed into clk_r the same way mode1 is (both are static
+	// per session, but the read side must not sample a metastable value).
+	reg  [1:0] tall_sync = 2'b00;
+	always @(posedge clk_r) tall_sync <= {tall_sync[0], tall240};
+	wire [9:0] v_start_r = tall_sync[1] ? 10'd8   : 10'd16;
+	wire [9:0] v_end_r   = tall_sync[1] ? 10'd248 : 10'd240;
+	wire [9:0] v_blank_r = VTOTAL - v_end_r;
 	wire [9:0] r_x0 = m7 ? R_X0_7 : R_X0_8;
 	wire [9:0] r_ht = m7 ? R_HT_7 : R_HT_8;
 	wire [9:0] r_aw = m7 ? AW_7   : AW_8;
@@ -119,11 +133,11 @@ module video_retime #(
 	// Registered buffer read: the address is the current pixel's, stable
 	// for a whole pixel period, so rgb_q holds pixel hcount_r at its tick.
 	wire [9:0]  r_x    = hcount_r - r_x0;
-	wire        r_act  = (hcount_r >= r_x0) && (r_x < r_aw) && (vcount_r >= 10'd16) && (vcount_r < 10'd240);
+	wire        r_act  = (hcount_r >= r_x0) && (r_x < r_aw) && (vcount_r >= v_start_r) && (vcount_r < v_end_r);
 	reg  [23:0] rgb_q;
 	always @(posedge clk_r) rgb_q <= buf_mem[{vcount_r[0], r_x[8:0]}];
 
-	wire [9:0] vrel = (vcount_r >= 10'd240) ? (vcount_r - 10'd240) : (vcount_r + 10'd38);
+	wire [9:0] vrel = (vcount_r >= v_end_r) ? (vcount_r - v_end_r) : (vcount_r + v_blank_r);
 	wire       hs_now = (hcount_r >= hs_start) && (hcount_r < hs_start + hs_width);
 	wire       vs_now = (vrel >= vs_rel) && (vrel < vs_rel + 10'd3);
 
