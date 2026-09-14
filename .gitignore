@@ -5,6 +5,14 @@
 # Copyrighted arcade ROM dumps. Never committed under any circumstances.
 /mame_roms/
 
+# .mra files for sets that do not work — here rather than in releases/ so they
+# are never shipped or deployed by accident, and out of git so nothing has to
+# be said about them in the repository's history. One entry so far: powerinsc
+# (Power Instinct USA bootleg set 3), whose sprite ROM format is undeciphered
+# and which draws wrong in MAME too. tools/gen_family_c_mra.py writes it here,
+# not into releases/ — see its NON_WORKING set.
+/.non-working/
+
 # ROM images reconstructed from mame_roms/ (tools/mkrom.py) are just as
 # copyrighted as the zips they came from — never committed. Same caution
 # applied to MAME-oracle traces (sim/oracle/traces/): a full bus trace from

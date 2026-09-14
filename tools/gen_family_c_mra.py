@@ -17,6 +17,14 @@ name, so it becomes " - ". Run from the repo root:
 import os
 
 RELEASES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "releases")
+# Sets that do not work. Their .mra is still generated (the layout stays
+# maintained alongside the others and is the starting point if one is ever
+# fixed) but written to a gitignored directory instead of releases/, so it is
+# never shipped or deployed by accident.
+NON_WORKING_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".non-working")
+# powerinsc: the sprite ROM format is undeciphered, so its sprites draw wrong
+# here AND in MAME.
+NON_WORKING = {"powerinsc"}
 
 # Parent-specific blocks (identical to the hand-authored parent .mra files).
 TDRAGON2 = dict(
@@ -351,10 +359,12 @@ def main():
         setname, parent, desc, line, maincpu, overrides = entry[:6]
         dip_overrides = entry[6] if len(entry) > 6 else None
         fname = desc.replace(" / ", " - ").replace("/", "-") + ".mra"
-        path = os.path.join(RELEASES, fname)
+        outdir = NON_WORKING_DIR if setname in NON_WORKING else RELEASES
+        os.makedirs(outdir, exist_ok=True)
+        path = os.path.join(outdir, fname)
         with open(path, "w") as f:
             f.write(mra(setname, parent, desc, line, maincpu, overrides, dip_overrides))
-        print("wrote", fname)
+        print("wrote", fname, "(NOT WORKING)" if setname in NON_WORKING else "")
 
 
 if __name__ == "__main__":

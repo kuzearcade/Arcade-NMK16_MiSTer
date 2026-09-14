@@ -2766,6 +2766,15 @@ followed by a WORD_SWAP file, two BG files, two OKI files.
 
 ### powerinsa, powerinsb, powerinsc (Macross2 rbf, switches bytes 1A / 0A / 2A)
 
+**powerinsc does not ship (2026-09-14).** It boots and runs, but its sprite
+ROM format is undeciphered, so its sprites draw wrong here exactly as they do
+in MAME. Its `.mra` is still generated — the layout is worth keeping
+maintained, and it is the starting point if the format is ever worked out —
+but into the gitignored `.non-working/` instead of `releases/`, so it cannot
+be shipped or deployed by accident. See `tools/gen_family_c_mra.py`'s
+`NON_WORKING` set. The rest of this section is the bring-up record for all
+three bootlegs and is unchanged.
+
 The three Power Instinct bootlegs share `game_pi_bootleg`: no interrupt
 PROM — `screen_vblank_powerins_bootleg` raises IRQ4 (HOLD_LINE, i.e.
 pending until acknowledged) and performs the two-stage sprite buffer
