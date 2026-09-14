@@ -65,24 +65,33 @@ fetch_file() {
 	log "done $name"
 }
 
-# A dependency vendored without a recorded upstream commit cannot be fetched.
-# Fail loudly and say what to do, rather than letting the Quartus build get as
-# far as "cannot find module jt6805" or, worse, elaborating a stub.
-check_unpinned() {
-	local name="$1" dest="$2"
-	if [ -d "$ROOT/$dest" ] && [ -n "$(ls -A "$ROOT/$dest" 2>/dev/null)" ]; then
-		log "ok $name: $dest present (UNPINNED — see deps.lock, its commit is not recorded)"
-		return 0
+# A subdirectory of a large monorepo, at an exact commit. A full clone of
+# jtcores to get four files is absurd, so this does a blob-filtered, sparse,
+# depth-1 fetch of just that path: ~1 MB of .git instead of hundreds. The
+# subdirectory lands at <dest>/<basename of path>.
+fetch_subdir() {
+	local name="$1" url="$2" ref="$3" dest="$4"
+	local rev="${ref%%:*}" path="${ref#*:}"
+	local full_dest="$ROOT/$dest/$(basename "$path")"
+
+	if [ -d "$full_dest" ] && [ -n "$(ls -A "$full_dest" 2>/dev/null)" ]; then
+		log "skip $name: $dest/$(basename "$path") already populated (rm -rf it to re-fetch)"
+		return
 	fi
-	log ""
-	log "ERROR: $name is missing from $dest and cannot be fetched."
-	log "  It is vendored WITHOUT a pinned upstream commit — see the jt680x entry"
-	log "  in deps.lock for what is known about it and the SHA-256 of every file"
-	log "  this project builds against. Obtain jotego's jt6805 (jt680x module),"
-	log "  put its hdl/ under $dest/hdl, check the hashes, and please pin it."
-	log "  Only tharrierb (Gunnail rbf) needs it; every other core builds without."
-	log ""
-	return 1
+
+	log "fetching $name -> $dest/$(basename "$path") @ ${rev:0:12} ($path)"
+	local tmp
+	tmp="$(mktemp -d)"
+	git -C "$tmp" init -q
+	git -C "$tmp" remote add origin "$url"
+	git -C "$tmp" sparse-checkout init --cone >/dev/null 2>&1 || true
+	git -C "$tmp" sparse-checkout set "$path" >/dev/null 2>&1 || true
+	git -C "$tmp" fetch -q --depth 1 --filter=blob:none origin "$rev"
+	git -C "$tmp" checkout -q FETCH_HEAD
+	mkdir -p "$(dirname "$full_dest")"
+	cp -r "$tmp/$path" "$full_dest"
+	rm -rf "$tmp"
+	log "done $name"
 }
 
 seed_template_skeleton() {
@@ -119,7 +128,7 @@ main() {
 			fi
 			;;
 		file) fetch_file "$name" "$url" "$ref" "$dest" ;;
-		UNPINNED) check_unpinned "$name" "$dest" ;;
+		subdir) fetch_subdir "$name" "$url" "$ref" "$dest" ;;
 		*) log "unknown kind '$kind' for $name, skipping" ;;
 		esac
 	done <"$LOCK"

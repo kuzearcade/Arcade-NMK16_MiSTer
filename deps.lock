@@ -18,12 +18,18 @@ jt12|repo|https://github.com/jotego/jt12.git|3a4c423fe03f00f51ef639550c9afe39308
 jtopl|repo|https://github.com/jotego/jtopl.git|7ac0c819ad274e208206f2acccbbde80aa06ed1a|rtl/third_party/jtopl|GPL-3.0|YM3812/OPL2 core (Jose Tejada), used for the Family E (Raiden-sound bootlegs) + tomagic FM chip.
 jt51|repo|https://github.com/jotego/jt51.git|985a573dcfc1ff135553a39f7eae21d18ba57cbe|rtl/third_party/jt51|GPL-3.0|YM2151/OPM core (Jose Tejada), used for the Afega boards' sound (Family H) on Gunnail.rbf. hdl/jt51.qip lists its files; cen = the 4 MHz chip clock, cen_p1 = cen/2.
 jt6295|repo|https://github.com/jotego/jt6295.git|7d76b0be8cd8f85f3ae741178c9830b20e2071a1|rtl/third_party/jt6295|GPL-3.0|OKIM6295 ADPCM core (Jose Tejada), used everywhere in this driver.
-jt680x|UNPINNED|(upstream repo/commit not recorded)|-|rtl/third_party/jt680x|GPL-3.0-or-later|jt6805, jotego's 6805 CPU core, used ONLY by tharrierb's MC68705R3 (rtl/m68705). NOT fetchable by bootstrap.sh: the four hdl/ files were vendored without recording where from, and this environment cannot reach the upstream to pin it, so no commit is guessed here -- a fabricated pin would be worse than none. The SPDX headers say "2026 Jose Tejada Gomez", dated 22-11-2023 / 4-12-2023, and the module layout (modules/jt680x/hdl, with the control store generated from modules/jt680x/ucode/6805.yaml by `jtframe ucode`) points at the jotego/jtcores monorepo. Identify the exact bytes we build against by SHA-256 instead:
-#   jt6805.v      b55b4822906cf0c2f245e8b3ac6b6588067ce2b515da8e586284ff038dcd0286
-#   jt6805_alu.v  d6faaf859db6fff25dec1a2fe70d1fe4c5ef5b71cc07356a3fee66faa193887f
-#   jt6805_ctrl.v 9247d9a2c514fe1ed67b4621dd50b7e2b579eb44befd7c08fe7efa6cdc175de8
-#   jt6805_regs.v af8af895e5e3d864d4dd72b6cec3458b7aa1179a90aa535af8d309149f2a3255
-# (cat in that order | sha256sum = c62eb371752879a1365341d3f6e44f1cd0520a372a788f04764c4c11fc3fd27b)
-# OPEN TASK: find the upstream commit, verify these hashes against it, and convert this to a normal `repo` entry.
-# NB the microcode this core runs is NOT jotego's -- rtl/m68705/6805.uc is this project's own, see README.
-sdram|file|https://github.com/rmonic79/Arcade-Darius_MiSTer.git|HEAD:rtl/sdram.sv|rtl/sdram.sv|GPL-3.0 (per file header, Copyright (c) 2018 Sorgelig)|No standalone upstream repo exists for this file — it's copy-pasted core-to-core. Vendored from this specific known-good copy; expected blob SHA e4228fb9bb0787f78e6a0f3bfcdc4399d89945c4 (verified byte-identical against Arcade-HeatedBarrel_MiSTer's copy too). bootstrap.sh checks the blob hash and warns (does not fail) on mismatch, since this source repo's HEAD can move.
+jt680x|subdir|https://github.com/jotego/jtcores.git|3278a82b948a91c23a8d2165a5ae545a6dae8994:modules/jt680x/hdl|rtl/third_party/jt680x|GPL-3.0-or-later|jt6805, Jose Tejada's 6805 CPU core, used ONLY by tharrierb's MC68705R3 (rtl/m68705). There is no standalone jotego/jt680x repo (404) -- it is a module of the jtcores monorepo, so this is a `subdir` entry: a blob-filtered sparse depth-1 fetch of modules/jt680x/hdl, landing at rtl/third_party/jt680x/hdl. Provenance CONFIRMED 2026-09-14 against the GitHub API: 3278a82 ("cosmetic: simplified license headers", 2026-08-21) is the most recent commit touching each of the four files, and its blobs are byte-identical to the ones vendored here --
+#   jt6805.v      45e4f9133e1b6252d9f71218adeece72b419a316
+#   jt6805_alu.v  361e15010e7a5f7bebd1f9770478401207f7f9f8
+#   jt6805_ctrl.v c0a2f4234a6bee49d721f521395c77bf99269063
+#   jt6805_regs.v be85639b522b92b73d1bf02022b78a7b1c5b3068
+# That commit is after jotego's own "jt6805: fixed ASR, which had wrong MSB" (910830129acc, 2024-12-04), so this copy has that fix.
+# NB the microcode this core runs is NOT jotego's: rtl/m68705/6805.uc is this project's own (see README). His source for it IS upstream, at modules/jt680x/ucode/6805.yaml -- not vendored, because the `jtframe ucode` generator that consumes it is not either. Ours is verified against MAME's m6805 instead (960,794 instructions, zero mismatches; sim/rtl/m68705).
+sdram|file|https://github.com/rmonic79/Arcade-Darius_MiSTer.git|HEAD:rtl/sdram.sv|rtl/sdram.sv|GPL-3.0 (per file header, Copyright (c) 2018 Sorgelig)|No standalone upstream repo exists for this file — it's copy-pasted core-to-core. Seeded from this specific known-good copy, original blob e4228fb9bb0787f78e6a0f3bfcdc4399d89945c4 (re-checked 2026-09-14: that is still what upstream HEAD holds, and it matched Arcade-HeatedBarrel_MiSTer's copy too).
+# *** THIS ONE IS MODIFIED AND TRACKED IN GIT, unlike every other entry here. ***
+# Local blob is e94504bd4a77bff70048a18bcdf2cabf4a59c8bd. This project added a
+# REFRESH_CYCLES parameter, a prio_mode port (round-robin / video-first /
+# CPU-first / video-75%) and dout*_pair, which returns two words per read
+# transaction. See commits 1826172, 9b54f5b, 61aa1b9, 5026368. bootstrap.sh
+# skips it because the file already exists; do NOT delete it to force a
+# re-fetch, that would silently revert those changes and break every core.
