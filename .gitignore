@@ -53,18 +53,21 @@ sim/rtl/*/*.raw
 /rtl/third_party/
 /.bootstrap-staging/
 
-# Quartus build output and scratch state
-output_files/
-output_files_sdramtest/
-output_files_raphero/
-output_files_gunnail/
-output_files_nmk16_afega/
+# Quartus build output and scratch state. One glob rather than a hand-kept
+# list of PROJECT_OUTPUT_DIRECTORY values: the list had gone stale at the
+# NMK16_ core rename (ba5b36a) and still named output_files_raphero/ and
+# output_files_gunnail/ while three of the four real directories --
+# output_files_nmk16_{macross2,gunnail,raphero}/ -- were no longer ignored at
+# all. Nothing tracked begins with output_files, so the glob cannot hide a
+# source file, and it survives the next rename.
+output_files*/
 db/
 incremental_db/
 greybox_tmp/
 # releases/ holds the hand-authored .mra files AND the current .rbf
-# bitstream for each core, copied there from output_files/ after every
-# build so hardware users get a matching pair without running Quartus.
+# bitstream for each core, copied there from that core's own
+# output_files_nmk16_<family>/ after every build so hardware users get a
+# matching pair without running Quartus.
 /build_id.v
 /jtag.cdf
 sim/rtl/*/.cnxerr
