@@ -214,19 +214,23 @@ and the comparison tools.
 ## Third-party projects and attribution
 
 This core would not exist without the following projects. Each is
-fetched at the commit recorded in `deps.lock`, unmodified — with one
-exception, `rtl/sdram.sv`, noted under the table.
+fetched at the commit recorded in `deps.lock`, unmodified — with two
+exceptions, both committed here and both noted under the table:
+`rtl/sdram.sv`, which is a modified fork, and `rtl/third_party_gen/t80/`,
+a mechanical GHDL/Yosys translation of T80's VHDL used only by the
+simulations.
 
 | Component | Project | Author | Licence |
 |---|---|---|---|
 | MiSTer framework (`sys/`), project template | [MiSTer-devel/Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer) | Sorgelig and the MiSTer-devel contributors | GPL-2.0-or-later / GPL-3.0-or-later per file |
 | Motorola 68000 | [ijor/fx68k](https://github.com/ijor/fx68k) | Jorge Cwik | GPL-3.0 |
 | Z80 (T80) | [MiSTer-devel/T80](https://github.com/MiSTer-devel/T80) | Daniel Wallner, MikeJ (fpgaarcade), Sorgelig | BSD-style, per file header |
-| YM2203 (jt12 / jt03) | [jotego/jt12](https://github.com/jotego/jt12) | Jose Tejada | GPL-3.0 |
-| YM3812 (jtopl) | [jotego/jtopl](https://github.com/jotego/jtopl) | Jose Tejada | GPL-3.0 |
-| YM2151 (jt51) | [jotego/jt51](https://github.com/jotego/jt51) | Jose Tejada | GPL-3.0 |
+| YM2203 (jt12 / jt03), and its nested AY-3-8910 (jt49) for the chip's SSG half | [jotego/jt12](https://github.com/jotego/jt12), submodule [jotego/jt49](https://github.com/jotego/jt49) | Jose Tejada | GPL-3.0-or-later |
+| OKIM6295 ADPCM (jt6295) | [jotego/jt6295](https://github.com/jotego/jt6295) | Jose Tejada | GPL-3.0-or-later |
+| YM3812 (jtopl) | [jotego/jtopl](https://github.com/jotego/jtopl) | Jose Tejada | GPL-3.0-or-later |
+| YM2151 (jt51) | [jotego/jt51](https://github.com/jotego/jt51) | Jose Tejada | GPL-3.0-or-later |
 | MC68705R3 / 6805 CPU (jt6805) | [jotego/jtcores](https://github.com/jotego/jtcores), `modules/jt680x/hdl` | Jose Tejada | GPL-3.0-or-later |
-| SDRAM controller (`rtl/sdram.sv`) | copied from [rmonic79/Arcade-Darius_MiSTer](https://github.com/rmonic79/Arcade-Darius_MiSTer) | Sorgelig | GPL-3.0 |
+| SDRAM controller (`rtl/sdram.sv`) | copied from [rmonic79/Arcade-Darius_MiSTer](https://github.com/rmonic79/Arcade-Darius_MiSTer) | Sorgelig | GPL-3.0-or-later |
 
 There is no standalone `jotego/jt680x` repository — jt6805 is a module of
 the **jtcores** monorepo, so `deps.lock` fetches it with a `subdir` kind:
@@ -254,8 +258,15 @@ every other third-party tree it is committed here. It was seeded from
 the Arcade-Darius copy of Sorgelig's controller and then given a
 `REFRESH_CYCLES` parameter, a `prio_mode` port (round-robin /
 video-first / CPU-first / video-75%) and `dout*_pair`, which returns two
-words per read transaction. It stays GPL-3.0 under Sorgelig's copyright;
+words per read transaction. It stays GPL-3.0-or-later under Sorgelig's copyright;
 `deps.lock` records the original blob and the commits that changed it.
+
+`rtl/third_party_gen/t80/T80s.v` is the other committed third-party file:
+Verilator cannot read VHDL, so T80's `T80s.vhd` and its dependencies were
+translated once with GHDL and Yosys (the `ghdl-compat.patch` beside it is
+the input fix-up) and the result committed for the simulations only. The
+Quartus build compiles the original VHDL, so nothing shipped in a `.rbf`
+comes from the translation. It carries T80's own licensing.
 
 The behavioural reference is [MAME](https://github.com/mamedev/mame),
 in particular `src/mame/nmk/nmk16.cpp`, `nmk16_v.cpp`, `nmk16spr.cpp`,
