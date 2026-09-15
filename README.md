@@ -158,13 +158,30 @@ verification results.
 ## Building
 
 The project needs Quartus Prime Lite 17.0 for the hardware build and
-Verilator, g++ and Python 3 for the simulations. Third-party cores are
-not committed; fetch them at their pinned commits first:
+Verilator, g++ and Python 3 for the simulations. `sys/` and the
+build-required part of `rtl/third_party/` are committed, so no fetch step
+and no network access are needed:
 
 ```
-tools/bootstrap.sh
+python3 tools/mkgfxrom.py --zip mame_roms/tdragon2.zip --mode concat \
+        --files 10.bpr --out roms/tdragon2_vtiming.hex   # see below
 quartus_sh --flow compile NMK16_Gunnail   # or NMK16_Macross2, NMK16_Raphero, NMK16_Afega
 ```
+
+**One thing a clone does not carry: `roms/*_vtiming.hex`.** Each core's
+scanline-interrupt V-PROM (`10.bpr` and friends) is read by
+`$readmemh` at synthesis and baked into the bitstream rather than streamed
+by the `.mra` at runtime, because `nmk_irq.sv` needs it before any ROM
+download happens. That content is copyrighted dump data, so it is never
+committed — generate it from your own MAME romsets first, exactly as the
+simulation Makefiles do. Each core's `.sv` names the file it wants and the
+command that builds it. Without it the PROM initialises to zeros and frame
+IRQ and sprite-DMA timing break on hardware after a clean compile.
+
+`tools/bootstrap.sh` is only needed to change a pinned commit, or to pull
+a dependency's full upstream tree (datasheets, testbenches, other-toolchain
+projects) back down after deleting its directory — those parts are
+deliberately not committed.
 
 Each project writes to its own `output_files_nmk16_<family>/`, so the
 four can be built side by side. `clean.bat` is Template_MiSTer's scratch
@@ -216,8 +233,10 @@ and the comparison tools.
 ## Third-party projects and attribution
 
 This core would not exist without the following projects. Each is
-fetched at the commit recorded in `deps.lock`, unmodified — with two
-exceptions, both committed here and both noted under the table:
+vendored at the commit recorded in `deps.lock`, unmodified. Committed here
+is the subset the build needs — the HDL the `.qip` files reference, plus
+each project's own `LICENSE` — with two further exceptions, both noted
+under the table:
 `rtl/sdram.sv`, which is a modified fork, and `rtl/third_party_gen/t80/`,
 a mechanical GHDL/Yosys translation of T80's VHDL used only by the
 simulations.

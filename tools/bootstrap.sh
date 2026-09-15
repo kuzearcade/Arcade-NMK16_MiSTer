@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# Fetches every vendored dependency pinned in deps.lock into its gitignored
-# destination. Re-run any time deps.lock changes; existing destinations are
-# left alone (rm -rf the destination to force a re-fetch of just that dep).
+# Fetches every vendored dependency pinned in deps.lock into its destination.
+# Re-run any time deps.lock changes; existing destinations are left alone
+# (rm -rf the destination to force a re-fetch of just that dep).
+#
+# As of 2026-09-14 the build-required subset of sys/ and rtl/third_party/ is
+# committed, so a fresh clone builds without running this at all. It stays
+# useful for changing a pin, and for pulling a dep's full upstream tree
+# (datasheets, testbenches) back down after rm -rf'ing its directory.
 #
 # Special case: the `template_mister` entry provides both the MiSTer sys/
 # framework (goes to sys/) AND the top-level Quartus skeleton
@@ -139,7 +144,8 @@ main() {
 	rm -rf "$ROOT/.bootstrap-staging"
 
 	log "all dependencies fetched."
-	log "vendored trees are gitignored (see .gitignore); only deps.lock is tracked."
+	log "the build-required subset of each vendored tree is COMMITTED (see .gitignore);"
+	log "bootstrap skips anything already populated -- rm -rf a dep to pull its full upstream tree."
 }
 
 main "$@"

@@ -47,11 +47,39 @@ sim/rtl/*/*.raw
 /microrom.mem
 /nanorom.mem
 
-# Vendored third-party cores and the MiSTer sys/ framework are fetched by
-# tools/bootstrap.sh at pinned commits (see deps.lock), not committed here.
-/sys/
-/rtl/third_party/
+# The MiSTer sys/ framework and the vendored third-party cores ARE committed
+# (2026-09-14), so a clone builds without network access -- the MiSTer
+# core-contribution guidelines expect sys/ to be present, and a reviewer
+# should not need to run tools/bootstrap.sh first. What is committed is the
+# BUILD-REQUIRED subset of each vendored repo, at the commit deps.lock pins:
+# the HDL the .qip files reference, plus each project's LICENSE. The rest of
+# those upstream trees -- datasheets (including third-party scans this project
+# has no business redistributing), testbenches, sample captures, synthesis
+# projects for other toolchains -- is ignored below, which is the difference
+# between 1.7 MB and 57 MB. bootstrap.sh skips any destination that is already
+# populated, so it is now a no-op for these; rm -rf a dep's directory to pull
+# its full upstream tree back down.
 /.bootstrap-staging/
+rtl/third_party/*/doc/
+rtl/third_party/*/ver/
+rtl/third_party/*/cc/
+rtl/third_party/*/cfg/
+rtl/third_party/*/out/
+rtl/third_party/*/target/
+rtl/third_party/*/syn/
+rtl/third_party/*/bin/
+rtl/third_party/*/src/
+rtl/third_party/*/ise/
+rtl/third_party/*/octave/
+rtl/third_party/*/quartus/
+rtl/third_party/*/sgdk/
+rtl/third_party/jt12/jt89/
+rtl/third_party/jt12/jt49/cc/
+rtl/third_party/jt12/jt49/doc/
+rtl/third_party/jt12/jt49/lab/
+rtl/third_party/jt12/jt49/lut/
+rtl/third_party/jt12/jt49/syn/
+rtl/third_party/jt12/jt49/ver/
 
 # Quartus build output and scratch state. One glob rather than a hand-kept
 # list of PROJECT_OUTPUT_DIRECTORY values: the list had gone stale at the
