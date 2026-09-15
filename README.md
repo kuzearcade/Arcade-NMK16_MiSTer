@@ -202,7 +202,9 @@ and the comparison tools.
 | `rtl/sdram*.sv`, `rtl/rom_cache1*.sv`, `rtl/oki_rom_cache.sv`, `rtl/tile_prefetch_byte.sv` | SDRAM controller, arbiter and ROM caches for the hardware path |
 | `rtl/third_party/` | Vendored cores (gitignored, fetched by `tools/bootstrap.sh`) |
 | `sys/` | MiSTer framework (gitignored, fetched by `tools/bootstrap.sh`) |
-| `NMK16_<family>.sv`, `.qsf`, `.sdc`, `.qpf`, `files_nmk16_<family>.qip` | Quartus project per hardware family |
+| `NMK16_<family>.sv`, `.qsf`, `.sdc`, `.qpf`, `.srf`, `files_nmk16_<family>.qip` | **The four real Quartus projects**, one per hardware family. These are what `quartus_sh --flow compile` builds |
+| `Template.*`, `files.qip` | Template_MiSTer's skeleton, unmodified and unused — kept only so the repo carries the file set the MiSTer core-contribution guidelines list. `files.qip` is the template's own demo source list, not this project's; the real ones are `files_nmk16_<family>.qip` |
+| `SdramTest.*` | A standalone SDRAM diagnostic project, not a game core — `tools/SdramTest.mra` loads it (see Status) |
 | `clean.bat` | Template_MiSTer's Quartus scratch-cleaning script, verbatim (it removes `output_files`, not this project's per-core `output_files_nmk16_<family>`) |
 | `sim/rtl/` | Verilator testbenches, one per game plus unit tests |
 | `sim/oracle/`, `sim/compare/` | MAME Lua tracer and trace comparison |

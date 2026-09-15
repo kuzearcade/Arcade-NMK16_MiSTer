@@ -5,7 +5,7 @@
 #
 # Special case: the `template_mister` entry provides both the MiSTer sys/
 # framework (goes to sys/) AND the top-level Quartus skeleton
-# (Template.sv/.sdc/.qpf/.qsf/files.qip plus clean.bat), which get copied to
+# (Template.sv/.sdc/.qpf/.qsf/.srf/files.qip plus clean.bat), which get copied to
 # the project root ONLY if not already present there, since those files are
 # meant to be customized per hardware family afterwards, not silently
 # overwritten. clean.bat is the one the MiSTer "Contributing a Core" wiki
@@ -108,7 +108,7 @@ seed_template_skeleton() {
 		log "sys/ already populated, leaving as-is"
 	fi
 
-	for f in Template.sv Template.sdc Template.qpf Template.qsf files.qip clean.bat; do
+	for f in Template.sv Template.sdc Template.qpf Template.qsf Template.srf files.qip clean.bat; do
 		if [ -f "$ROOT/$f" ]; then
 			log "$f already exists at project root, leaving as-is"
 		elif [ -f "$staged/$f" ]; then
