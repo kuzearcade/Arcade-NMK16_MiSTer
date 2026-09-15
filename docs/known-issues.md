@@ -374,6 +374,41 @@ sprite-and-scroll evidence for that core is the board captures).
   same range as Thunder Dragon 2 on hardware (0.987). The 100 s figure
   is pulled down by NMK-7 (demo diverges after ~1 min), not by audio.
 
+### NMK-23 · tharrier ignores Coin A = Free Play (its MCU is undumped)
+- **Cores:** NMK16_Gunnail · **Severity:** limitation · **Status:** wontfix —
+  matches MAME; not fixable without a dump of the MCU
+- Setting **Coin A (or Coin B) to Free Play** in the DIP Switches menu has no
+  effect on `tharrier`/`tharrieru`: the attract still reads INSERT COIN and
+  Start does not begin a game.
+- **The DIP reaches the core correctly** — checked end to end before blaming
+  the game. The `.mra` field is `bits="5,7"`, matching MAME's `0x00E0` mask,
+  with `ids` in value order so `Free_Play` is value 0; `NMK16_Gunnail.sv`'s
+  `game_mustang` list includes game id 20, so `dsw1_i = {dip_sw[1], dip_sw[0]}`
+  and Coin A lands in `dsw1_i[7:5]`. Nothing is dropped or mis-ordered.
+- **MAME behaves identically.** With Coin A forced to Free Play from a cfg file
+  (`:DSW1` verified reading `FF1F`), MAME's attract is **pixel-identical to the
+  default DIPs across 41 sampled frames** of a 22 s run. We match the reference.
+- **The cause is in MAME's own source.** tharrier's MCU is undumped and MAME
+  fakes it with a 15-byte canned table (`to_main[]` in `tharrier_mcu_r`). At
+  that read path the comment reads: *"it should also read DSW1 from here,
+  almost certainly through the MCU. The weird 0x080202 address where we read
+  IN2 is also probably just a mirror of 0x080002"*. The coinage logic lives in
+  silicon nobody has dumped, so neither MAME nor this core can honour Free Play.
+- **`tharrierb` DOES honour it**, which is what isolates the cause: the
+  Lettering bootleg runs a real, fully dumped MC68705R3 here (NMK-22 era work,
+  `docs/tier7-tharrierb.md`). Same core, same DIP plumbing, same setting —
+  Start with Free Play boots straight into a game. On the board, `tharrier`
+  differed from its default run by **0 px** while `tharrierb` differed by
+  **43,885 / 57,334 px** (attract vs. a game in progress). **Use the Lettering
+  bootleg set if you want Free Play on this game.**
+- **Method caveat worth repeating:** MAME's Lua `field:set_value()` silently
+  does nothing in this build — the same failure as the DIP-setting attempt in
+  NMK-21 — so the MAME half of this rests on attract comparison, not on
+  pressing Start. Force DIPs through a `-cfg_directory` file and verify with
+  `port:read()`; drive Start on the board instead, where `mister_keys.py`
+  works. A control that fails (here: coin+start also changed nothing in MAME)
+  is the signal the harness is broken, not the game.
+
 ### NMK-20 · ssmissin BG "corruption": two missing driver behaviours
 - **Severity:** bug · **Status:** **FIXED and confirmed on hardware
   2026-09-14**; the original "hardware-only" diagnosis was a
