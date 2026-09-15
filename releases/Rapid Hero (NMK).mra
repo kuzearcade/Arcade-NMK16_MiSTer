@@ -36,7 +36,7 @@
        raphero_core.sv's decode (sel_dsw1 at 0x100008, sel_dsw2 at
        0x10000A). ids are listed in bit-value order (value 0 first).
        Third byte 0x00 is not a <dip> (no OSD entry over it): bit 6 is
-       Raphero.sv's hidden "unlock P1/P2 Autofire menu" flag (see its
+       NMK16_Raphero.sv's hidden "unlock P1/P2 Autofire menu" flag (see its
        autofire_unlock comment) — 00 keeps the menu hidden, same as
        every other game on this rbf. Without this explicit byte the
        core reads the idle 0xFF default and the flag reads set. -->
@@ -72,5 +72,10 @@
     <part crc="515eba93" name="rhp94099.5"/>
     <part crc="f1a80e5a" name="rhp94099.6"/>
     <part crc="0d99547e" name="rhp94099.7"/>
+  </rom>
+
+  <!-- nmk_irq:vtiming -->
+  <rom index="1" zip="raphero.zip|arcadian.zip" md5="none">
+    <part crc="e6ead349" name="prom2.u53"/>
   </rom>
 </misterromdescription>

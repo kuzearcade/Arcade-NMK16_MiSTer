@@ -68,4 +68,10 @@
     <part crc="29d0a15d" name="soundpcm2.top.ic27"/>
     <part crc="c764e749" name="soundpcm3.bottom.ic27"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="nouryokup.zip|nouryoku.zip|nmk004.zip" md5="none">
+    <part crc="633ab1c9" name="8.ic37"/>
+  </rom>
 </misterromdescription>

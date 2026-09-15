@@ -315,6 +315,51 @@ sprite-and-scroll evidence for that core is the board captures).
   because all 68 were blank boot frames. **Always report the non-blank count
   alongside any frame-match statistic.**
 
+### NMK-22 · The V-PROM was compiled into the bitstream
+- **Cores:** all four · **Severity:** bug (redistribution) · **Status:** **fixed
+  and swept on hardware 2026-09-15**
+- `nmk_irq.sv` read its scanline-timing V-PROM with `$readmemh` at synthesis,
+  so every shipped `.rbf` carried 256-2304 bytes of arcade PROM dump, and the
+  Quartus build needed locally generated `roms/*_vtiming.hex` that could not
+  be committed. A clone therefore could not build, and the distributed
+  bitstreams contained ROM data.
+- Now streamed like every other ROM: each `.mra` carries the PROM as its own
+  **`<rom index="1">`** region and the core writes it into `nmk_irq` from
+  `ioctl_download`. Index 1 has its own address space, so **no SDRAM region
+  base moves** — the constraint that makes adding a region to index 0
+  dangerous (see NMK-17). 48 of the 97 sets get a region; the other 49 are all
+  `irq_hacky` boards that read no PROM, verified set by set.
+- **Adding a write port turned the array from a constant into a RAM, so the
+  read had to become registered** — an asynchronous read would have cost 4096
+  flops. NMK-10 for the fourth time. The sample now runs off a one-cycle
+  delayed `line_start`, which is safe because `line_start` is
+  `ce_pix & (hcount==0)`, exactly one cycle wide, and `vcount` is already the
+  new line's value at that edge. The fit confirms it: **M10K +3 and ALMs
+  slightly DOWN on every core**, which is what a real block RAM looks like.
+- **ssmissin/airattck/airattcka needed a transform, and the recipe for it had
+  been lost** — the baked table was built by an undocumented one-off step. It
+  was recovered by analysis: `ssm-pr1.114` (and `82s147.uh6`, same CRC
+  ed0bd072) is a **half-populated 512-byte dump of a 256-byte device** in
+  which every 32-byte block with address bit 5 set was never programmed and
+  reads 0x00. The real table is `table[i] == dump[{i[7:5], 1'b0, i[4:0]}]` —
+  exact for all 256 entries, with all 256 skipped bytes zero. `gunnail_core`
+  drops the hole blocks and compacts the address on load (`vprom_halfpop`);
+  an `.mra` cannot express a transform, so it belongs in RTL.
+- **Verified before building**: the whole load path was modelled off-board —
+  extract each PROM from the zips its `.mra` actually names, push it through
+  the RTL's address logic — and compared against the tables the bitstream used
+  to bake in. **48 of 48 reproduce byte-for-byte, 0 failures.** That also
+  proved the zip lists cover the clones that inherit a parent's PROM.
+- **Swept on hardware**: all 97 `.mra` loaded one at a time, each given a
+  settle, a screenshot, an injected coin-coin-start and a second screenshot.
+  **97/97 boot, render and respond to input** (`tools/mister_sweep.sh`,
+  `tools/analyse_sweep.py`). Four initially flagged — raphero, rapheroa,
+  strahlj, strahlja — were the 26 s settle being too short, not defects:
+  raphero's 15 MB upload alone takes ~18 s, and the flag was a colour-count
+  heuristic firing on a legitimately 2-colour title logo and a text-mode DIP
+  page. At 45 s all four pass. **Judge a "flat screen" by what the game draws
+  next, not by the colour count of one frame.**
+
 ## NMK16_Gunnail
 
 ### NMK-6 · Audio band correlation not re-measured since the sequencer fix

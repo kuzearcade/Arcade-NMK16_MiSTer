@@ -113,4 +113,10 @@
     <part crc="64e58cfe" name="19h.512"/>
     <part crc="5ccd9205" name="20h.512"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="tharrierb.zip|tharrier.zip|nmk004.zip" md5="none">
+    <part crc="fcd5efea" name="21.bpr"/>
+  </rom>
 </misterromdescription>

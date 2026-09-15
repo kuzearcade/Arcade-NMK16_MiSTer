@@ -56,4 +56,9 @@
     <!-- oki2, 0x100000 (NMK112-banked) -->
     <part crc="43e33a7e" name="ic27.sb7"/>
   </rom>
+
+  <!-- nmk_irq:vtiming -->
+  <rom index="1" zip="sabotenb.zip|nmk004.zip" md5="none">
+    <part crc="633ab1c9" name="8.ic37"/>
+  </rom>
 </misterromdescription>

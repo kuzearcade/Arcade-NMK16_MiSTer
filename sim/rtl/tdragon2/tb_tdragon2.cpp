@@ -204,6 +204,13 @@ int main(int argc, char **argv) {
 					top.rd_x = x;
 					top.rd_y = y;
 					top.eval();
+					// TB_XDUMP's per-pixel probe reaches into the design's
+					// internals, which only exist as C++ members when Verilator
+					// is run with --public-flat-rw. Guarded so the ordinary
+					// build (the one `make run` uses) still compiles: build with
+					// `make EXTRA_VFLAGS=--public-flat-rw EXTRA_CFLAGS=-DTB_XDUMP_SIGNALS`
+					// to enable it. See docs/known-issues.md NMK-21b.
+#ifdef TB_XDUMP_SIGNALS
 					if (xdump && y == 100)
 						std::fprintf(xdump, "x=%3d rdxf=%3d txlx=%3d byte=%02X vram=%04X nib=%X flip=%d\n", x,
 						   (int)top.rootp->tdragon2_core__DOT__rd_x_flip,
@@ -212,6 +219,7 @@ int main(int argc, char **argv) {
 						   (int)top.rootp->tdragon2_core__DOT__video__DOT__tx_vram_use,
 						   (int)top.rootp->tdragon2_core__DOT__video__DOT__tx_pix_nib,
 						   (int)top.rootp->tdragon2_core__DOT__flip_screen);
+#endif
 					uint32_t rgb = top.rd_rgb;
 					bytes[bi++] = (uint8_t)(rgb & 0xFF);
 					bytes[bi++] = (uint8_t)((rgb >> 8) & 0xFF);

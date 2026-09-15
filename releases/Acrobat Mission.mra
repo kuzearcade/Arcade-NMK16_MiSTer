@@ -61,4 +61,9 @@
     <!-- oki2, 0x080000 -->
     <part crc="c1517cd4" name="am-04.ic53"/>
   </rom>
+
+  <!-- nmk_irq:vtiming -->
+  <rom index="1" zip="acrobatm.zip|nmk004.zip" md5="none">
+    <part crc="633ab1c9" name="11.ic80"/>
+  </rom>
 </misterromdescription>

@@ -2220,11 +2220,21 @@ module tdragon2_core #(
 	wire sprite_dma_trigger;
 	wire [2:0] ipl_level_prom;
 	wire       sprite_dma_trigger_prom;
+	// V-PROM over ioctl (2026-09-15): the .mra streams this game's own
+	// 256-byte scanline-interrupt PROM as its <rom index="1"> region, so
+	// the bitstream no longer carries arcade PROM content and the Quartus
+	// build no longer needs a locally generated roms/*_vtiming.hex. Index 1
+	// is its own ioctl stream with its own address space, so no SDRAM
+	// region base moves. table_sel is 0 on this path: a .mra can only name
+	// ROMs from its own zip, so it always fills table 0.
+	wire        vprom_we   = (HW_ROMS != 0) && ioctl_download && ioctl_wr && (ioctl_index == 16'd1);
+	wire [11:0] vprom_addr = ioctl_addr[11:0];
 	nmk_irq #(
 		.VTIMING_FILE(VTIMING_FILE)
 	) irq_gen (
 		.clk_sys(clk_sys),
-		.table_sel({2'b0, game_powerins}), // V-PROM table 1 = powerins' 21.u71 (NMK16_Macross2.sv loads a 512-line file)
+		.table_sel((HW_ROMS != 0) ? 4'd0 : {3'b0, game_powerins}), // V-PROM table 1 = powerins' 21.u71 (NMK16_Macross2.sv loads a 512-line file)
+		.prom_we(vprom_we), .prom_addr(vprom_addr), .prom_data(ioctl_dout),
 		.reset(reset),
 		.line_start(vt_line_start),
 		.vcount(vt_vcount),

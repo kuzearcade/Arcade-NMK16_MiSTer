@@ -536,7 +536,7 @@ assign rd_y_screen = vcount_core[7:0] - 8'd16;
 // followed by powerins' 21.u71 (nmk_irq table 1, selected by
 // game_powerins); rebuild with `cat roms/tdragon2_vtiming.hex
 // roms/powerins_vtiming.hex` after mkgfxrom --mode concat on each PROM.
-tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_powerins_vtiming.hex"),
+tdragon2_core #(.HW_ROMS(1),
 	.IOCTL_BUCKET_REF_FILE("rtl/tdragon2/tdragon2_ioctl_bucket_ref.hex"),
 	.ROM_FETCH_BUCKET_REF_FILE("rtl/tdragon2/tdragon2_fetch_bucket_ref.hex"),
 	.ROM_FETCH_BUCKET_TOUCHED_FILE("rtl/tdragon2/tdragon2_fetch_bucket_touched.hex"),

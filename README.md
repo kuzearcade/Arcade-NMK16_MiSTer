@@ -158,25 +158,20 @@ verification results.
 ## Building
 
 The project needs Quartus Prime Lite 17.0 for the hardware build and
-Verilator, g++ and Python 3 for the simulations. `sys/` and the
-build-required part of `rtl/third_party/` are committed, so no fetch step
-and no network access are needed:
+Verilator, g++ and Python 3 for the simulations. A clone builds as-is:
+`sys/` and the build-required part of `rtl/third_party/` are committed, no
+fetch step, no network access, and **no ROM data of any kind**:
 
 ```
-python3 tools/mkgfxrom.py --zip mame_roms/tdragon2.zip --mode concat \
-        --files 10.bpr --out roms/tdragon2_vtiming.hex   # see below
 quartus_sh --flow compile NMK16_Gunnail   # or NMK16_Macross2, NMK16_Raphero, NMK16_Afega
 ```
 
-**One thing a clone does not carry: `roms/*_vtiming.hex`.** Each core's
-scanline-interrupt V-PROM (`10.bpr` and friends) is read by
-`$readmemh` at synthesis and baked into the bitstream rather than streamed
-by the `.mra` at runtime, because `nmk_irq.sv` needs it before any ROM
-download happens. That content is copyrighted dump data, so it is never
-committed — generate it from your own MAME romsets first, exactly as the
-simulation Makefiles do. Each core's `.sv` names the file it wants and the
-command that builds it. Without it the PROM initialises to zeros and frame
-IRQ and sprite-DMA timing break on hardware after a clean compile.
+The scanline-interrupt V-PROM each board carries (`10.bpr` and friends) used
+to be an exception — read by `$readmemh` at synthesis, which put arcade PROM
+content in the shipped `.rbf` and made the build depend on locally generated
+`roms/*_vtiming.hex`. Since 2026-09-15 each `.mra` streams it as its own
+`<rom index="1">` region and `nmk_irq.sv` takes it over `ioctl_download`
+like every other ROM, so nothing copyrighted is compiled in.
 
 `tools/bootstrap.sh` is only needed to change a pinned commit, or to pull
 a dependency's full upstream tree (datasheets, testbenches, other-toolchain

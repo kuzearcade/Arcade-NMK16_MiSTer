@@ -64,4 +64,10 @@
     <part crc="93ab615b" name="2.su12"/>
     <part crc="09a836bb" name="1.su13"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0200 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="airattcka.zip|airattck.zip|nmk004.zip" md5="none">
+    <part crc="ed0bd072" name="82s147.uh6"/>
+  </rom>
 </misterromdescription>

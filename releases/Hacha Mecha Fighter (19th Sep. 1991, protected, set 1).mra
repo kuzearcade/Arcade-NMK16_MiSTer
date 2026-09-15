@@ -60,4 +60,9 @@
     <!-- oki2, 0x080000 -->
     <part crc="b25ed93b" name="91076-3.45"/>
   </rom>
+
+  <!-- nmk_irq:vtiming -->
+  <rom index="1" zip="hachamf.zip|nmk004.zip" md5="none">
+    <part crc="633ab1c9" name="82s135.ic50"/>
+  </rom>
 </misterromdescription>

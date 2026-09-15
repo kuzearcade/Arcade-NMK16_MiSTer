@@ -58,4 +58,9 @@
     <!-- oki2, 0x080000 -->
     <part crc="89461d0f" name="921a06"/>
   </rom>
+
+  <!-- nmk_irq:vtiming -->
+  <rom index="1" zip="macross.zip|nmk004.zip" md5="none">
+    <part crc="633ab1c9" name="921a09"/>
+  </rom>
 </misterromdescription>

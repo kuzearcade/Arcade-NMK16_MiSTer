@@ -58,4 +58,9 @@
     <!-- oki2, 0x080000 -->
     <part crc="e7af69d2" name="90068-1.bin"/>
   </rom>
+
+  <!-- nmk_irq:vtiming -->
+  <rom index="1" zip="blkheart.zip|nmk004.zip" md5="none">
+    <part crc="98ed1c97" name="9.bpr"/>
+  </rom>
 </misterromdescription>

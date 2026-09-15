@@ -61,4 +61,10 @@
     <!-- oki2, 0x080000 -->
     <part crc="893552ab" name="89050-10.14j"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="tharrieru.zip|tharrier.zip|nmk004.zip" md5="none">
+    <part crc="fcd5efea" name="21.bpr"/>
+  </rom>
 </misterromdescription>

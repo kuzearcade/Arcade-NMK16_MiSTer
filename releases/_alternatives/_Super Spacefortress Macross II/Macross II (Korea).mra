@@ -49,4 +49,10 @@
     <!-- oki2, 0x100000 (game's own size; the shared map's slot is 0x200000) -->
     <part crc="b5335abb" name="bp932an.a05"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="macross2k.zip|macross2.zip" md5="none">
+    <part crc="e6ead349" name="mcrs2bpr.10"/>
+  </rom>
 </misterromdescription>

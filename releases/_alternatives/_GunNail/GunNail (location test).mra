@@ -61,4 +61,10 @@
     <!-- oki2, 0x080000 -->
     <part crc="6d133f0d" name="92077-6.u57"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="gunnailp.zip|gunnail.zip|nmk004.zip" md5="none">
+    <part crc="633ab1c9" name="9_82s135.u72"/>
+  </rom>
 </misterromdescription>

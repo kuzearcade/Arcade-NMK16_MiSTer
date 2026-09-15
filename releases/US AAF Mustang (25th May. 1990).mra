@@ -61,4 +61,9 @@
     <!-- oki2, 0x080000 -->
     <part crc="233c1776" name="90058-6"/>
   </rom>
+
+  <!-- nmk_irq:vtiming -->
+  <rom index="1" zip="mustang.zip|nmk004.zip" md5="none">
+    <part crc="633ab1c9" name="10.bpr"/>
+  </rom>
 </misterromdescription>

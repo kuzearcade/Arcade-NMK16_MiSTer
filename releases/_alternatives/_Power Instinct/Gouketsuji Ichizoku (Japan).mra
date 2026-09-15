@@ -62,4 +62,10 @@
     <part crc="f019bedb" name="93095-8.u46"/>
     <part crc="adc83765" name="93095-9.u47"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="powerinsj.zip|powerins.zip" md5="none">
+    <part crc="182cd81f" name="21.u71"/>
+  </rom>
 </misterromdescription>

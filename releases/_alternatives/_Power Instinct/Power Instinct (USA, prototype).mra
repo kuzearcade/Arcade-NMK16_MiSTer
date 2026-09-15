@@ -92,4 +92,10 @@
     <part crc="5839a2bd" name="ad12.ad12.27c040"/>
     <part crc="446f9dc3" name="ad13.ad13.27c040"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="powerinspu.zip|powerins.zip" md5="none">
+    <part crc="182cd81f" name="21.u71"/>
+  </rom>
 </misterromdescription>

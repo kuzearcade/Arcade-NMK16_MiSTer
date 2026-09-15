@@ -62,4 +62,9 @@
     <part crc="618f66f0" name="ssm13.190"/>
     <part crc="e8219c83" name="ssm12.189"/>
   </rom>
+
+  <!-- nmk_irq:vtiming -->
+  <rom index="1" zip="ssmissin.zip|nmk004.zip" md5="none">
+    <part crc="ed0bd072" name="ssm-pr1.114"/>
+  </rom>
 </misterromdescription>

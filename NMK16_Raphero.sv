@@ -339,7 +339,7 @@ wire [7:0] rd_y_screen = vcount_core[7:0] - 8'd16;
 // quartus_map: python3 tools/mkgfxrom.py --zip mame_roms/arcadian.zip
 // --mode concat --files prom2.u53 --out roms/raphero_vtiming.hex (ROM
 // dump content, never committed — see .gitignore).
-raphero_core #(.HW_ROMS(1), .VTIMING_FILE("roms/raphero_vtiming.hex")) core
+raphero_core #(.HW_ROMS(1)) core
 (
 	.clk_sys(clk_sys), .reset(reset),
 	.extra_por_hold(~pll_locked),

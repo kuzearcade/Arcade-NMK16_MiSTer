@@ -65,4 +65,9 @@
     <!-- oki2, 0x080000 -->
     <part crc="f0a782e3" name="sbs-g_05.ic160"/>
   </rom>
+
+  <!-- nmk_irq:vtiming -->
+  <rom index="1" zip="bioship.zip|nmk004.zip" md5="none">
+    <part crc="98ed1c97" name="82s135.ic94"/>
+  </rom>
 </misterromdescription>

@@ -396,7 +396,7 @@ wire [7:0] rd_y_screen = game_flip_y ? (8'd223 - rd_y_raw) : rd_y_raw; // out-of
 // NMK16_Afega.rbf, so this build leaves their YM2151 out of the
 // netlist (INCLUDE_AFEGA(0)) and keeps everything else. Measured:
 // 27,554 -> 26,554 ALMs and +0.393 -> +0.585 ns slack.
-gunnail_core #(.HW_ROMS(1), .VTIMING_FILE("roms/gunnail_multi_vtiming.hex"), .INCLUDE_AFEGA(0), .INCLUDE_NMK(1)) core
+gunnail_core #(.HW_ROMS(1), .INCLUDE_AFEGA(0), .INCLUDE_NMK(1)) core
 (
 	.clk_sys(clk_sys), .reset(reset), .game_sel(game_sel),
 	.extra_por_hold(~pll_locked),

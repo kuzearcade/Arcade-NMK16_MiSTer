@@ -69,4 +69,10 @@
     <!-- oki2, 0x080000 -->
     <part crc="631776d3" name="vdk-03.165"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="vandykejal2.zip|vandyke.zip|nmk004.zip" md5="none">
+    <part crc="98ed1c97" name="ic100.bpr"/>
+  </rom>
 </misterromdescription>

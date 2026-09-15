@@ -64,4 +64,9 @@
     <!-- oki2, 0x080000 -->
     <part crc="6d133f0d" name="92077-6.u57"/>
   </rom>
+
+  <!-- nmk_irq:vtiming -->
+  <rom index="1" zip="gunnail.zip|nmk004.zip" md5="none">
+    <part crc="633ab1c9" name="9_82s135.u72"/>
+  </rom>
 </misterromdescription>

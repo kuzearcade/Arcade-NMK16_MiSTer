@@ -55,6 +55,22 @@ module nmk_irq #(
 	// build and sim) leaves the other tables unused; tie 0.
 	input  [3:0] table_sel,
 
+	// Runtime PROM load (2026-09-15). The V-PROM used to be baked into the
+	// bitstream by the $readmemh below, which meant a shipped .rbf carried
+	// arcade PROM content and the Quartus build needed a locally generated
+	// roms/*_vtiming.hex. It now arrives the same way every other ROM does:
+	// the .mra streams it as its own <rom index="1"> region and the core
+	// drives these three ports from ioctl_download. VTIMING_FILE stays for
+	// the HW_ROMS=0 reference sims, which have no ioctl path at all.
+	//
+	// One table is loaded this way, at table 0, because a .mra can only
+	// name ROMs from its own game's zip -- so tie table_sel to 0 on the
+	// hardware path. The multi-table VTIMING_FILE layout below is now a
+	// simulation-only arrangement.
+	input        prom_we,
+	input [11:0] prom_addr,
+	input  [7:0] prom_data,
+
 	input        line_start,   // pulse at hcount==0, from video_timing
 	input  [9:0] vcount,       // 0..277, from video_timing
 
@@ -73,6 +89,11 @@ module nmk_irq #(
 
 	reg [7:0] vtiming_prom [0:4095]; // up to sixteen 256-entry tables, see table_sel
 	initial if (VTIMING_FILE != "") $readmemh(VTIMING_FILE, vtiming_prom);
+	// Synchronous write port, so Quartus still infers M10K here rather than
+	// 4096 flops (NMK-10 -- see docs/known-issues.md). Unused on the
+	// HW_ROMS=0 path, where prom_we is tied 0 and $readmemh does the work.
+	always @(posedge clk_sys)
+		if (prom_we) vtiming_prom[prom_addr] <= prom_data;
 
 	// y_arg = (vcount + VPHASE) mod VTOTAL — see header. vcount+VPHASE
 	// maxes out at 277+66=343, always < 2*VTOTAL(556), so a single
@@ -92,7 +113,25 @@ module nmk_irq #(
 	wire [8:0] term = (a >= PROM_SPAN) ? (a - PROM_SPAN) : a;
 	wire [7:0] addr = term[7:0] + PROM_START[7:0]; // 117..255, fits in 8 bits
 
-	wire [7:0] rom_val = vtiming_prom[{table_sel, addr}];
+	// REGISTERED read (2026-09-15). This array gained a write port above, so
+	// it is now a RAM rather than a $readmemh constant, and an asynchronous
+	// read would cost 4096 flops instead of one M10K -- NMK-10, for the
+	// fourth time. `addr` is combinational from vcount, which video_timing
+	// advances on the cycle hcount wraps, i.e. it is already the new line's
+	// value when line_start pulses; the registered read therefore settles
+	// one clk_sys later, so the sampling below runs off a one-cycle-delayed
+	// line_start. line_start is `ce_pix & (hcount==0)`, exactly one cycle
+	// wide, so the delayed copy is too. At 96 MHz the whole decision moves
+	// ~10 ns later in a 64 us scanline.
+	reg [7:0] rom_q;
+	reg       line_start_d;
+	reg       vcount0_d;
+	always @(posedge clk_sys) begin
+		rom_q        <= vtiming_prom[{table_sel, addr}];
+		line_start_d <= line_start;
+		vcount0_d    <= vcount[0];
+	end
+	wire [7:0] rom_val = rom_q;
 	wire [2:0] rom_lvl = {rom_val[6], rom_val[5], rom_val[4]};
 
 	reg [7:0] prev_val = 8'hFF; // matches m_vtiming_val's own reset value
@@ -109,7 +148,7 @@ module nmk_irq #(
 			// Every PROM entry is addressed every 2 scanlines — only
 			// even-vcount samples actually address it, matching the
 			// reference's own `(y & 0x1) == 0x0` gate exactly.
-			if (line_start && !vcount[0]) begin
+			if (line_start_d && !vcount0_d) begin
 				// Interrupt/sprite-DMA requests trigger on a raw 0->1
 				// bit transition (`val & ~prev_val`), computed before
 				// prev_val itself updates — matches the reference's own

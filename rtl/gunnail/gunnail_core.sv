@@ -3082,11 +3082,35 @@ module gunnail_core #(
 	wire sprite_dma_trigger;
 	wire [2:0] ipl_prom, ipl_hacky;
 	wire       sprdma_prom, sprdma_hacky;
+	// V-PROM over ioctl (2026-09-15): the .mra streams this game's own
+	// 256-byte scanline-interrupt PROM as its <rom index="1"> region, so
+	// the bitstream no longer carries arcade PROM content and the Quartus
+	// build no longer needs a locally generated roms/*_vtiming.hex. Index 1
+	// is its own ioctl stream with its own address space, so no SDRAM
+	// region base moves. table_sel is 0 on this path: a .mra can only name
+	// ROMs from its own zip, so it always fills table 0.
+	//
+	// ssmissin/airattck/airattcka are the one special case. Their PROM
+	// (ssm-pr1.114 / 82s147.uh6, both CRC ed0bd072) is a 512-byte dump of a
+	// 256-byte device in which every other 32-byte block was never
+	// programmed: blocks with address bit 5 set are all 0x00, and the real
+	// table is the concatenation of the blocks with bit 5 clear. Verified
+	// byte-exact against the table this core used to bake in --
+	// table[i] == dump[{i[7:5], 1'b0, i[4:0]}] for all 256 entries, with all
+	// 256 skipped bytes zero -- so the load drops the hole blocks and
+	// compacts the address rather than the .mra trying to express it (an
+	// .mra cannot). Every other set streams its PROM unchanged.
+	wire        vprom_halfpop = g_ssmissin;
+	wire        vprom_hole    = vprom_halfpop & ioctl_addr[5];
+	wire        vprom_we   = (HW_ROMS != 0) && ioctl_download && ioctl_wr && (ioctl_index == 16'd1) && !vprom_hole;
+	wire [11:0] vprom_addr = vprom_halfpop ? {4'd0, ioctl_addr[8:6], ioctl_addr[4:0]}
+	                                       : ioctl_addr[11:0];
 	nmk_irq #(
 		.VTIMING_FILE(VTIMING_FILE)
 	) irq_gen (
 		.clk_sys(clk_sys),
-		.table_sel(vprom_sel),
+		.table_sel((HW_ROMS != 0) ? 4'd0 : vprom_sel),
+		.prom_we(vprom_we), .prom_addr(vprom_addr), .prom_data(ioctl_dout),
 		.reset(reset),
 		.line_start(vt_line_start),
 		.vcount(vt_vcount),

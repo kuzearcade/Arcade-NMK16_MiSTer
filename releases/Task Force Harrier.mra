@@ -61,4 +61,9 @@
     <!-- oki2, 0x080000 -->
     <part crc="893552ab" name="89050-10.14j"/>
   </rom>
+
+  <!-- nmk_irq:vtiming -->
+  <rom index="1" zip="tharrier.zip|nmk004.zip" md5="none">
+    <part crc="fcd5efea" name="21.bpr"/>
+  </rom>
 </misterromdescription>

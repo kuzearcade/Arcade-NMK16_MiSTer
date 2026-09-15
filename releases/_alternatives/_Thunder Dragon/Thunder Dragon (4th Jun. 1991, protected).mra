@@ -63,4 +63,10 @@
     <!-- oki2, 0x080000 -->
     <part crc="ecfea43e" name="91070.2"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="tdragon1.zip|tdragon.zip|nmk004.zip" md5="none">
+    <part crc="e6ead349" name="91070.10"/>
+  </rom>
 </misterromdescription>

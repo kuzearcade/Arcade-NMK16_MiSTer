@@ -398,7 +398,7 @@ wire [7:0] rd_y_screen = game_flip_y ? (8'd223 - rd_y_raw) : rd_y_raw; // out-of
 // 91070.10), 3: de156d99 (mustangs 90058-10), 4-7: table 0 again — a
 // 2048-line file. Generate it locally before quartus_map (ROM dump
 // content, never committed): see docs/hw-bringup.md.
-gunnail_core #(.HW_ROMS(1), .VTIMING_FILE("roms/gunnail_multi_vtiming.hex"), .INCLUDE_AFEGA(1), .INCLUDE_NMK(0)) core
+gunnail_core #(.HW_ROMS(1), .INCLUDE_AFEGA(1), .INCLUDE_NMK(0)) core
 (
 	.clk_sys(clk_sys), .reset(reset), .game_sel(game_sel),
 	.extra_por_hold(~pll_locked),

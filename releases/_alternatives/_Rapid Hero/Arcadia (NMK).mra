@@ -73,4 +73,10 @@
     <part crc="f1a80e5a" name="rhp94099.6"/>
     <part crc="0d99547e" name="rhp94099.7"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="arcadian.zip" md5="none">
+    <part crc="e6ead349" name="prom2.u53"/>
+  </rom>
 </misterromdescription>

@@ -535,6 +535,7 @@ module hachamfb_core #(
 	) irq_gen (
 		.clk_sys(clk_sys),
 		.table_sel(3'd0),
+		.prom_we(1'b0), .prom_addr(12'd0), .prom_data(8'd0), // reference core: $readmemh only
 		.reset(reset),
 		.line_start(vt_line_start),
 		.vcount(vt_vcount),

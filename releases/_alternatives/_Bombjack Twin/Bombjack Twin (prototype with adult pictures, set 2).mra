@@ -64,4 +64,10 @@
     <part crc="adb2f256" name="top.ic27"/>
     <part crc="6ebeb9e4" name="bottom.ic27"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="bjtwinpa.zip|bjtwin.zip|nmk004.zip" md5="none">
+    <part crc="633ab1c9" name="8.ic37"/>
+  </rom>
 </misterromdescription>

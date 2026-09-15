@@ -62,4 +62,10 @@
     <!-- oki2, 0x080000 -->
     <part crc="d945aabb" name="kf-a1.ic1"/>
   </rom>
+
+  <!-- nmk_irq:vtiming, 0x0100 bytes. Streamed as its own ioctl index so no
+       SDRAM region base moves; nmk_irq.sv writes it into table 0. -->
+  <rom index="1" zip="hachamfp.zip|hachamf.zip|nmk004.zip" md5="none">
+    <part crc="633ab1c9" name="82s135.ic50"/>
+  </rom>
 </misterromdescription>
