@@ -81,7 +81,7 @@ module video_state_top #(
 	) video (
 		.clk_sys(clk_sys), .reset(reset),
 		.game_powerins(1'b0), .tile_lsb(1'b0), .bg_8bpp(1'b0), .bg_code_mod12k(1'b0), .tx_xscroll(9'd0), .tx_off(1'b0), .spr_off(1'b0), .gfx_swap34(1'b0), .spr_bitrev(1'b0), .base_word_fgtile(23'd0), .base_word_bgtile(23'd0), .base_word_sprites(23'd0),
-		.lowres((LOWRES != 0)), .tall240(1'b0), .raster_scroll((RASTER != 0)), .cfg_rt((CFG_RT != 0)), .bga_pal_base_i(BGA_PAL_I), .bgb_pal_base_i(BGB_PAL_I), .spr_pal_base_i(SPR_PAL_I), .tx_pal_base_i(TX_PAL_I),
+		.lowres((LOWRES != 0)), .tall240(1'b0), .flip_screen(1'b0), .raster_scroll((RASTER != 0)), .cfg_rt((CFG_RT != 0)), .bga_pal_base_i(BGA_PAL_I), .bgb_pal_base_i(BGB_PAL_I), .spr_pal_base_i(SPR_PAL_I), .tx_pal_base_i(TX_PAL_I),
 		.bga_code_mask_i(BGA_MASK_I), .bgb_code_mask_i(BGB_MASK_I), .spr_units_i(SPR_UNITS_I), .sprdma_word_base(SPRDMA_WORD), .nmk214_en((NMK214_EN != 0)), .spr_swap((SPR_SWAP != 0)), .tx_bg_mode(1'b0), .tx_yscroll(tx_yscroll_i), .tx_bank_off(24'd0), .spr_flip_en(1'b0), .spr_lag1(1'b0), .vis_start(1'b0),
 		.bg2_en(1'b0), .bga_rom2(1'b0), .bgb_rom2(1'b0), .base_word_bgtile_b(23'd0), .bgvram_b_addr(), .bgvram_b_data(16'd0), .bgb_xscroll(16'd0), .bgb_yscroll(16'd0),
 		.txc_addr(), .txc_req(), .txc_busy(1'b0), .txc_valid(1'b0), .txc_dout(16'd0), .txc_dout_pair(32'd0),

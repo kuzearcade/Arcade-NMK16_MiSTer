@@ -2307,7 +2307,7 @@ module tdragon2_core #(
 		.nmk214_cfg_we(1'b0), .nmk214_cfg_data(8'h00),
 		.bg_bank(bgbank_reg),
 		.tilerambank(tilerambank_reg),
-		.rd_x(rd_x_flip), .rd_y(rd_y_flip), .rd_rgb(rd_rgb_video),
+		.rd_x(rd_x_flip), .rd_y(rd_y_flip), .flip_screen(flip_screen), .rd_rgb(rd_rgb_video),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),
 		.sd_dout(sd2_dout), .sd_dout_pair(sd2_dout_pair), .sd_req(sd2_req), .sd_ack(sd2_ack),
 		.sd_b_addr(sd1_addr), .sd_b_req(sd1_req), .sd_b_dout(sd1_dout), .sd_b_dout_pair(sd1_dout_pair), .sd_b_ack(sd1_ack),

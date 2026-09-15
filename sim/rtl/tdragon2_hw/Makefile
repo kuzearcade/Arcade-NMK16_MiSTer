@@ -15,7 +15,9 @@ CORE_DIR := ../../../rtl/tdragon2
 RTL_DIR := ../../../rtl
 MODEL_DIR := ../../models
 ROMS_DIR := ../../../mame_roms
-OBJ_DIR := obj_dir
+OBJ_DIR := obj_dir$(OBJSFX)
+DSW1 ?= 255
+DSW2 ?= 255
 TOP := tdragon2_hw_top
 Z1 := $(ROMS_DIR)/tdragon2.zip
 
@@ -51,6 +53,7 @@ vtiming-rom:
 $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_tdragon2_hw.cpp $(FX68K_DIR)/fx68k.sv roms/tdragon2_ioctl.bin roms/tdragon2_vtiming.hex
 	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --top-module $(TOP) $(EXTRA_VFLAGS) \
 		+define+SIMULATION +define+OKI_CACHE_DIAG \
+		-GDSW1=$(DSW1) -GDSW2=$(DSW2) \
 		-y $(FX68K_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl \
 		$(SOURCES) $(FX68K_DIR)/fx68k.sv $(FX68K_DIR)/fx68kAlu.sv $(FX68K_DIR)/uaddrPla.sv \
 		tb_tdragon2_hw.cpp \

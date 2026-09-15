@@ -16,6 +16,7 @@
 #include <cstdlib>
 
 #include "Vtdragon2_core.h"
+#include "Vtdragon2_core___024root.h"
 #include "verilated.h"
 
 #include "../common/crc32.h"
@@ -44,6 +45,7 @@ int main(int argc, char **argv) {
 	// The .mra <switches> bytes, as the board would deliver them (the core is
 	// built with SIM_DSW=1). tdragon2's Flip Screen is DSW1 bit 2, 1 = Off:
 	// TB_DSW1=F3 turns it on.
+	FILE *xdump = std::getenv("TB_XDUMP") ? std::fopen(std::getenv("TB_XDUMP"),"w") : nullptr;
 	top.dsw1_i = 0xFF00 | (std::getenv("TB_DSW1") ? strtoul(std::getenv("TB_DSW1"), nullptr, 16) : 0xFF);
 	top.dsw2_i = 0xFF00 | (std::getenv("TB_DSW2") ? strtoul(std::getenv("TB_DSW2"), nullptr, 16) : 0xFF);
 	top.reset = 1;
@@ -202,6 +204,14 @@ int main(int argc, char **argv) {
 					top.rd_x = x;
 					top.rd_y = y;
 					top.eval();
+					if (xdump && y == 100)
+						std::fprintf(xdump, "x=%3d rdxf=%3d txlx=%3d byte=%02X vram=%04X nib=%X flip=%d\n", x,
+						   (int)top.rootp->tdragon2_core__DOT__rd_x_flip,
+						   (int)top.rootp->tdragon2_core__DOT__video__DOT__tx_line_x,
+						   (int)top.rootp->tdragon2_core__DOT__video__DOT__fgtile_rom_byte,
+						   (int)top.rootp->tdragon2_core__DOT__video__DOT__tx_vram_use,
+						   (int)top.rootp->tdragon2_core__DOT__video__DOT__tx_pix_nib,
+						   (int)top.rootp->tdragon2_core__DOT__flip_screen);
 					uint32_t rgb = top.rd_rgb;
 					bytes[bi++] = (uint8_t)(rgb & 0xFF);
 					bytes[bi++] = (uint8_t)((rgb >> 8) & 0xFF);

@@ -149,7 +149,9 @@ but not proven), `infra` (build/test/doc health).
   expected — the RBFs are rebuilt so `releases/` matches the RTL.
 
 ### NMK-21 · Flip Screen DIP did nothing on any core
-- **Cores:** all four · **Severity:** bug · **Status:** fixed (2026-09-15)
+- **Cores:** all four · **Severity:** bug · **Status:** **fixed and confirmed
+  on hardware 2026-09-14** (three separate defects — a dropped register, a
+  backwards prefetch, and an unimplemented Afega mechanism)
 - The games read their Flip Screen DIP and write bit 0 of the flipscreen
   register (`nmk16_v.cpp`'s `flipscreen_w` -> `flip_screen_set` +
   `m_spritegen->set_flip_screen`). Every core decoded that write and latched
@@ -175,20 +177,136 @@ but not proven), `infra` (build/test/doc health).
   The mirror is blanking-safe: off-screen positions arrive >= the visible
   size and the modular subtraction keeps them there. `vandyke`/`vandykeb`
   take the inverted sense (`vandyke_flipscreen_w` calls `flipscreen_w(~data)`).
-- Verified in simulation against MAME for both DIP settings:
-
-  | | RTL flip == rot180(no flip) | vs MAME, flip off | vs MAME, flip on |
-  |---|---|---|---|
-  | tdragon2 | 211/211 frames | 194/211 pixel-exact | 194/211, same frames |
-  | gunnail | 85/85 frames | 69/85 pixel-exact | 69/85, same frames |
-
-  In both games every non-exact frame is a blank boot-lag frame (`sim
-  nonblack 0`), and the statistics are *identical* with the DIP on and off —
-  turning flip on costs nothing in fidelity.
+- Verified in the reference sim against MAME for both DIP settings:
+  tdragon2 194 of 211 frames pixel-exact, gunnail 69 of 85 — every
+  non-exact frame a blank boot-lag frame (`sim nonblack 0`), and the
+  statistics *identical* with the DIP on and off, so turning flip on costs
+  nothing in fidelity.
+- **Do not measure "RTL flip == rot180(RTL no-flip)" and call it
+  verification.** In the reference sim the only thing the flip bit does is
+  drive this mirror, so that identity holds by construction whatever the
+  rest of the pipeline does — it was reported as "211/211 frames" in an
+  earlier draft of this entry and is worthless. The load-bearing numbers are
+  RTL-vs-MAME and hardware-path-vs-reference-path, both below.
 - `tdragon2_core.sv` gained a `SIM_DSW` parameter (as `gunnail_core.sv`
   already had) so a HW_ROMS=0 reference sim can drive the DIPs at all;
   without it `sel_dsw1` reads a hardcoded 0xFFFF and no DIP-selected
   behaviour can be exercised.
+
+#### NMK-21b · …and the first fix broke the picture on real hardware only
+The coordinate mirror above is correct and is invisible to the reference
+sim, but it inverted an assumption the **hardware** tile fetch depends on.
+`video_macross2.sv` prefetches tiles for the pixel 16 ahead of the one being
+drawn (`tile_prefetch_byte`, PF=16 — see NMK-16). That lookahead was a fixed
+`rd_x + 16`. With the raster mirrored, `rd_x` counts **down**, so `+16`
+pointed 16 pixels *behind* the beam: every prefetch fetched a tile already
+drawn, and every drawn pixel missed. The board showed vertical striping; the
+HW_ROMS=0 sim, which has zero-latency `$readmemh` arrays and no prefetch at
+all, showed nothing. Fixed by making the lookahead direction-aware:
+
+```systemverilog
+wire [8:0] x_look = flip_screen ? (rd_x - 9'd16) : (rd_x + 9'd16);
+```
+
+The 9-bit wrap stays symmetric — unflipped, the pre-line blank `rd_x`
+496..511 gives `x_look` 0..15; flipped, the mirrored 399..384 gives 383..368,
+the flipped line's own first pixels, fetched just as early. `video_macross2`'s
+`flip_screen` input therefore means the **horizontal** axis specifically: it
+only steers this lookahead, and a vertical mirror just reorders whole lines.
+
+How it was found, after a long detour: `DBG_MISS_PAINT` reported 0 BG-miss
+and 0 TX-miss pixels under flip, and a coordinate dump showed `rd_x_flip`,
+`tx_line_x` and `bg_line_x` **identical** in both paths, which looked like the
+fault had to be downstream of the tilemaps. It was not — the cache was
+hitting, on the wrong entry. What settled it was widening the dump to carry
+the *data* alongside the coordinates: the TX ROM byte (`fgtile_rom_byte`),
+the VRAM word travelling with it (`tx_vram_use`) and the resulting palette
+nibble, logged per pixel on one scanline in both paths and diffed
+frame-by-frame. **Dump the value, not just the address** — a cache that
+serves stale data from a correctly-computed address is invisible to an
+address-only trace, and `hit` flags cannot see it either.
+
+Two traps in that harness, both of which wasted time:
+- `tb_tdragon2_hw.cpp` opens its dump file *after* the multi-minute ioctl
+  ROM-download loop, so short runs produce an empty (or stale) file that
+  looks like broken instrumentation. Check the file's **format**, not just
+  its existence, before concluding the probe is dead.
+- Verilator `--public-flat-rw` makes the hardware build roughly 10x slower.
+  Add explicit `output` ports to `tdragon2_hw_top.sv` instead.
+
+#### NMK-21c · Afega boards flip from the DIP bus, not from a CPU write
+`afega_map` has **no `flipscreen_w` at all**, so `flip_screen_reg` is never
+written and the fix above does nothing for that family.
+`afega_state::video_update` reads the DIP word live every frame instead, as
+two independent axes:
+
+```cpp
+flip_screen_x_set(BIT(~m_dsw_io[0]->read(), 8));   // horizontal
+flip_screen_y_set(BIT(~m_dsw_io[0]->read(), 9));   // vertical
+```
+
+Always bit 8 = X and bit 9 = Y regardless of which one that port set happens
+to *label* "Flip Screen" — `grdnstrm` names bit 9 Flip and bit 8 Mirror,
+`grdnstrk` names them the other way round. Implemented in `gunnail_core.sv`
+as `flip_x`/`flip_y` driving `rd_x_flip`/`rd_y_flip` separately, gated to the
+seven game ids whose machine config keeps `screen_update_afega`:
+`G_STAGGER1`, `G_REDHAWK`, `G_GRDNSTRMK/J/G`, `G_REDFOXWP2/A`. The sets on
+`screen_update_firehawk` (grdnstrm, grdnstrmau, firehawk, spec2k),
+`screen_update_redhawki`, `screen_update_redhawkb` and
+`screen_update_bubl2000` (popspops, mangchi, bubl2000, hotbubl) read no DIP
+in MAME and correctly ignore it here too.
+
+**Deliberate divergence from MAME:** MAME flips only the tilemaps on these
+boards and leaves the sprites in place (the `grdnstrm` GAME line says
+"flip-screen doesn't work on sprites for all sets"). That reads as a MAME
+limitation rather than board behaviour, so this core mirrors the whole
+composed output, as the other three families already do. Measured on
+grdnstrmk against MAME frame 600:
+
+| | differing pixels (of 57,344) |
+|---|---|
+| our unflipped vs MAME unflipped | **0** |
+| our Y-flipped vs MAME Y-flipped | 5,038 |
+| MAME Y-flipped vs Ymirror(MAME unflipped) | **5,038** |
+
+i.e. the entire difference is the sprite set MAME declines to mirror, and
+nothing outside it. Our sim frame 598 corresponds to MAME frame 600 (the
+neighbours differ by ~1,000 px; only 598 hits zero).
+
+#### Verification on the DE10-Nano (2026-09-14)
+Two boot-to-attract runs per game, DIP off and on, compared as
+`flipped == rot180(unflipped)` on native `screenshot` PNGs (**not** the
+capture box — its downscale hides pixel differences):
+
+| core | game | exact matches | frame content |
+|---|---|---|---|
+| NMK16_Macross2 | tdragon2 | 9/11 | demo, ~80k lit px |
+| NMK16_Gunnail | gunnail | **10/10** | demo, ~80k lit px |
+| NMK16_Raphero | raphero | 8/10 | demo, ~80k lit px |
+| NMK16_Afega | grdnstrmk, X axis | **8/8** | demo, ~55k lit px |
+| NMK16_Afega | grdnstrmk, Y axis | 7/8 | demo, ~55k lit px |
+
+Non-matching frames are attract-animation drift between separate boots, not
+geometry: on the one grdnstrmk Y miss the flipped frame differs from
+`Ymirror(off)` by 5,617 px while the competing hypotheses differ by 25,000+.
+Regression controls: grdnstrm (the no-flip Afega set) stays byte-identical
+with the DIP on, and gunnail is unaffected by the shared `gunnail_core.sv`
+edit. Corroborated in simulation — hardware path vs reference path under
+flip, tdragon2 frames 210-390 sampled every 10, **19/19 pixel-exact** (all
+title-screen frames; the sim's attract had not reached the demo, so the
+sprite-and-scroll evidence for that core is the board captures).
+
+- **Harness trap that faked a null result:** MiSTer reads DIP overrides from
+  `config/dips/<mra name>.dip`, **not** `<setname>.dip`. The stale
+  `tdragon2.dip` left over from the 2026-09-09 .mra rename was being ignored,
+  so the first "flipped" run came back byte-identical to the unflipped one
+  and looked like the core still dropping the DIP.
+- Earlier readings in this entry that the x_look fix superseded — "0 of 31
+  non-blank frames equal rot180", "ROM CHECK text renders at the unmirrored
+  x" — were taken against the pre-fix build and no longer describe this RTL.
+  A related retraction: an intermediate "68/99 frames exact" was vacuous
+  because all 68 were blank boot frames. **Always report the non-blank count
+  alongside any frame-match statistic.**
 
 ## NMK16_Gunnail
 

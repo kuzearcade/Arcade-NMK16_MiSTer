@@ -126,6 +126,14 @@ module video_macross2 #(
 	// vertical pair actually changes: bitmap y origin 8 instead of 16,
 	// and 240 visible lines instead of 224.
 	input        tall240,
+	// Screen flip, HORIZONTAL axis only: the cores mirror rd_x/rd_y before
+	// handing them over, so with this set the raster is scanned in DESCENDING
+	// x and the prefetch below has to follow -- see x_look. Nothing else in
+	// this module depends on the scan direction, and nothing here depends on
+	// the VERTICAL mirror at all (it only reorders whole lines), so a core
+	// with independent x/y flip (gunnail_core's Afega sets, whose DIP bus
+	// drives the two axes separately) passes its X bit here, not the pair.
+	input        flip_screen,
 	input        raster_scroll,
 	input        cfg_rt,
 	input [10:0] bga_pal_base_i,   // layer A (gfx1's palette base in the game's GFXDECODE)
@@ -702,7 +710,15 @@ module video_macross2 #(
 	// the line's first words are fetched before its first visible pixel;
 	// vcount has advanced by then (it steps at the hcount wrap), so they
 	// are fetched for the right line. Unused at HW_ROMS=0.
-	wire [8:0] x_look = rd_x + 9'd16;
+	// Direction-aware: with flip_screen the core mirrors rd_x, so the scan runs
+	// DOWN the line and a fixed +16 would point 16 pixels BEHIND it -- every
+	// prefetch would fetch a tile already drawn and every drawn pixel would
+	// miss. That is invisible at HW_ROMS=0 (zero-latency $readmemh arrays, no
+	// prefetch at all) and showed up on the board as vertical striping.
+	// The 9-bit wrap stays symmetric: unflipped, the pre-line blank rd_x
+	// 496..511 gives x_look 0..15; flipped, the mirrored 399..384 gives
+	// 383..368 -- the flipped line's own first pixels, fetched just as early.
+	wire [8:0] x_look = flip_screen ? (rd_x - 9'd16) : (rd_x + 9'd16);
 
 	wire [9:0]  bm_x      = rd_x + bitmap_x0;   // bitmap x of the pixel being drawn
 	wire [9:0]  bm_x_look = x_look + bitmap_x0; // ... and of the lookahead pixel

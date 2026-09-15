@@ -26,8 +26,10 @@
 // gated by hblank_o/vblank_o/ce_pix_o exactly as real hardware's own
 // video sync logic would, is the only way to see what real hardware
 // truly outputs.
-module tdragon2_hw_top
-(
+module tdragon2_hw_top #(
+	parameter [7:0] DSW1 = 8'hFF,   // .mra <switches> byte 0 (HW_ROMS=1 path reads dsw*_i directly)
+	parameter [7:0] DSW2 = 8'hFF
+) (
 	input  clk_sys,
 	input  reset,
 
@@ -78,6 +80,14 @@ module tdragon2_hw_top
 	output        hblank_o,
 	output        vblank_o,
 	output [9:0]  hcount_o,
+	// sim-only flip diagnostics (hierarchical refs; this file is a testbench harness)
+	output [8:0]  dbg_rdxf,
+	output [8:0]  dbg_txlx,
+	output [12:0] dbg_bgx,
+	output        dbg_flip,
+	output [7:0]  dbg_txbyte,
+	output [15:0] dbg_txvram,
+	output [3:0]  dbg_txnib,
 	output [9:0]  vcount_o,
 
 	output        frame_done,
@@ -208,7 +218,7 @@ module tdragon2_hw_top
 
 		.audio_l(audio_l), .audio_r(),
 		.ce_pix_o(ce_pix_o), .hcount_o(hcount_o), .vcount_o(vcount_o), .hblank_o(hblank_o), .vblank_o(vblank_o),
-		.in0_i(in0_i), .in1_i(in1_i), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF),
+		.in0_i(in0_i), .in1_i(in1_i), .dsw1_i({8'hFF, DSW1[7:0]}), .dsw2_i({8'hFF, DSW2[7:0]}),
 
 		.rom_csum_o(rom_csum_o), .rom_csum_count_o(rom_csum_count_o), .rom_csum_done_o(rom_csum_done_o),
 		.rom_fetch_csum_o(rom_fetch_csum_o), .rom_fetch_csum_count_o(rom_fetch_csum_count_o), .rom_fetch_csum_done_o(rom_fetch_csum_done_o),
@@ -266,5 +276,13 @@ module tdragon2_hw_top
 			end
 		end
 	end
+
+	assign dbg_rdxf = core_inst.rd_x_flip;
+	assign dbg_txlx = core_inst.video.tx_line_x;
+	assign dbg_bgx  = core_inst.video.bg_line_x;
+	assign dbg_flip = core_inst.flip_screen;
+	assign dbg_txbyte = core_inst.video.fgtile_rom_byte;
+	assign dbg_txvram = core_inst.video.tx_vram_use;
+	assign dbg_txnib  = core_inst.video.tx_pix_nib;
 
 endmodule

@@ -3135,11 +3135,43 @@ module gunnail_core #(
 	// modular way -- for every mode here, W-1-rd_x on an out-of-range rd_x
 	// wraps back into [W, 2^n-1] -- so out-of-range stays out of range.
 	// ------------------------------------------------------------------
-	wire       flip_screen = (g_vandyke | g_vandykeb) ? ~flip_screen_reg[0] : flip_screen_reg[0];
+	// Afega boards are the exception: afega_map has no flipscreen_w at all,
+	// so flip_screen_reg is never written. afega_state::video_update instead
+	// reads the DIP bus LIVE every frame, as two independent axes:
+	//     flip_screen_x_set(BIT(~m_dsw_io[0]->read(), 8));   // horizontal
+	//     flip_screen_y_set(BIT(~m_dsw_io[0]->read(), 9));   // vertical
+	// (active low, and always bit 8 = X / bit 9 = Y regardless of which one
+	// that port set happens to LABEL "Flip Screen" -- grdnstrm names bit 9
+	// Flip and bit 8 Mirror, grdnstrk names them the other way round.)
+	// Verified against MAME on grdnstrmk frame 600 with the DIPs forced from
+	// a cfg file: bit 9 low gives a Y mirror, bit 8 low an X mirror.
+	//
+	// Only the sets whose machine config keeps screen_update_afega flip at
+	// all -- stagger1/redhawk (cfg stagger1) and grdnstrmk/j/g + redfoxwp2/a
+	// (cfg grdnstrmk). grdnstrm/grdnstrmau use screen_update_firehawk,
+	// redhawki/s/sa/g use screen_update_redhawki, redhawkb uses
+	// screen_update_redhawkb and popspops/mangchi/bubl2000/hotbubl* use
+	// screen_update_bubl2000 -- none of which reads the DIP, so those sets
+	// correctly ignore it here too.
+	//
+	// MAME flips only the tilemaps on these boards and leaves the sprites
+	// unmirrored ("flip-screen doesn't work on sprites for all sets" on the
+	// grdnstrm GAME line, ~5-9k sprite pixels out of place in a frame diff).
+	// That is a MAME limitation rather than board behaviour, so the whole
+	// composed output is mirrored here exactly as for the other families --
+	// a deliberate, documented divergence from MAME on Afega sprite pixels.
+	wire       g_afega_dswflip = (game_sel == G_STAGGER1)  | (game_sel == G_REDHAWK)   |
+	                             (game_sel == G_GRDNSTRMK) | (game_sel == G_GRDNSTRMJ) |
+	                             (game_sel == G_GRDNSTRMG) | (game_sel == G_REDFOXWP2) |
+	                             (game_sel == G_REDFOXWP2A);
+	wire       dswflip_ok  = g_afega_dswflip & (HW_ROMS || (SIM_DSW != 0));
+	wire       flip_cpu    = (g_vandyke | g_vandykeb) ? ~flip_screen_reg[0] : flip_screen_reg[0];
+	wire       flip_x      = dswflip_ok ? ~dsw1_i[8] : flip_cpu;
+	wire       flip_y      = dswflip_ok ? ~dsw1_i[9] : flip_cpu;
 	wire [8:0] flip_w_m1   = lowres ? 9'd255 : 9'd383;      // screen_w_vis - 1
 	wire [7:0] flip_h_m1   = g_manybloc ? 8'd239 : 8'd223;  // screen_h_vis - 1
-	wire [8:0] rd_x_flip = flip_screen ? (flip_w_m1 - rd_x) : rd_x;
-	wire [7:0] rd_y_flip = flip_screen ? (flip_h_m1 - rd_y) : rd_y;
+	wire [8:0] rd_x_flip = flip_x ? (flip_w_m1 - rd_x) : rd_x;
+	wire [7:0] rd_y_flip = flip_y ? (flip_h_m1 - rd_y) : rd_y;
 
 	video_macross2 #(
 		.SCREEN_H(INCLUDE_NMK ? 240 : 224),   // manybloc (id 54, NMK16_Gunnail.rbf only) needs the 240-line plane
@@ -3186,7 +3218,7 @@ module gunnail_core #(
 		.gfx_swap34(g_gfx_swap34), .spr_bitrev(g_tomagic),
 		.base_word_fgtile(BASE_WORD_FGTILE), .base_word_bgtile(BASE_WORD_BGTILE_A), .base_word_sprites(BASE_WORD_SPRITES),
 		.tilerambank(2'd0),
-		.rd_x(rd_x_flip), .rd_y(rd_y_flip), .rd_rgb(rd_rgb),
+		.rd_x(rd_x_flip), .rd_y(rd_y_flip), .flip_screen(flip_x), .rd_rgb(rd_rgb),
 		.sd_addr(sd2_addr), .sd_wrl(sd2_wrl), .sd_wrh(sd2_wrh), .sd_din(sd2_din),
 		.sd_dout(sd2_dout), .sd_dout_pair(sd2_dout_pair), .sd_req(sd2_req), .sd_ack(sd2_ack),
 		.sd_b_addr(sd1_addr), .sd_b_req(sd1_req), .sd_b_dout(sd1_dout), .sd_b_dout_pair(sd1_dout_pair), .sd_b_ack(sd1_ack),

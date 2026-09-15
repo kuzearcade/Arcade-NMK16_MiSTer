@@ -152,6 +152,7 @@ int main(int argc, char **argv) {
 	bool prev_frame_done = false;
 	long last_frame_nonzero_px = -1;
 	bool dump_ppm = std::getenv("TB_DUMP_PPM") != nullptr;
+	FILE *xdump = std::getenv("TB_XDUMP") ? std::fopen(std::getenv("TB_XDUMP"),"w") : nullptr;
 
 	// Live framebuffer, continuously overwritten pixel-by-pixel as the
 	// core's own real-time raster scan produces them (ce_pix_o-gated,
@@ -178,6 +179,11 @@ int main(int argc, char **argv) {
 			}
 		}
 
+		if (xdump && top.ce_pix_o && top.vcount_o == 100) {
+			std::fprintf(xdump, "x=%3d rdxf=%3d txlx=%3d byte=%02X vram=%04X nib=%X flip=%d\n",
+			   (int)top.hcount_o - 28, (int)top.dbg_rdxf, (int)top.dbg_txlx,
+			   (int)top.dbg_txbyte, (int)top.dbg_txvram, (int)top.dbg_txnib, (int)top.dbg_flip);
+		}
 		if (top.ce_pix_o && !top.hblank_o && !top.vblank_o) {
 			int x = (int)top.hcount_o - 28;
 			int y = (int)top.vcount_o - 16;
@@ -190,7 +196,8 @@ int main(int argc, char **argv) {
 			FILE *ppm = nullptr;
 			if (dump_ppm && (frame_count % ppm_step) == 0) {
 				char fname[64];
-				std::snprintf(fname, sizeof(fname), "tdragon2_hw_frame_%02u.ppm", frame_count);
+				std::snprintf(fname, sizeof(fname), "%stdragon2_hw_frame_%02u.ppm",
+				              std::getenv("TB_PREFIX") ? std::getenv("TB_PREFIX") : "", frame_count);
 				ppm = std::fopen(fname, "wb");
 				std::fprintf(ppm, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
 			}
