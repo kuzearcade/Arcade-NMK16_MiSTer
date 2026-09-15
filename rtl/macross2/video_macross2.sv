@@ -1116,16 +1116,59 @@ module video_macross2 #(
 	// S_SPR_CHECK below, instead of a register-then-wait-then-plot
 	// sequence of three. Layout: 128 bytes per 16x16 unit, left half
 	// (cols 0-7) at +0, right half at +64, 4 bytes per row.
-	// Tile code wraps modulo the ROM's element count (MAME: code %
-	// elements). Two conditional subtractions cover every reachable unit
-	// code (16-bit sprite code + at most 255 more per multi-tile sprite)
-	// for both ROM sizes without a divider; a power-of-two size wraps the
-	// same way plain truncation did.
+	// Tile code wraps modulo the ROM's element count (MAME: gfx_element
+	// does code %= total_elements).
+	//
+	// NMK-25: this used to be TWO conditional subtractions, which only
+	// wraps codes below 3*spr_units. hachamf draws its big character
+	// sprite (the one over GAME OVER, and on the name-entry screen) with
+	// code 0x81D6 = 33238 against spr_units = 8192: MAME gives tile
+	// 33238 % 8192 = 470, the old chain gave 33238 - 2*8192 = 16854, which
+	// is not just the wrong tile but past the end of the 1 MB sprite ROM,
+	// so the fetch returned a different region's graphics entirely. That
+	// is why the sprite showed coherent-but-wrong art rather than noise.
+	//
+	// Every spr_units this core is given is either 2^k (1, 4096, 8192,
+	// 16384, 65536) or 3*2^k (12288 acrobatm/strahl, 49152 raphero):
+	//   - power of two  -> an exact mask, correct for any code, and the
+	//                      cheapest path (this is what fixes hachamf)
+	//   - otherwise     -> four conditional subtractions, exact for any
+	//                      code below 16*spr_units. The largest reachable
+	//                      unit code is a 16-bit sprite code plus at most
+	//                      255 for a 16x16-tile sprite = 65790, so this is
+	//                      exact for spr_units >= 4112 -- true of both
+	//                      non-power-of-two values above. Keep that bound
+	//                      in mind before adding a smaller odd size.
 	localparam integer SPR_UNITS = SPRITES_BYTES / 128;
 	integer spr_units; // powerins: 0x800000/128 = 65536, the full 16-bit code space; cfg_rt: the game's own count (acrobatm/strahl: 12288, not a power of two)
 	always @(*) spr_units = game_powerins ? 65536 : cfg_rt ? int'(spr_units_i) : SPR_UNITS;
-	wire [31:0] s_unit_wrapped = (s_unit_code >= 2*spr_units) ? s_unit_code - 2*spr_units :
-	                             (s_unit_code >= spr_units)   ? s_unit_code - spr_units : s_unit_code;
+	// Kept OUT of the per-pixel address path: the wrap depends only on
+	// s_unit_code, which is registered once per 16x16 unit in S_SPR_UNIT, so
+	// it is computed there (s_unit_wrapped_r) and this path stays as short as
+	// it was before NMK-25. Doing it combinationally here cost Afega 6.2 ns
+	// of setup slack -- four chained 32-bit compare-subtracts in series with
+	// the address multiply and the cache's same-cycle ready.
+	// 21 bits is ample: the largest unit code is 65790 and the largest
+	// spr_units is 65536, so spr_units<<3 needs 20.
+	localparam integer SPRW = 21;
+	wire [SPRW-1:0] spr_units_u = spr_units[SPRW-1:0];
+	wire            spr_units_pow2 = ((spr_units_u & (spr_units_u - 1'b1)) == 0);
+	function automatic [SPRW-1:0] spr_code_wrap(input [SPRW-1:0] code, input [SPRW-1:0] m, input pow2);
+		reg [SPRW-1:0] x;
+		begin
+			if (pow2) spr_code_wrap = code & (m - 1'b1);
+			else begin
+				x = code;
+				if (x >= (m << 3)) x = x - (m << 3);
+				if (x >= (m << 2)) x = x - (m << 2);
+				if (x >= (m << 1)) x = x - (m << 1);
+				if (x >=  m)       x = x -  m;
+				spr_code_wrap = x;
+			end
+		end
+	endfunction
+	reg  [SPRW-1:0] s_unit_wrapped_r;
+	wire [31:0] s_unit_wrapped = {11'd0, s_unit_wrapped_r};
 	wire [31:0] spr_byte_addr_full = s_unit_wrapped * 128 + ((s_px_src >= 8) ? 64 : 0) + s_py_src * 4 + ((s_px_src & 7) >> 1);
 	assign spr_byte_addr = spr_byte_addr_full[22:0];
 
@@ -1385,6 +1428,8 @@ module video_macross2 #(
 
 				S_SPR_UNIT: begin
 					s_unit_code <= s_code + s_ty * (s_w + 1) + s_tx; // code walk order is unchanged by flipx
+					// Wrap here, once per unit, not per pixel (NMK-25).
+					s_unit_wrapped_r <= spr_code_wrap((s_code + s_ty * (s_w + 1) + s_tx), spr_units_u, spr_units_pow2);
 					s_pixel_x_base <= (s_sx + (s_flipx ? (s_w - s_tx) : s_tx) * 16) & spr_wrap_mask;
 					s_pixel_y_base <= (s_sy + (s_flipy ? (s_h - s_ty) : s_ty) * 16) & spr_wrap_mask; // flipy: units placed bottom-up (sy += delta*h, yinc negated), code walk unchanged
 					s_px <= 0; s_py <= 0;

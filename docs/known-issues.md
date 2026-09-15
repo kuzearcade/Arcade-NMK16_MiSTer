@@ -409,6 +409,59 @@ sprite-and-scroll evidence for that core is the board captures).
   works. A control that fails (here: coin+start also changed nothing in MAME)
   is the signal the harness is broken, not the game.
 
+### NMK-25 · Sprite tile codes above 3x the ROM's tile count fetched the wrong graphics
+- **Cores:** all four · **Severity:** bug · **Status:** fixed (2026-09-16)
+- **Symptom:** a sprite renders correctly one moment and as a block of
+  *coherent but wrong* graphics the next. Reported on hachamf's character over
+  **GAME OVER** and on the name-entry screen; it flickers because the game
+  alternates that sprite with others, not because anything is racing.
+- **Cause:** `video_macross2.sv` wrapped the tile code with **two** conditional
+  subtractions, which is only correct below `3 * spr_units`. MAME does a true
+  `code %= total_elements` (`gfx_element`). hachamf draws its big character
+  with code **0x81D6 = 33238** against `spr_units = 8192`:
+
+  | | tile | result |
+  |---|---|---|
+  | MAME | `33238 % 8192` | **470** |
+  | old RTL | `33238 - 2*8192` | **16854** |
+
+  16854 is not merely the wrong tile: `16854 * 128 = 0x20D700` is past the end
+  of the 1 MB sprite ROM, so the fetch returned a different region's graphics.
+  That is why the corruption looked like real artwork rather than noise.
+- **Not specific to hachamf, and not new.** The old chain was wrong for
+  **206,072** of the reachable code values (a 16-bit code plus up to 255 units
+  for a 16x16 sprite): 41,215 bad codes at `spr_units=8192`, 53,503 at 4096.
+  Confirmed pre-existing by running the **pre-NMK-24 bitstream** on hardware
+  with the same `.mra` and no `.nvm` -- identical signature, 6 corruption
+  events over 240 GAME OVER frames.
+- **Fix:** every `spr_units` these cores use is either `2^k` (1, 4096, 8192,
+  16384, 65536) or `3*2^k` (12288 acrobatm/strahl, 49152 raphero). Powers of
+  two now use an exact mask; the rest use four conditional subtractions, exact
+  below `16*spr_units` and therefore for any reachable code when
+  `spr_units >= 4112`. **Keep that bound in mind before adding a smaller odd
+  size.** Checked exhaustively against MAME's modulo over the whole code range
+  for every value in use: **0 mismatches**.
+- **It must not sit in the per-pixel path.** The first attempt put four chained
+  32-bit compare-subtracts in series with the address multiply and the sprite
+  cache's same-cycle `ready`, and **Afega failed timing at -6.248 ns**
+  (TNS -6,157). The wrap depends only on `s_unit_code`, which is registered
+  once per 16x16 unit in `S_SPR_UNIT`, so it is computed there into
+  `s_unit_wrapped_r` at 21 bits: same value, same cycle, per-pixel path
+  unchanged. Afega went **-6.248 -> +0.119**. Verilator compiled the bad
+  version happily; only Quartus caught it.
+- **Evidence (hardware, 60 fps capture, identical detector and conditions):**
+
+  | build | GAME OVER frames | sprite-corruption events |
+  |---|---|---|
+  | pre-NMK-24 (seed 11) | 240 | 6 |
+  | NMK-24 rework | 240 | 6 |
+  | **NMK-25 fix** | 240 | **0** |
+
+  Method: record the screen at 60 fps, select frames that are the GAME OVER
+  screen, and count frame-to-frame changes confined to the sprite's bounding
+  box. On a static screen any such change is corruption. Each event changed
+  exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
+
 ### NMK-24 · Six games lock up once a high-score dump exists
 - **Cores:** NMK16_Gunnail · **Severity:** bug · **Status:** mitigated
   (2026-09-15) — hiscore removed from the affected sets AND the whole feature
