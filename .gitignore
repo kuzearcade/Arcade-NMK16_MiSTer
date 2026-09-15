@@ -106,6 +106,15 @@ sim/**/oracle_traces/
 # OS / editor cruft
 .DS_Store
 *.swp
+
+# Frame dumps from the sim testbenches (TB_DUMP_PPM). Regenerable, and they
+# pile up fast -- 12,674 of them, 3.2 GB, were cleared on 2026-09-14.
+# NOTE the pattern is deliberately ONE level deep: the 85 frames in
+# sim/rtl/gunnail_mg_hw/prefix_bioship/ are TRACKED, committed with 552c548
+# as the evidence for the swapped sprite column-pair fix on bioship/strahl/
+# acrobatm, and a `sim/**/*.ppm` rule would cover them. Keep any frames
+# worth committing in a subdirectory like that one, and exclude that
+# subdirectory before any bulk `find sim/rtl -name '*.ppm' -delete`.
 sim/rtl/*/*.ppm
 # Per-pixel scanline dumps from the TB_XDUMP probes in the tdragon2 and
 # tdragon2_hw testbenches (see docs/known-issues.md NMK-21b). Multi-MB,
