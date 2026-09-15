@@ -97,6 +97,8 @@ localparam CONF_STR = {
 	// config/dips/<mra>.dip, restored on the next load of that .mra.
 	"DIP;",
 	"-;",
+	"O[29],Pause,Off,On;",
+	"-;",
 	"R[0],Reset;",
 	"J1,Button 1,Button 2,Button 3,Start,Coin;",
 	"V,v",`BUILD_DATE
@@ -341,7 +343,7 @@ wire [7:0] rd_y_screen = vcount_core[7:0] - 8'd16;
 // dump content, never committed — see .gitignore).
 raphero_core #(.HW_ROMS(1)) core
 (
-	.clk_sys(clk_sys), .reset(reset),
+	.clk_sys(clk_sys), .reset(reset), .pause(status[29]),
 	.extra_por_hold(~pll_locked),
 
 	.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr),

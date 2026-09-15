@@ -152,6 +152,14 @@ module gunnail_core #(
 ) (
 	input clk_sys,        // 40 MHz (68000 clk_sys/4 = 10 MHz, /5 = 8 MHz, 3/10 = 12 MHz; NMK004/pixel clk_sys/5 = 8 MHz; protection MCU clk_sys/10 = 4 MHz)
 	input reset,          // async, active high
+	// Pause (2026-09-15). Freezes the 68000 and the sound CPU by gating
+	// their clock enables, and mutes the audio so a sustained FM note does
+	// not drone. Video timing (ce_pix) keeps running, so the picture stays
+	// live and sync is unbroken -- this core renders per pixel from VRAM
+	// rather than from a framebuffer, so a frozen CPU simply means the same
+	// frame is redrawn. Driven from the OSD, and later OR'd with the
+	// hiscore module's own pause_cpu request.
+	input pause,
 
 	// Game select (2026-09-11) — see the game table below. Static for a
 	// session (from the .mra <switches> third byte in NMK16_Gunnail.sv).
@@ -708,8 +716,8 @@ module gunnail_core #(
 		.HALTn(~halt_68k),
 		.extReset(m68k_extReset),
 		.pwrUp(reset),
-		.enPhi1(enPhi1),
-		.enPhi2(enPhi2),
+		.enPhi1(enPhi1 & ~pause),
+		.enPhi2(enPhi2 & ~pause),
 
 		.eRWn(eRWn), .ASn(ASn), .LDSn(LDSn), .UDSn(UDSn),
 		.E(), .VMAn(VMAn),
@@ -1987,7 +1995,7 @@ module gunnail_core #(
 			.USE_CEN(1),
 			.ROM_EXTERNAL(HW_ROMS)
 		) nmk004 (
-			.clk(clk_sys), .cen(snd_cen), .reset(reset | ~has_nmk004),
+			.clk(clk_sys), .cen(snd_cen & ~pause), .reset(reset | ~has_nmk004),
 			.rom_addr(nmk004_rom_addr), .rom_rd(nmk004_rom_rd), .rom_din(nmk004_rom_din), .rom_ready(nmk004_rom_ready), .rom_stall(nmk004_rom_stall),
 			.nmi(nmi_level),
 			.ym_cs(ym_cs), .ym_we(ym_we), .ym_addr_sel(ym_addr_sel),
@@ -2387,8 +2395,9 @@ module gunnail_core #(
 		(audio_sum > 18'sd32767)  ? 16'sd32767  :
 		(audio_sum < -18'sd32768) ? -16'sd32768 :
 		audio_sum[15:0];
-	assign audio_l = audio_mix;
-	assign audio_r = audio_mix;
+	// Muted while paused -- see the pause port's own comment.
+	assign audio_l = pause ? 16'sd0 : audio_mix;
+	assign audio_r = pause ? 16'sd0 : audio_mix;
 	assign dbg_oki0_snd = oki1_snd;
 	assign dbg_oki1_snd = oki2_snd;
 
@@ -2772,7 +2781,7 @@ module gunnail_core #(
 	wire z80_int_n = g_comad ? ~z80_latch_pending : g_afega ? ~(z80_latch_pending | (~g_fh_snd & ~ym51_irq_n)) : g_seibu ? seibu_int_n : g_tomagic ? opl_irq_n : ym_chip_irq_n;
 	wire z80_nmi_n = g_m2snd ? ~z80_latch_pending : 1'b1;
 	T80s z80_cpu (
-		.RESET_n(z80_reset_n), .CLK(clk_sys), .CEN(z80_cen), .WAIT_n(z80_wait_n),
+		.RESET_n(z80_reset_n), .CLK(clk_sys), .CEN(z80_cen & ~pause), .WAIT_n(z80_wait_n),
 		.INT_n(z80_int_n), .NMI_n(z80_nmi_n), .BUSRQ_n(1'b1), .OUT0(1'b0),
 		.DI(z80_di), .M1_n(z80_m1_n), .MREQ_n(z80_mreq_n), .IORQ_n(z80_iorq_n), .RD_n(z80_rd_n), .WR_n(z80_wr_n),
 		.RFSH_n(), .HALT_n(), .BUSAK_n(), .A(z80_a), .DO(z80_do)

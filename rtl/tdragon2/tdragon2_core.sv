@@ -148,6 +148,14 @@ module tdragon2_core #(
 ) (
 	input clk_sys,        // 40 MHz (68000 bus clk_sys/4=10MHz; pixel/raster clk_sys/5=8MHz)
 	input reset,            // async, active high
+	// Pause (2026-09-15). Freezes the 68000 and the sound CPU by gating
+	// their clock enables, and mutes the audio so a sustained FM note does
+	// not drone. Video timing (ce_pix) keeps running, so the picture stays
+	// live and sync is unbroken -- this core renders per pixel from VRAM
+	// rather than from a framebuffer, so a frozen CPU simply means the same
+	// frame is redrawn. Driven from the OSD, and later OR'd with the
+	// hiscore module's own pause_cpu request.
+	input pause,
 
 	// Runtime game select — 0=tdragon2, 1=macross2 (see this file's own
 	// header). Every existing sim testbench that doesn't drive this port
@@ -681,8 +689,8 @@ module tdragon2_core #(
 		.HALTn(1'b1), // no protection MCU on this board
 		.extReset(reset),
 		.pwrUp(reset),
-		.enPhi1(enPhi1),
-		.enPhi2(enPhi2),
+		.enPhi1(enPhi1 & ~pause),
+		.enPhi2(enPhi2 & ~pause),
 
 		.eRWn(eRWn), .ASn(ASn), .LDSn(LDSn), .UDSn(UDSn),
 		.E(), .VMAn(VMAn),
@@ -1708,7 +1716,7 @@ module tdragon2_core #(
 	T80s z80_cpu (
 		.RESET_n(z80_reset_n),
 		.CLK(clk_sys),
-		.CEN(z80_cen),
+		.CEN(z80_cen & ~pause),
 		.WAIT_n(z80_wait_n),
 		.INT_n(z80_int_n),
 		.NMI_n(1'b1),
@@ -2151,8 +2159,10 @@ module tdragon2_core #(
 		(audio_sum > 18'sd32767)  ? 16'sd32767  :
 		(audio_sum < -18'sd32768) ? -16'sd32768 :
 		audio_sum[15:0];
-	assign audio_l = audio_mix;
-	assign audio_r = audio_mix;
+	// Muted while paused: the FM/OKI chips keep their state, so an
+	// un-gated output would hold whatever note was sounding.
+	assign audio_l = pause ? 16'sd0 : audio_mix;
+	assign audio_r = pause ? 16'sd0 : audio_mix;
 	assign dbg_oki0_snd = oki0_snd;
 	assign dbg_oki1_snd = oki1_snd;
 

@@ -133,6 +133,8 @@ localparam CONF_STR = {
 	// config/dips/<mra>.dip, restored on the next load of that .mra.
 	"DIP;",
 	"-;",
+	"O[29],Pause,Off,On;",
+	"-;",
 	"R[0],Reset;",
 	// Fixed at synthesis time as the superset of every game this RBF
 	// serves: Power Instinct has four buttons (P1_P2 bits 4-7), tdragon2
@@ -545,7 +547,7 @@ tdragon2_core #(.HW_ROMS(1),
 	.ROM_FETCH_WORD_REF_FILE("rtl/tdragon2/tdragon2_fetch_word_ref.hex"),
 	.ROM_FETCH_WORD_TOUCHED_FILE("rtl/tdragon2/tdragon2_fetch_word_touched.hex")) core
 (
-	.clk_sys(clk_sys), .reset(reset), .game_macross2(game_macross2), .game_powerins(game_powerins),
+	.clk_sys(clk_sys), .reset(reset), .pause(status[29]), .game_macross2(game_macross2), .game_powerins(game_powerins),
 	.game_tdragon3h(game_tdragon3h), .game_pi_bootleg(game_pi_bootleg), .game_pi_nosnd(game_pi_nosnd), .game_pi_gfxlsb(game_pi_gfxlsb),
 	.extra_por_hold(~pll_locked),
 

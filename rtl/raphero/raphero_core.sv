@@ -67,6 +67,14 @@ module raphero_core #(
 ) (
 	input clk_sys,        // 40 MHz (68000 bus clk_sys*7/20 = 14 MHz; pixel clk_sys/5 = 8 MHz)
 	input reset,          // async, active high
+	// Pause (2026-09-15). Freezes the 68000 and the sound CPU by gating
+	// their clock enables, and mutes the audio so a sustained FM note does
+	// not drone. Video timing (ce_pix) keeps running, so the picture stays
+	// live and sync is unbroken -- this core renders per pixel from VRAM
+	// rather than from a framebuffer, so a frozen CPU simply means the same
+	// frame is redrawn. Driven from the OSD, and later OR'd with the
+	// hiscore module's own pause_cpu request.
+	input pause,
 
 	// Hardware-mode-only ports (HW_ROMS=1) — unused at HW_ROMS=0, see
 	// tdragon2_core.sv's own port comments for the ioctl_index gate and
@@ -242,7 +250,7 @@ module raphero_core #(
 	reg [2:0] snd_div = 3'd0;
 	always @(posedge clk_sys) snd_div <= (snd_div == 3'd4) ? 3'd0 : snd_div + 3'd1;
 	wire snd_stall;
-	wire snd_cen = (snd_div == 3'd4) & ~snd_stall;
+	wire snd_cen = (snd_div == 3'd4) & ~snd_stall & ~pause;
 
 	// YM2203 at 1.5 MHz: 3/80 accumulator.
 	reg [6:0] ym_cen_cnt = 7'd0;
@@ -296,8 +304,8 @@ module raphero_core #(
 		.HALTn(1'b1), // no protection MCU on this board
 		.extReset(reset),
 		.pwrUp(reset),
-		.enPhi1(enPhi1),
-		.enPhi2(enPhi2),
+		.enPhi1(enPhi1 & ~pause),
+		.enPhi2(enPhi2 & ~pause),
 
 		.eRWn(eRWn), .ASn(ASn), .LDSn(LDSn), .UDSn(UDSn),
 		.E(), .VMAn(VMAn),
@@ -1176,8 +1184,9 @@ module raphero_core #(
 		(audio_sum > 18'sd32767)  ? 16'sd32767  :
 		(audio_sum < -18'sd32768) ? -16'sd32768 :
 		audio_sum[15:0];
-	assign audio_l = audio_mix;
-	assign audio_r = audio_mix;
+	// Muted while paused -- see the pause port's own comment.
+	assign audio_l = pause ? 16'sd0 : audio_mix;
+	assign audio_r = pause ? 16'sd0 : audio_mix;
 	assign dbg_oki0_snd = oki0_snd;
 	assign dbg_oki1_snd = oki1_snd;
 
