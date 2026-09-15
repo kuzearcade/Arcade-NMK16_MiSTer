@@ -234,6 +234,13 @@ Two traps in that harness, both of which wasted time:
 - Verilator `--public-flat-rw` makes the hardware build roughly 10x slower.
   Add explicit `output` ports to `tdragon2_hw_top.sv` instead.
 
+The probe itself is committed (the `TB_XDUMP` blocks in `tb_tdragon2.cpp` /
+`tb_tdragon2_hw.cpp` and the `dbg_*` ports on `tdragon2_hw_top.sv`), so the
+dumps are regenerable and none was kept — they run to several MB. Write them
+as `TB_XDUMP=<name>.xdump`: that extension is gitignored, where a blanket
+`sim/rtl/*/*.txt` rule would wrongly cover the tracked
+`sim/rtl/powerins_*/cmp_*.txt`.
+
 #### NMK-21c · Afega boards flip from the DIP bus, not from a CPU write
 `afega_map` has **no `flipscreen_w` at all**, so `flip_screen_reg` is never
 written and the fix above does nothing for that family.

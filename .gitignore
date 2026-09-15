@@ -107,6 +107,12 @@ sim/**/oracle_traces/
 .DS_Store
 *.swp
 sim/rtl/*/*.ppm
+# Per-pixel scanline dumps from the TB_XDUMP probes in the tdragon2 and
+# tdragon2_hw testbenches (see docs/known-issues.md NMK-21b). Multi-MB,
+# regenerable from the committed instrumentation, and named freely on the
+# command line -- write them as *.xdump so they stay out of git. A blanket
+# *.txt rule would be wrong here: sim/rtl/powerins_*/cmp_*.txt are tracked.
+sim/rtl/*/*.xdump
 __pycache__/
 sim/rtl/video_state/dump
 # measurement run directories and build variants of the hardware sims
