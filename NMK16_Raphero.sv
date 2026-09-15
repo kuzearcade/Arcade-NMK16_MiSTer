@@ -102,6 +102,15 @@ localparam CONF_STR = {
 	"P1-;",
 	"P1R[30],Save Scores;",
 	"P1R[31],Reset Scores;",
+	"P2,Cheats;",
+	"P2-;",
+	"h3P2O[32],Infinite Credits,Off,On;",
+	"h4P2O[33],P1 Invincibility,Off,On;",
+	"h5P2O[34],P2 Invincibility,Off,On;",
+	"h6P2O[35],P1 Infinite Lives,Off,On;",
+	"h7P2O[36],P2 Infinite Lives,Off,On;",
+	"h8P2O[37],P1 Infinite Bombs,Off,On;",
+	"h9P2O[38],P2 Infinite Bombs,Off,On;",
 	"-;",
 	"R[0],Reset;",
 	"J1,Button 1,Button 2,Button 3,Start,Coin;",
@@ -135,7 +144,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({autofire_unlock, direct_video}), // [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation and Flip screen (both H0) for direct video
+	.status_menumask({ch_avail, 1'b0, autofire_unlock, direct_video}), // [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation and Flip screen (both H0) for direct video
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -385,6 +394,9 @@ wire [7:0] rd_y_screen = vcount_core[7:0] - 8'd16;
 wire [23:0] hs_addr;
 wire  [7:0] hs_din, hs_dout;
 wire        hs_write, hs_access, hs_pause, hs_configured;
+wire [23:0] hi_addr;
+wire  [7:0] hi_din;
+wire        hi_write;
 wire        ioctl_upload;
 wire        ioctl_upload_req;
 wire  [7:0] ioctl_din;
@@ -419,19 +431,52 @@ hiscore #(
 	.data_from_hps(ioctl_dout),
 	.data_to_hps(ioctl_din),
 	.data_from_ram(hs_dout),
-	.data_to_ram(hs_din),
-	.ram_address(hs_addr),
-	.ram_write(hs_write),
+	.data_to_ram(hi_din),
+	.ram_address(hi_addr),
+	.ram_write(hi_write),
 	.ram_intent_read(),
 	.ram_intent_write(),
 	.pause_cpu(hs_pause),
 	.configured(hs_configured)
 );
-assign hs_access = hs_pause;
+
+
+// ---------------------------------------------------------------------------
+// Cheats (rtl/cheats.sv) — Pugsy's MAME cheat database, seven fixed slots with
+// this game's addresses supplied by the .mra as <rom index="5">. Slots the
+// loaded game has no entry for are hidden from the OSD via status_menumask
+// bits 3..9 (the h3..h9 flags on the CONF_STR lines above).
+//
+// It shares the hiscore module's work-RAM port rather than adding one: both
+// only drive it while they have the CPU paused, and hiscore wins if they ever
+// collide (it runs on OSD open, cheats on vblank, so in practice they do not).
+// ---------------------------------------------------------------------------
+wire [23:0] ch_addr;
+wire  [7:0] ch_din;
+wire        ch_write, ch_access, ch_pause;
+wire  [6:0] ch_avail;
+
+cheats ch (
+	.clk(clk_sys),
+	.reset(reset),
+	.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr),
+	.ioctl_addr(ioctl_addr), .ioctl_index(ioctl_index), .ioctl_dout(ioctl_dout),
+	.enable(status[38:32]),
+	.available(ch_avail),
+	.vblank(vblank_core),
+	.ram_addr(ch_addr), .ram_din(ch_din), .ram_write(ch_write),
+	.ram_access(ch_access), .pause_cpu(ch_pause)
+);
+
+// hiscore has priority on the shared port
+assign hs_addr   = hs_pause ? hi_addr  : ch_addr;
+assign hs_din    = hs_pause ? hi_din   : ch_din;
+assign hs_write  = hs_pause ? hi_write : ch_write;
+assign hs_access = hs_pause ? 1'b1     : ch_access;
 
 raphero_core #(.HW_ROMS(1)) core
 (
-	.clk_sys(clk_sys), .reset(reset), .pause(status[29] | hs_pause), .hs_addr(hs_addr), .hs_din(hs_din), .hs_dout(hs_dout), .hs_write(hs_write), .hs_access(hs_access),
+	.clk_sys(clk_sys), .reset(reset), .pause(status[29] | hs_pause | ch_pause), .hs_addr(hs_addr), .hs_din(hs_din), .hs_dout(hs_dout), .hs_write(hs_write), .hs_access(hs_access),
 	.extra_por_hold(~pll_locked),
 
 	.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr),

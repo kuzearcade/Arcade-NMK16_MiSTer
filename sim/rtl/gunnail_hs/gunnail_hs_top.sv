@@ -1,3 +1,6 @@
+// TOP-LEVEL harness (NMK-24): gunnail_core PLUS the real
+// rtl/third_party/hiscore/hiscore.v, wired exactly as NMK16_Gunnail.sv
+// wires it, so the hiscore state machine itself is under test.
 // Hardware-mode verification harness for gunnail_core (HW_ROMS=1) — a
 // real rtl/sdram.sv + sim/models/sdram_model.sv on all four sd0-sd3
 // ports, loaded by a real ioctl_download byte stream. Mirrors
@@ -6,7 +9,7 @@
 // NMK16_Gunnail.sv does, and not swept by the testbench).
 // Multi-game variant (2026-09-11): GAME_SEL and the ROM/V-PROM files are
 // parameters, see the Makefile.
-module gunnail_mg_hw_top #(
+module gunnail_hs_top #(
 	parameter GAME_SEL      = 0,
 	parameter VTIMING_FILE  = "",
 	parameter ROM_FILE      = "",
@@ -84,73 +87,74 @@ module gunnail_mg_hw_top #(
 
 	output        frame_done,
 
-	// NMK-24 hiscore-burst injector. HS_START/HS_BASE/HS_LEN describe the
-	// restore the real hiscore.v performs; the burst READS each byte and
-	// writes the SAME value straight back, so it cannot change RAM content.
-	// Anything it breaks is therefore an arbitration effect, not a data one.
-	input         hs_go,
-	output        hs_busy,
+	input  [15:0] ioctl_index,
+
+	// Hiscore observability
+	output        hs_pause_o,
+	output        hs_configured_o,
+	output [23:0] hs_addr_o,
+	output        hs_write_o,
 	output [31:0] dbg_hs_prot_drop,
-	output [31:0] dbg_hs_bytes
+	output [31:0] dbg_hs_pause_cycles,
+	output [31:0] dbg_hs_writes
 );
 
 	// ------------------------------------------------------------------
-	// Hiscore-restore burst (NMK-24). Mirrors hiscore.v's access pattern:
-	// the CPU is paused for the whole burst, then each byte is stepped
-	// through with hs_access held and a one-cycle hs_write. The value
-	// written is the value just read back, so the burst is a content no-op.
+	// The real hiscore module, parameterised as NMK16_Gunnail.sv does.
 	// ------------------------------------------------------------------
-	// hachamf's entry, and the pacing the .mra's own config header asks for:
-	// WRITE_REPEATWAIT = 0x00FF, so a real restore spans ~LEN*255 cycles, not
-	// a tight loop. The gap matters -- it is what lets the MCU get a word in
-	// edgeways mid-burst, which is the whole hazard.
-	localparam [23:0] HS_BASE = 24'h0FC000;
-	localparam [31:0] HS_LEN  = 32'h0000_03F0;
-	localparam [8:0]  HS_WAIT = 9'd255;
+	wire [23:0] hs_addr;
+	wire  [7:0] hs_din, hs_dout;
+	wire        hs_write, hs_access, hs_pause, hs_configured;
+	wire        hi_intent_rd, hi_intent_wr;
 
-	reg  [23:0] hs_addr  = HS_BASE;
-	reg   [7:0] hs_din   = 8'd0;
-	reg         hs_write = 1'b0;
-	reg         hs_access= 1'b0;
-	wire  [7:0] hs_dout;
-	reg  [31:0] hs_i     = 32'd0;
-	reg   [2:0] hs_ph    = 3'd0;
-	reg   [8:0] hs_wait  = 9'd0;
-	reg         hs_run   = 1'b0;
-	assign hs_busy       = hs_run;
-	assign dbg_hs_bytes  = hs_i;
+	hiscore #(
+		.HS_ADDRESSWIDTH(24),
+		.HS_SCOREWIDTH(13),
+		.CFG_ADDRESSWIDTH(4),
+		.CFG_LENGTHWIDTH(2)
+	) hi (
+		.clk(clk_sys),
+		.reset(reset),
+		.paused(hs_pause),
+		.autosave(1'b1),
+		.OSD_STATUS(1'b0),
+		.ioctl_upload(1'b0),
+		.ioctl_upload_req(),
+		.ioctl_download(ioctl_download),
+		.ioctl_wr(ioctl_wr),
+		.ioctl_addr(ioctl_addr),
+		.ioctl_index(ioctl_index[7:0]),
+		.data_from_hps(ioctl_dout),
+		.data_to_hps(),
+		.data_from_ram(hs_dout),
+		.data_to_ram(hs_din),
+		.ram_address(hs_addr),
+		.ram_write(hs_write),
+		.ram_intent_read(hi_intent_rd),
+		.ram_intent_write(hi_intent_wr),
+		.pause_cpu(hs_pause),
+		.configured(hs_configured)
+	);
 
+	// NMK-24: yield the RAM port ONLY on the cycles hiscore actually needs
+	// it, not for the whole pause. Holding it for the entire pause locks the
+	// protection MCU out of main RAM for the duration of the compare loop.
+	assign hs_access       = hs_pause & (hi_intent_rd | hi_intent_wr);
+	assign hs_pause_o      = hs_pause;
+	assign hs_configured_o = hs_configured;
+	assign hs_addr_o       = hs_addr;
+	assign hs_write_o      = hs_write;
+
+	reg [31:0] pause_cycles = 32'd0, hs_write_cnt = 32'd0;
 	always @(posedge clk_sys) begin
-		hs_write <= 1'b0;
-		if (reset) begin
-			hs_run <= 1'b0; hs_access <= 1'b0; hs_i <= 32'd0; hs_ph <= 3'd0; hs_wait <= 9'd0;
-		end else if (!hs_run) begin
-			if (hs_go) begin
-				hs_run <= 1'b1; hs_access <= 1'b1;
-				hs_i <= 32'd0; hs_ph <= 3'd0; hs_addr <= HS_BASE; hs_wait <= 9'd0;
-			end
-		end else if (|hs_wait) begin
-			// Inter-byte gap. hs_access stays HIGH for the whole restore,
-			// exactly as hiscore.v holds the port across its repeat-wait.
-			hs_wait <= hs_wait - 9'd1;
-		end else begin
-			hs_ph <= hs_ph + 3'd1;
-			// 0-2: address settling for the registered mainram read
-			// 3:   capture hs_dout, 4: write it back unchanged
-			if (hs_ph == 3'd3) hs_din <= hs_dout;
-			if (hs_ph == 3'd4) hs_write <= 1'b1;
-			if (hs_ph == 3'd5) begin
-				hs_ph <= 3'd0;
-				if (hs_i + 32'd1 >= HS_LEN) begin
-					hs_run <= 1'b0; hs_access <= 1'b0;
-				end else begin
-					hs_i    <= hs_i + 32'd1;
-					hs_addr <= hs_addr + 24'd1;
-					hs_wait <= HS_WAIT;
-				end
-			end
+		if (reset) begin pause_cycles <= 32'd0; hs_write_cnt <= 32'd0; end
+		else begin
+			if (hs_pause) pause_cycles <= pause_cycles + 32'd1;
+			if (hs_write) hs_write_cnt <= hs_write_cnt + 32'd1;
 		end
 	end
+	assign dbg_hs_pause_cycles = pause_cycles;
+	assign dbg_hs_writes       = hs_write_cnt;
 
 	// Same computation as NMK16_Gunnail.sv's own rd_x_screen/rd_y_screen.
 	wire [8:0] rd_x_screen = hcount_o[8:0] - (lowres_o ? 9'd92 : 9'd28);
@@ -194,7 +198,7 @@ module gunnail_mg_hw_top #(
 	               .OKI1_ROM_FILE(OKI1_ROM_FILE), .OKI2_ROM_FILE(OKI2_ROM_FILE)) core_inst (
 		.clk_sys(clk_sys), .reset(reset), .game_sel(GAME_SEL[5:0]), .lowres_o(lowres_o),
 		.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
-		.ioctl_index(16'd0),
+		.ioctl_index(ioctl_index),
 		.sd0_addr(p0_addr), .sd0_wrl(p0_wrl), .sd0_wrh(p0_wrh), .sd0_din(p0_din), .sd0_dout(p0_dout), .sd0_dout_pair(p0_dout_pair), .sd0_req(p0_req), .sd0_ack(p0_ack),
 		.sd1_addr(p1_addr), .sd1_req(p1_req), .sd1_dout(p1_dout), .sd1_dout_pair(p1_dout_pair), .sd1_ack(p1_ack),
 		.sd2_addr(p2_addr), .sd2_wrl(p2_wrl), .sd2_wrh(p2_wrh), .sd2_din(p2_din), .sd2_dout(p2_dout), .sd2_dout_pair(p2_dout_pair), .sd2_req(p2_req), .sd2_ack(p2_ack),
@@ -225,9 +229,7 @@ module gunnail_mg_hw_top #(
 		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFD), .dsw2_i(16'hFFFF),
 		.extra_por_hold(1'b0),
 
-		// hiscore.v holds the CPU paused for the whole burst; the
-		// protection MCU is deliberately NOT paused, exactly as on hardware.
-		.pause(hs_access),
+		.pause(hs_pause),
 		.hs_addr(hs_addr), .hs_din(hs_din), .hs_dout(hs_dout),
 		.hs_write(hs_write), .hs_access(hs_access),
 		.dbg_hs_prot_drop(dbg_hs_prot_drop)

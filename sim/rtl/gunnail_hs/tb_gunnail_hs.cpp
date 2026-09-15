@@ -12,7 +12,7 @@
 #include <vector>
 #include <set>
 
-#include "Vgunnail_mg_hw_top.h"
+#include "Vgunnail_hs_top.h"
 #include "verilated.h"
 
 static constexpr int SCREEN_W = 384;
@@ -24,7 +24,7 @@ int main(int argc, char **argv) {
 	VerilatedContext contextp;
 	contextp.commandArgs(argc, argv);
 	if (argc > 1) g_run_cycles = strtoull(argv[1], nullptr, 0);
-	Vgunnail_mg_hw_top top{&contextp};
+	Vgunnail_hs_top top{&contextp};
 
 	// clk_ram at TB_RAM_PER2 cycles per two clk_sys cycles (default 6 =
 	// 120MHz-equivalent; 5 = 100MHz, closest to the real 96MHz).
@@ -64,6 +64,7 @@ int main(int argc, char **argv) {
 	fclose(f);
 	printf("loaded %ld bytes of ROM image for download\n", len);
 
+	top.ioctl_index = 0;
 	top.ioctl_download = 1;
 	uint64_t download_ticks = 0;
 	for (long i = 0; i < len; i++) {
@@ -76,6 +77,34 @@ int main(int argc, char **argv) {
 		while (top.ioctl_wait) { tick(); download_ticks++; }
 	}
 	top.ioctl_download = 0;
+	for (int i = 0; i < 20; i++) tick();
+
+	// hiscore config (<rom index="3">) then the saved dump (<nvram index="4">),
+	// exactly the two streams MiSTer pushes on the real board.
+	auto push_stream = [&](const char *path, int index) {
+		FILE *hf = fopen(path, "rb");
+		if (!hf) { printf("FAIL: could not open %s\n", path); exit(1); }
+		std::vector<uint8_t> buf; int c;
+		while ((c = fgetc(hf)) != EOF) buf.push_back((uint8_t)c);
+		fclose(hf);
+		top.ioctl_index = index;
+		top.ioctl_download = 1;
+		for (size_t i = 0; i < buf.size(); i++) {
+			top.ioctl_addr = i; top.ioctl_dout = buf[i];
+			top.ioctl_wr = 1; tick();
+			top.ioctl_wr = 0; tick();
+			while (top.ioctl_wait) tick();
+		}
+		top.ioctl_download = 0;
+		for (int i = 0; i < 20; i++) tick();
+		printf("pushed %zu bytes on ioctl index %d\n", buf.size(), index);
+	};
+	if (!std::getenv("TB_HS_OFF")) {
+		push_stream(std::getenv("TB_HS_CFG") ? std::getenv("TB_HS_CFG") : "roms/hachamf_hscfg.bin", 3);
+		if (!std::getenv("TB_HS_NODUMP")) push_stream("roms/hachamf_hsdump.bin", 4);
+	}
+	top.ioctl_index = 0;
+
 	printf("download used %llu clk_sys ticks total (%.2f ticks/byte avg)\n",
 	       (unsigned long long)download_ticks, (double)download_ticks / len);
 	for (int i = 0; i < 20; i++) tick();
@@ -119,37 +148,28 @@ int main(int argc, char **argv) {
 	FILE *audio_f = std::getenv("TB_DUMP_AUDIO") ? fopen(std::getenv("TB_DUMP_AUDIO"), "wb") : nullptr;
 	uint64_t audio_phase = 0;
 
-	// NMK-24: fire the hiscore restore burst once frame TB_HS_AT_FRAME has
-	// been rendered, then measure what the game does AFTER it. The burst is
-	// a content no-op (see gunnail_mg_hw_top.sv), so any change in progress
-	// is attributable to arbitration alone.
-	const unsigned hs_at_frame = std::getenv("TB_HS_AT_FRAME")
-		? (unsigned)strtoul(std::getenv("TB_HS_AT_FRAME"), nullptr, 0) : 0xFFFFFFFFu;
-	bool hs_fired = false, hs_seen_busy = false;
-	uint64_t hs_start_tick = 0, hs_end_tick = 0;
-	long m68k_at_burst = 0, prot_at_burst = 0;
-	uint32_t frames_at_burst = 0;
-	std::set<uint32_t> pcs_after_burst;
-	top.hs_go = 0;
+	// NMK-24: watch hiscore.v itself. pause_first/pause_last bracket every
+	// cycle it held the CPU paused; a run that ends still paused is the
+	// stuck-pause signature.
+	uint64_t pause_first = 0, pause_last = 0;
+	bool pause_seen = false;
+	uint32_t frame_at_first_pause = 0;
+	long longest_pause = 0, cur_pause = 0;
 
 	for (; clk_sys_ticks < g_run_cycles; clk_sys_ticks++) {
 		tick();
 
-		if (!hs_fired && frame_count >= hs_at_frame) {
-			hs_fired = true; top.hs_go = 1;
-			hs_start_tick = clk_sys_ticks;
-			m68k_at_burst = m68k_instrs; prot_at_burst = prot_instrs;
-			frames_at_burst = frame_count;
-			printf("tb_mg_hw: HS burst fired at frame %u, tick %llu\n",
-			       frame_count, (unsigned long long)clk_sys_ticks);
-		}
-		if (hs_fired && top.hs_busy) { hs_seen_busy = true; top.hs_go = 0; }
-		if (hs_seen_busy && !top.hs_busy && !hs_end_tick) {
-			hs_end_tick = clk_sys_ticks;
-			printf("tb_mg_hw: HS burst done after %llu cycles, %u bytes, dropped MCU writes so far = %u\n",
-			       (unsigned long long)(hs_end_tick - hs_start_tick),
-			       (unsigned)top.dbg_hs_bytes + 1, (unsigned)top.dbg_hs_prot_drop);
-		}
+		if (top.hs_pause_o) {
+			if (!pause_seen) {
+				pause_seen = true; pause_first = clk_sys_ticks;
+				frame_at_first_pause = frame_count;
+				printf("tb_hs: hiscore asserted pause_cpu at frame %u, tick %llu\n",
+				       frame_count, (unsigned long long)clk_sys_ticks);
+			}
+			pause_last = clk_sys_ticks;
+			cur_pause++;
+			if (cur_pause > longest_pause) longest_pause = cur_pause;
+		} else cur_pause = 0;
 
 		if (audio_f) {
 			audio_phase += 48000;
@@ -197,7 +217,7 @@ int main(int argc, char **argv) {
 			if (ppm) std::fclose(ppm);
 			last_frame_nonzero_px = nonzero_px;
 			if (frame_count < 5 || frame_count % 50 == 0)
-				printf("tb_mg_hw: frame %u: %ld/%d nonzero pixels\n", frame_count, nonzero_px, SCREEN_W * SCREEN_H);
+				printf("tb_hs: frame %u: %ld/%d nonzero pixels\n", frame_count, nonzero_px, SCREEN_W * SCREEN_H);
 			frame_count++;
 		}
 		prev_frame_done = frame_done_now;
@@ -247,7 +267,6 @@ int main(int argc, char **argv) {
 			m68k_instrs++;
 			m68k_last_pc = (uint32_t)top.dbg_eab << 1;
 			if (clk_sys_ticks >= last_quarter_start) recent_pcs.insert(m68k_last_pc);
-			if (hs_end_tick && clk_sys_ticks > hs_end_tick) pcs_after_burst.insert(m68k_last_pc);
 			static long trace_max = std::getenv("TB_TRACE_MAX") ? atol(std::getenv("TB_TRACE_MAX")) : 2000000;
 			if (m68k_trace && m68k_instrs <= trace_max) fprintf(m68k_trace, "%06X\n", m68k_last_pc);
 		}
@@ -266,40 +285,42 @@ int main(int argc, char **argv) {
 		prev_oki1_we = oki1_we_now;
 	}
 
-	printf("tb_mg_hw: ran %llu clk_sys cycles\n", (unsigned long long)g_run_cycles);
-	if (hs_fired) {
-		printf("tb_mg_hw: === NMK-24 hiscore-burst result ===\n");
-		printf("tb_mg_hw:   MCU main-RAM writes silently dropped during the burst: %u\n",
-		       (unsigned)top.dbg_hs_prot_drop);
-		printf("tb_mg_hw:   after the burst: %ld 68000 instrs, %ld MCU instrs, %u frames, %zu distinct 68000 PCs\n",
-		       m68k_instrs - m68k_at_burst, prot_instrs - prot_at_burst,
-		       frame_count - frames_at_burst, pcs_after_burst.size());
-	}
-	printf("tb_mg_hw: distinct 68000 fetch PCs in the final quarter of the run: %zu\n", recent_pcs.size());
+	printf("tb_hs: ran %llu clk_sys cycles\n", (unsigned long long)g_run_cycles);
+	printf("tb_hs: === NMK-24 hiscore state ===\n");
+	printf("tb_hs:   configured=%d  pause_cpu cycles=%u (%.2f%% of run)  hiscore RAM writes=%u\n",
+	       (int)top.hs_configured_o, (unsigned)top.dbg_hs_pause_cycles,
+	       100.0 * top.dbg_hs_pause_cycles / (double)g_run_cycles,
+	       (unsigned)top.dbg_hs_writes);
+	printf("tb_hs:   first pause at frame %u tick %llu, last pause tick %llu, longest unbroken pause %ld cycles\n",
+	       frame_at_first_pause, (unsigned long long)pause_first,
+	       (unsigned long long)pause_last, longest_pause);
+	printf("tb_hs:   STILL PAUSED AT END OF RUN: %s\n", top.hs_pause_o ? "YES" : "no");
+	printf("tb_hs:   MCU writes dropped: %u\n", (unsigned)top.dbg_hs_prot_drop);
+	printf("tb_hs: distinct 68000 fetch PCs in the final quarter of the run: %zu\n", recent_pcs.size());
 	{
 		int shown = 0;
 		printf("  sample: ");
 		for (auto pc : recent_pcs) { if (shown++ > 20) { printf("..."); break; } printf("$%06X ", pc); }
 		printf("\n");
 	}
-	printf("tb_mg_hw: NMK004 executed %ld instructions, last fetch PC=$%04X\n", snd_instrs, snd_last_pc);
-	printf("tb_mg_hw: NMK004 clock: %u pulses delivered, %u withheld for ROM fetches (%.3f%%)\n",
+	printf("tb_hs: NMK004 executed %ld instructions, last fetch PC=$%04X\n", snd_instrs, snd_last_pc);
+	printf("tb_hs: NMK004 clock: %u pulses delivered, %u withheld for ROM fetches (%.3f%%)\n",
 	       (unsigned)top.dbg_nmk004_cen_total, (unsigned)top.dbg_nmk004_stall_total,
 	       top.dbg_nmk004_cen_total ? 100.0 * top.dbg_nmk004_stall_total / (top.dbg_nmk004_cen_total + top.dbg_nmk004_stall_total) : 0.0);
-	printf("tb_mg_hw: 68000 executed %ld instructions, last fetch PC=$%06X\n", m68k_instrs, m68k_last_pc);
-	printf("tb_mg_hw: protection MCU executed %ld instructions, last PC=$%04X, %ld shared-bus accesses, 68000 HALT=%d, NMK214 config writes %u\n",
+	printf("tb_hs: 68000 executed %ld instructions, last fetch PC=$%06X\n", m68k_instrs, m68k_last_pc);
+	printf("tb_hs: protection MCU executed %ld instructions, last PC=$%04X, %ld shared-bus accesses, 68000 HALT=%d, NMK214 config writes %u\n",
 	       prot_instrs, prot_last_pc, prot_bus_accesses, (int)top.dbg_halt_68k, cfg_writes);
-	printf("tb_mg_hw: host latch: %u commands, %u distinct replies\n", host_cmds, host_replies);
-	printf("tb_mg_hw: NMK004 wrote to YM2203 %ld times, OKI0 %ld times, OKI1 %ld times\n", ym_writes, oki0_writes, oki1_writes);
-	printf("tb_mg_hw: OKI ADPCM fetch audit: oki0 %u of %u sample bytes unserved at latch, oki1 %u of %u\n",
+	printf("tb_hs: host latch: %u commands, %u distinct replies\n", host_cmds, host_replies);
+	printf("tb_hs: NMK004 wrote to YM2203 %ld times, OKI0 %ld times, OKI1 %ld times\n", ym_writes, oki0_writes, oki1_writes);
+	printf("tb_hs: OKI ADPCM fetch audit: oki0 %u of %u sample bytes unserved at latch, oki1 %u of %u\n",
 	       (unsigned)top.dbg_oki0_adpcm_unserved, (unsigned)top.dbg_oki0_adpcm_total,
 	       (unsigned)top.dbg_oki1_adpcm_unserved, (unsigned)top.dbg_oki1_adpcm_total);
-	printf("tb_mg_hw: OKI cen stall audit: %u cen pulses, withheld by cache stall oki0 %u (%.4f%%), oki1 %u (%.4f%%)\n",
+	printf("tb_hs: OKI cen stall audit: %u cen pulses, withheld by cache stall oki0 %u (%.4f%%), oki1 %u (%.4f%%)\n",
 	       (unsigned)top.dbg_oki_cen_total,
 	       (unsigned)top.dbg_oki0_stall_cen, top.dbg_oki_cen_total ? 100.0 * top.dbg_oki0_stall_cen / top.dbg_oki_cen_total : 0.0,
 	       (unsigned)top.dbg_oki1_stall_cen, top.dbg_oki_cen_total ? 100.0 * top.dbg_oki1_stall_cen / top.dbg_oki_cen_total : 0.0);
 	if (audio_f) fclose(audio_f);
-	printf("tb_mg_hw: rendered %u video frame(s); last frame had %ld/%d nonzero pixels\n",
+	printf("tb_hs: rendered %u video frame(s); last frame had %ld/%d nonzero pixels\n",
 	       frame_count, last_frame_nonzero_px, SCREEN_W * SCREEN_H);
 	if (m68k_trace) fclose(m68k_trace);
 	top.final();

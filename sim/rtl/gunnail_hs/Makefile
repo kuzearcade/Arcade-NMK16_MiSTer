@@ -4,7 +4,7 @@
 # .mra layout (tools/gen_gunnail_mra.py --ioctl <set> lists the regions).
 #   make GAME=bioship run          # obj_dir_bioship, roms/bioship_ioctl.bin
 #   TB_DUMP_PPM=1 make GAME=strahl run
-GAME   ?= bioship
+GAME   ?= hachamf
 CYCLES ?=
 
 FX68K_DIR := ../../../rtl/third_party/fx68k
@@ -22,7 +22,7 @@ JT680X_DIR := ../../../rtl/third_party/jt680x/hdl
 RTL_DIR := ../../../rtl
 MODEL_DIR := ../../models
 OBJ_DIR := obj_dir_$(GAME)
-TOP := gunnail_mg_hw_top
+TOP := gunnail_hs_top
 R := ../$(GAME)/roms/$(GAME)
 ifneq ($(filter $(GAME),bjtwin cactus),)
 R := ../bjtwin/roms/$(GAME)
@@ -78,7 +78,7 @@ SOURCES := $(TOP).sv $(CORE_DIR)/gunnail_core.sv $(MACROSS2_DIR)/video_macross2.
            $(M68705_DIR)/m68705_core.sv $(JT680X_DIR)/jt6805.v $(JT680X_DIR)/jt6805_ctrl.v \
            $(JT680X_DIR)/jt6805_alu.v $(JT680X_DIR)/jt6805_regs.v \
            $(JT12_DIR)/hdl/jt03.v $(JT6295_DIR)/hdl/jt6295.v \
-           $(RTL_DIR)/sdram.sv $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv \
+           $(RTL_DIR)/third_party/hiscore/hiscore.v $(RTL_DIR)/sdram.sv $(RTL_DIR)/sdram_req.sv $(RTL_DIR)/sdram_arb.sv \
            $(RTL_DIR)/third_party_gen/t80/T80s.v $(RTL_DIR)/third_party/jt51/hdl/jt51.v $(RTL_DIR)/seibu/seibu_sound.sv $(RTL_DIR)/third_party/jtopl/hdl/jtopl2.v $(RTL_DIR)/rom_cache1.sv $(RTL_DIR)/rom_cache_n.sv $(RTL_DIR)/rom_cache_n_byte.sv $(RTL_DIR)/rom_cache1_byte.sv $(RTL_DIR)/oki_rom_cache.sv $(RTL_DIR)/tile_prefetch_byte.sv $(MODEL_DIR)/sdram_model.sv
 
 .PHONY: all roms run clean
@@ -91,14 +91,14 @@ roms/$(GAME)_ioctl.bin:
 roms: roms/$(GAME)_ioctl.bin
 
 # ROM_FILE/OKI*_ROM_FILE only feed the golden audits of the HW-path caches.
-$(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gunnail_mg_hw.cpp $(FX68K_DIR)/fx68k.sv roms/$(GAME)_ioctl.bin
+$(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gunnail_hs.cpp $(FX68K_DIR)/fx68k.sv roms/$(GAME)_ioctl.bin
 	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --top-module $(TOP) $(EXTRA_VFLAGS) \
 		--Mdir $(OBJ_DIR) +define+SIMULATION +define+OKI_CACHE_DIAG \
 		-GGAME_SEL=$(SEL) -GVTIMING_FILE=\"../../../roms/gunnail_multi_vtiming.hex\" \
 		-GROM_FILE=\"$(R)_maincpu.hex\" -GOKI1_ROM_FILE=\"$(R)_oki1.hex\" -GOKI2_ROM_FILE=\"$(R)_oki2.hex\" \
 		-I$(M68705_DIR) -y $(FX68K_DIR) -y $(JT680X_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl -y $(RTL_DIR)/third_party/jt51/hdl -y $(RTL_DIR)/third_party/jtopl/hdl \
 		$(SOURCES) $(FX68K_DIR)/fx68k.sv $(FX68K_DIR)/fx68kAlu.sv $(FX68K_DIR)/uaddrPla.sv \
-		tb_gunnail_mg_hw.cpp \
+		tb_gunnail_hs.cpp \
 		-o V$(TOP)
 	cp $(FX68K_DIR)/microrom.mem $(FX68K_DIR)/nanorom.mem $(M68705_DIR)/6805.uc .
 

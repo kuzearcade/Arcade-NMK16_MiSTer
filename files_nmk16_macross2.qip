@@ -41,3 +41,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/third_party/fx68k/uaddrPla.sv
 
 set_global_assignment -name SDC_FILE Macross2.sdc
 set_global_assignment -name VERILOG_FILE rtl/third_party/hiscore/hiscore.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cheats.sv

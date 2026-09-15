@@ -64,14 +64,33 @@ def fmt(rows):
     for r in rows: out.append('        '+' '.join(f'{b:02X}' for b in r))
     return '\n'.join(out)
 
+# NMK-24: sets that lock up once a saved dump exists, so they must NOT get a
+# <rom index="3"> region. hiscore.v takes the game-RAM port for the whole of
+# its compare loop (NMK16_Gunnail.sv holds hs_access high across the pause),
+# and on these games that is enough to wedge the running game -- reproduced in
+# sim/rtl/gunnail_hs as the 68000 collapsing into a 4-PC loop. Determined by
+# measurement, not by reasoning about which boards have a protection MCU: the
+# MCU-less hachamfp fails too. See docs/known-issues.md. Remove entries here
+# once the arbitration rework lands and the set has been retested on hardware.
+HS_EXCLUDE = {
+    'hachamf', 'hachamfa',          # game_sel 9
+    'hachamfb',                     # game_sel 13 (no MCU -- still affected)
+    'hachamfp',                     # game_sel 11 (no MCU -- still affected)
+    'strahl', 'strahlj', 'strahlja',# game_sel 7
+    'strahljbl',                    # game_sel 49
+    'acrobatmbl',                   # game_sel 45 (acrobatm itself is FINE on
+                                    # the identical hiscore config)
+}
+
 def main():
     dat=load_dat(sys.argv[1] if len(sys.argv)>1 else 'mame/plugins/hiscore/hiscore.dat')
     root=os.path.dirname(os.path.abspath(__file__))+'/..'
-    n=skip=0
+    n=skip=excl=0
     for p in sorted(glob.glob(root+'/releases/*.mra')+glob.glob(root+'/releases/_alternatives/*/*.mra')):
         t=open(p,encoding='utf-8').read()
         if 'index="3"' in t: continue
         sn=re.search(r'<setname>([^<]+)',t).group(1).strip()
+        if sn in HS_EXCLUDE: excl+=1; continue
         if sn not in dat: skip+=1; continue
         recs,total=records(dat[sn])
         if not recs: skip+=1; continue
@@ -81,6 +100,7 @@ def main():
              '  <nvram index="4" size="%d"/>\n' % (sn, fmt([HDR]), fmt(recs), total))
         t=t.replace('</misterromdescription>', blk+'</misterromdescription>')
         open(p,'w',encoding='utf-8').write(t); n+=1
-    print(f"added hiscore sections to {n} .mra; {skip} have no hiscore.dat entry")
+    print(f"added hiscore sections to {n} .mra; {skip} have no hiscore.dat entry; "
+          f"{excl} skipped as NMK-24 exclusions")
 
 if __name__=='__main__': main()

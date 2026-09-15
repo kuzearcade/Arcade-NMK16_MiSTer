@@ -409,6 +409,64 @@ sprite-and-scroll evidence for that core is the board captures).
   works. A control that fails (here: coin+start also changed nothing in MAME)
   is the signal the harness is broken, not the game.
 
+### NMK-24 · Six games lock up once a high-score dump exists
+- **Cores:** NMK16_Gunnail · **Severity:** bug · **Status:** mitigated
+  (2026-09-15) — hiscore removed from the affected sets; arbitration rework
+  outstanding
+- **Symptom:** with a saved `.nvm` present, the game boots, draws, then stops
+  responding. Video freezes on one frame and audio goes to **exactly 0.0 RMS
+  with zero variance** — everything clock-gated, not a crashed 68000 (a crash
+  leaves the NMK004 droning). Delete the `.nvm` and the game is perfect.
+- **Affected (measured, not predicted):** `hachamf`, `hachamfa`, `hachamfb`,
+  `hachamfp`, `strahl`, `strahlj`, `strahlja`, `strahljbl`, `acrobatmbl` —
+  9 `.mra`, 6 distinct `game_sel`. Their `<rom index="3">`/`<nvram index="4">`
+  are removed and the sets are listed in `tools/gen_hiscore_mra.py`'s
+  `HS_EXCLUDE` so regeneration cannot quietly put them back. The other
+  **73** sets keep working high scores.
+- **The cause is `hiscore.v` holding the game-RAM port far too long.**
+  `NMK16_Gunnail.sv` asserted `hs_access = 1'b1` for the *entire* `hs_pause`
+  window and left the module's own `ram_intent_read`/`ram_intent_write`
+  outputs unconnected, so the port was withheld from the rest of the machine
+  across the whole of the module's compare loop — which runs forever when the
+  check never passes. Reproduced in `sim/rtl/gunnail_hs` (a new top-level
+  harness that instantiates the real `hiscore.v` alongside the core): the
+  68000 collapses into a **4-PC loop at $00819C–$0081A2** with a black screen.
+- **Two fixes are in and both are real, but they are only partial:**
+
+  | measurement (hachamf, `sim/rtl/gunnail_hs`) | before | after |
+  |---|---|---|
+  | protection-MCU writes silently dropped | 242 | **0** |
+  | MCU shared-bus accesses | 4,402 | **22,885** (= healthy control) |
+  | distinct 68000 PCs, final quarter | 4 | 206 (healthy control: 367) |
+  | last frame nonzero pixels | 0 | 21,952 (control: 57,344) |
+
+  1. `gunnail_core.sv` — `grant` is now qualified with `~hs_access`. A grant
+     issued while hiscore owns the port set `prot_wr_done` and released
+     `prot_stall`, telling the MCU a write had completed that `we_hi`/`we_lo`
+     had just dropped. Silently lost bytes.
+  2. `NMK16_Gunnail.sv` — `hs_access` now follows the module's
+     `ram_intent_*` outputs instead of the whole pause.
+  On hardware hachamf went from a hard freeze to booting further and animating
+  before stopping — better, still not playable, hence the `.mra` mitigation.
+- **Why it is still only partial, and where to resume:** `hiscore.v:193` has
+  `ram_intent_read = reading_scores | checking_scores`, and those are
+  *state-phase* flags (set at line 591, cleared at 619/633/659) that span the
+  whole check sequence including its `CHECK_WAIT` delays — not per-cycle bus
+  requests. The port is still withheld for most of the pause. Finishing this
+  means serving the game ahead of hiscore rather than the reverse, worked
+  against the module's `CHECK_HOLD`/`WRITE_HOLD`/`ACCESS_PAUSEPAD` slack,
+  because `hiscore.v` has no wait-state input to stall it with.
+- **Do not reason about which sets are affected — measure.** Two models were
+  tried and both failed. "Protected boards with the MCU on main RAM" predicted
+  `tdragon1` would break (it scores **8/8**, perfectly healthy) and that the
+  MCU-less `hachamfp` would be safe (it **freezes**). Dump size is not it
+  either: `gunnail`'s 4,217-byte dump is the largest of all and is fine, while
+  `strahl` fails on 403 bytes. `acrobatm` and `acrobatmbl` share a
+  byte-identical hiscore config and land on **opposite sides**. The list above
+  comes from loading all 31 distinct `game_sel` with a correctly-sized dump and
+  scoring liveness (`/media/fat/hs_sweep_log.txt`); healthy games score 7–8
+  distinct frames of 8, broken ones 1–3, with nothing in between.
+
 ### NMK-20 · ssmissin BG "corruption": two missing driver behaviours
 - **Severity:** bug · **Status:** **FIXED and confirmed on hardware
   2026-09-14**; the original "hardware-only" diagnosis was a

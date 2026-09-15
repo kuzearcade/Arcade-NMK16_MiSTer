@@ -175,6 +175,13 @@ module gunnail_core #(
 	input         hs_write,
 	input         hs_access,   // hiscore owns the RAM port this cycle
 
+	// Diagnostic (NMK-24): protection-MCU main-RAM writes that were
+	// acknowledged to the MCU while hs_access masked them out of the RAM
+	// port's write enables -- i.e. silently dropped. Left unconnected in
+	// the synthesised top levels, so the counter optimises away there; the
+	// sims read it to measure the hazard instead of inferring it.
+	output [31:0] dbg_hs_prot_drop,
+
 	// Game select (2026-09-11) — see the game table below. Static for a
 	// session (from the .mra <switches> third byte in NMK16_Gunnail.sv).
 	input [5:0] game_sel,
@@ -1310,8 +1317,21 @@ module gunnail_core #(
 		assign prot_mainram_dout  = {mainram_hi[prot_addr[15:1]], mainram_lo[prot_addr[15:1]]};
 		assign prot_mainram_ready = 1'b1;
 		assign mainram_prot_grant = 1'b1;
+		assign dbg_hs_prot_drop   = 32'd0;   // no arbitration in the sim-RAM build
 	end else begin : g_mainram_hw
-		wire        grant = prot_acc & prot_sel_mainram & ~(sel_mainram & ~ASn) & ~sprite_dma_busy;
+		// NMK-24: ~hs_access is REQUIRED here, not just an optimisation.
+		// grant feeds mainram_prot_grant -> prot_wr_granted_now -> prot_wr_done,
+		// which is what releases prot_stall and lets the MCU move on. Without
+		// it, a grant issued while hiscore owns the port tells the MCU its
+		// write completed, yet we_hi/we_lo below drop that write (they are
+		// qualified with ~hs_access) -- a silently lost byte. hachamf's RAM is
+		// "shared with MCU" (nmk16.cpp hachamf_map), so losing bytes desyncs
+		// the protection handshake and the game dies. hiscore.v pauses the
+		// 68000 in thousands of ~13-cycle bursts while the MCU keeps running,
+		// so the collisions are frequent: 242 dropped writes in 1.3 s of
+		// game time, measured by dbg_hs_prot_drop in sim/rtl/gunnail_hs.
+		// Gating grant makes the MCU stall through the burst instead.
+		wire        grant = prot_acc & prot_sel_mainram & ~(sel_mainram & ~ASn) & ~sprite_dma_busy & ~hs_access;
 		// Three masters now: hiscore (only while the CPU is paused) wins over
 		// the protection MCU, which wins over the CPU.
 		wire [14:0] port_addr = hs_access ? mainram_addr_hs : grant ? prot_addr[15:1] : mainram_addr_cpu;
@@ -1336,6 +1356,18 @@ module gunnail_core #(
 		assign prot_mainram_dout  = mainram_dout;
 		assign prot_mainram_ready = port_src_r & (port_addr_r == prot_addr[15:1]);
 		assign mainram_prot_grant = grant;
+
+		// NMK-24 probe: this cycle the MCU's write is acknowledged (grant
+		// feeds prot_wr_granted_now, which sets prot_wr_done and releases
+		// prot_stall) yet we_hi/we_lo dropped it because hs_access owns the
+		// port. Every count is one main-RAM byte the MCU believes it wrote.
+		reg [31:0] hs_prot_drop = 32'd0;
+		always @(posedge clk_sys) begin
+			if (reset) hs_prot_drop <= 32'd0;
+			else if (hs_access & grant & prot_wr & ~prot_wr_done)
+				hs_prot_drop <= hs_prot_drop + 32'd1;
+		end
+		assign dbg_hs_prot_drop = hs_prot_drop;
 	end
 	endgenerate
 	// Driven in both builds (mainram_dout is). 68000 big-endian: even = high.

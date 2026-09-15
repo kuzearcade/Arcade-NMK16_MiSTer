@@ -32,6 +32,8 @@ sim/rtl/m68705/roms/*.txt
 # working copy the Makefile drops next to the executable for $readmemb
 sim/rtl/m68705/6805.uc
 sim/rtl/gunnail_mg/6805.uc
+sim/rtl/gunnail_mg_hw/6805.uc
+sim/rtl/gunnail_hs/6805.uc
 sim/rtl/*/*.trace
 sim/rtl/*/*.mem
 # Undocumented debug-dump artifacts the vendored jt12/jt6295 cores
