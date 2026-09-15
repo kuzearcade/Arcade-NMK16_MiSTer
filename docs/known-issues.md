@@ -362,6 +362,37 @@ sprite-and-scroll evidence for that core is the board captures).
 
 ## NMK16_Gunnail
 
+### NMK-23 · Three long-standing scratch-note observations, investigated
+- **Cores:** NMK16_Gunnail · **Severity:** gap (verification) · **Status:**
+  closed 2026-09-15 — none is an open defect
+- Three observations had lived only in a personal scratch file, never tracked
+  here. Investigated one at a time against MAME on the shipped build:
+- **"sbsgomo and strahl corrupted graphics" — stale.** Confirmed by the author
+  as an earlier build; `552c548` ("swapped sprite column pairs on bioship,
+  strahl and acrobatm") is the fix, and sbsgomo is bioship's clone on the same
+  board and gfx. Both render cleanly in the 2026-09-15 catalogue sweep.
+- **"cactus weird title screen" — NOT a bug, the bootleg really is like that.**
+  cactus opens on a flat orange screen with "INSERT COIN" and a few drifting
+  sprites where its parent `sabotenb` draws a title logo. **MAME does exactly
+  the same**: captured at frames 300/600/900, same `(255,189,0)` background
+  over ~98.7% of the frame, same missing logo. The board's attract frame
+  differs from MAME frame 900 by **1.1% of pixels**, all of it sprite
+  animation phase. The bootleg has a stripped title screen; the core is right.
+- **"Task Force Harrier weird audio at end of attract" — not reproduced.**
+  95 s of board audio (capture box) against MAME `-wavwrite`, aligned by
+  `tools/audio_compare.py --offset-search 20`: the board leads MAME by 3.95 s
+  (its ROM-upload delay), and over the aligned 91 s scores **envelope corr
+  0.976, mean band corr 0.951, mean level −0.7 dB**. That is *better* than the
+  figure NMK-6 accepts as good for GunNail (0.919 band / 0.951 envelope).
+  Per-10 s windows run 0.87–0.98 with three dips (0.76, 0.64, 0.65); the
+  2 s-window breakdown shows those scattered across the whole run rather than
+  at one phase, with every band inside ±1.1 dB below 11 kHz — the signature of
+  two free-running attract loops drifting apart (cf. NMK-7), not a localized
+  fault. The >14 kHz level gap is the capture box's anti-alias filter.
+- **If a subjective audio artefact is heard again**, band correlation will not
+  catch a single wrong-sounding effect; capture the moment and compare that
+  span directly rather than a whole-run average.
+
 ### NMK-6 · Audio band correlation not re-measured since the sequencer fix
 - **Severity:** gap · **Status:** fixed (measured 2026-09-10)
 - **Ref:** "OKI still ~8-13 dB too quiet" (table) and "Fourth pass…"
