@@ -134,6 +134,10 @@ localparam CONF_STR = {
 	"DIP;",
 	"-;",
 	"O[29],Pause,Off,On;",
+	"P1,Scores;",
+	"P1-;",
+	"P1R[30],Save Scores;",
+	"P1R[31],Reset Scores;",
 	"-;",
 	"R[0],Reset;",
 	// Fixed at synthesis time as the superset of every game this RBF
@@ -180,6 +184,11 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.ioctl_download(ioctl_download),
 	.ioctl_wr(ioctl_wr),
+	.ioctl_upload(ioctl_upload),
+	.ioctl_upload_req(ioctl_upload_req),
+	.ioctl_upload_index(8'd4),
+	.ioctl_din(ioctl_din),
+	.ioctl_rd(ioctl_rd),
 	.ioctl_addr(ioctl_addr_full),
 	.ioctl_dout(ioctl_dout),
 	.ioctl_wait(ioctl_wait),
@@ -212,7 +221,22 @@ pll pll
 // a stable 40MHz (a genuine race at FPGA configuration time, before the
 // PLL has locked) — a real, if hard-to-observe-without-hardware,
 // omission fixed here defensively.
-wire reset = RESET | status[0] | buttons[1] | ioctl_download | ~pll_locked;
+// "Reset Scores". Two different hold times from one counter, because the two
+// things being reset need different windows: the CORE only needs a normal
+// reset pulse, while the hiscore MODULE has to stay in reset right through
+// the game's boot and work-RAM test, or it will simply restore the saved dump
+// again and nothing will have been reset. Held down, the module never
+// restores, the game rebuilds its own default table, and the first OSD open
+// after release extracts those defaults and autosaves them over the old .nvm.
+reg [28:0] hs_rst_cnt = 29'd0;
+always @(posedge clk_sys) begin
+	if (status[31])          hs_rst_cnt <= 29'd240000000;   // ~6 s at 40 MHz
+	else if (|hs_rst_cnt)    hs_rst_cnt <= hs_rst_cnt - 1'b1;
+end
+wire hs_hold     = |hs_rst_cnt;                        // module in reset
+wire hs_core_rst = (hs_rst_cnt > 29'd236000000);       // core reset, first ~0.1 s
+
+wire reset = RESET | status[0] | buttons[1] | ioctl_download | ~pll_locked | hs_core_rst;
 
 // ------------------------------------------------------------------
 // Player inputs — cross-checked bit-for-bit against
@@ -538,6 +562,70 @@ assign rd_y_screen = vcount_core[7:0] - 8'd16;
 // followed by powerins' 21.u71 (nmk_irq table 1, selected by
 // game_powerins); rebuild with `cat roms/tdragon2_vtiming.hex
 // roms/powerins_vtiming.hex` after mkgfxrom --mode concat on each PROM.
+
+// ---------------------------------------------------------------------------
+// High score save/load (2026-09-15) — rtl/third_party/hiscore/hiscore.v,
+// MAME hiscore.dat format. The .mra supplies the per-game entry table as
+// <rom index="3"> and the saved dump rides <nvram index="4">.
+//
+// The module owns the game-RAM port only while it has the CPU paused, so no
+// third read port is added to main RAM — that would duplicate the M10K
+// (NMK-10). hs_pause is OR'd with the OSD Pause bit into the core.
+//
+// autosave is tied high so scores persist without the user thinking about it.
+// The module only extracts-and-saves on a RISING edge of its OSD_STATUS
+// input, so "Save Scores" forces one by driving that input low for a few
+// cycles and letting it go high again — the module has no native "save now".
+// "Reset Scores" suppresses the next dump load and resets the core, so the
+// game rebuilds its own default table, which is then saved over the old one.
+// ---------------------------------------------------------------------------
+wire [23:0] hs_addr;
+wire  [7:0] hs_din, hs_dout;
+wire        hs_write, hs_access, hs_pause, hs_configured;
+wire        ioctl_upload;
+wire        ioctl_upload_req;
+wire  [7:0] ioctl_din;
+wire        ioctl_rd;
+
+reg  [7:0]  hs_save_sr  = 8'd0;    // "Save Scores" -> synthetic OSD edge
+always @(posedge clk_sys) begin
+	hs_save_sr <= {hs_save_sr[6:0], 1'b0};
+	if (status[30]) hs_save_sr <= 8'hFF;
+end
+wire hs_saving = |hs_save_sr;
+wire hs_osd = OSD_STATUS & ~hs_saving;   // drop low during a Save to force the edge
+
+
+hiscore #(
+	.HS_ADDRESSWIDTH(24),
+	.HS_SCOREWIDTH(13),      // 5504 bytes is the largest table here (macross2)
+	.CFG_ADDRESSWIDTH(4),    // 13 entries is the most any of our sets uses
+	.CFG_LENGTHWIDTH(2)
+) hi (
+	.clk(clk_sys),
+	.reset(reset | hs_hold),
+	.paused(hs_pause),
+	.autosave(1'b1),
+	.OSD_STATUS(hs_osd),
+	.ioctl_upload(ioctl_upload),
+	.ioctl_upload_req(ioctl_upload_req),
+	.ioctl_download(ioctl_download),
+	.ioctl_wr(ioctl_wr),
+	.ioctl_addr(ioctl_addr),
+	.ioctl_index(ioctl_index[7:0]),
+	.data_from_hps(ioctl_dout),
+	.data_to_hps(ioctl_din),
+	.data_from_ram(hs_dout),
+	.data_to_ram(hs_din),
+	.ram_address(hs_addr),
+	.ram_write(hs_write),
+	.ram_intent_read(),
+	.ram_intent_write(),
+	.pause_cpu(hs_pause),
+	.configured(hs_configured)
+);
+assign hs_access = hs_pause;
+
 tdragon2_core #(.HW_ROMS(1),
 	.IOCTL_BUCKET_REF_FILE("rtl/tdragon2/tdragon2_ioctl_bucket_ref.hex"),
 	.ROM_FETCH_BUCKET_REF_FILE("rtl/tdragon2/tdragon2_fetch_bucket_ref.hex"),
@@ -547,7 +635,7 @@ tdragon2_core #(.HW_ROMS(1),
 	.ROM_FETCH_WORD_REF_FILE("rtl/tdragon2/tdragon2_fetch_word_ref.hex"),
 	.ROM_FETCH_WORD_TOUCHED_FILE("rtl/tdragon2/tdragon2_fetch_word_touched.hex")) core
 (
-	.clk_sys(clk_sys), .reset(reset), .pause(status[29]), .game_macross2(game_macross2), .game_powerins(game_powerins),
+	.clk_sys(clk_sys), .reset(reset), .pause(status[29] | hs_pause), .hs_addr(hs_addr), .hs_din(hs_din), .hs_dout(hs_dout), .hs_write(hs_write), .hs_access(hs_access), .game_macross2(game_macross2), .game_powerins(game_powerins),
 	.game_tdragon3h(game_tdragon3h), .game_pi_bootleg(game_pi_bootleg), .game_pi_nosnd(game_pi_nosnd), .game_pi_gfxlsb(game_pi_gfxlsb),
 	.extra_por_hold(~pll_locked),
 

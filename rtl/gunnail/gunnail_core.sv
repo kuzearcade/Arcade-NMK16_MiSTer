@@ -161,6 +161,20 @@ module gunnail_core #(
 	// hiscore module's own pause_cpu request.
 	input pause,
 
+	// Hiscore RAM access (2026-09-15). hiscore.v in the top level owns the
+	// game-RAM port while it has the CPU paused, so no THIRD read port is
+	// added to mainram -- that would duplicate the M10K (NMK-10, and the
+	// dbg_* taps are tied off at HW_ROMS=1 for exactly this reason).
+	// hs_addr is a raw 68000 byte address straight out of hiscore.dat; the
+	// translation to a main-RAM index happens here because only the core
+	// knows this game's mapping, including the address-line swap some of
+	// them apply. Byte lane follows 68000 big-endian: even address = high.
+	input  [23:0] hs_addr,
+	input   [7:0] hs_din,
+	output  [7:0] hs_dout,
+	input         hs_write,
+	input         hs_access,   // hiscore owns the RAM port this cycle
+
 	// Game select (2026-09-11) — see the game table below. Static for a
 	// session (from the .mra <switches> third byte in NMK16_Gunnail.sv).
 	input [5:0] game_sel,
@@ -1270,6 +1284,10 @@ module gunnail_core #(
 	// tharrier's MCU-read simulation returns mainram word 0x9064 (see the
 	// MCU block): during that I/O read the RAM port is free, so point it there.
 	wire [14:0] mainram_addr_cpu = (g_tharrier & sel_in1) ? 15'h4832 : byte_addr[15:1];
+	// Hiscore view of the same mapping (see the hs_* ports).
+	wire [15:0] hs_byte = hs_addr[15:0];
+	wire [14:0] mainram_addr_hs = hs_byte[15:1];
+	wire [14:0] mainram_addr_use = hs_access ? mainram_addr_hs : mainram_addr_cpu;
 	wire        mr_uds = ~UDSn | mainram_strange;
 	wire        mr_lds = ~LDSn | mainram_strange;
 	reg  [15:0] mainram_dout;
@@ -1294,14 +1312,18 @@ module gunnail_core #(
 		assign mainram_prot_grant = 1'b1;
 	end else begin : g_mainram_hw
 		wire        grant = prot_acc & prot_sel_mainram & ~(sel_mainram & ~ASn) & ~sprite_dma_busy;
-		wire [14:0] port_addr = grant ? prot_addr[15:1] : mainram_addr_cpu;
+		// Three masters now: hiscore (only while the CPU is paused) wins over
+		// the protection MCU, which wins over the CPU.
+		wire [14:0] port_addr = hs_access ? mainram_addr_hs : grant ? prot_addr[15:1] : mainram_addr_cpu;
 		reg  [14:0] port_addr_r;
 		reg         port_src_r;
 		wire        prot_w = grant & prot_wr & ~prot_wr_done;
-		wire        we_hi = (prot_w & ~prot_addr[0]) | (~grant & sel_mainram & cpu_write & mr_uds & ~sprite_dma_busy);
-		wire        we_lo = (prot_w &  prot_addr[0]) | (~grant & sel_mainram & cpu_write & mr_lds & ~sprite_dma_busy);
-		wire [7:0]  wd_hi = prot_w ? prot_wdata : oEdb[15:8];
-		wire [7:0]  wd_lo = prot_w ? prot_wdata : oEdb[7:0];
+		wire        we_hi = (hs_access & hs_write & ~hs_addr[0])
+		                  | (~hs_access & ((prot_w & ~prot_addr[0]) | (~grant & sel_mainram & cpu_write & mr_uds & ~sprite_dma_busy)));
+		wire        we_lo = (hs_access & hs_write &  hs_addr[0])
+		                  | (~hs_access & ((prot_w &  prot_addr[0]) | (~grant & sel_mainram & cpu_write & mr_lds & ~sprite_dma_busy)));
+		wire [7:0]  wd_hi = hs_access ? hs_din : prot_w ? prot_wdata : oEdb[15:8];
+		wire [7:0]  wd_lo = hs_access ? hs_din : prot_w ? prot_wdata : oEdb[7:0];
 		always @(posedge clk_sys) begin
 			if (we_hi) begin mainram_hi[port_addr] <= wd_hi; mainram_dout[15:8] <= wd_hi; end
 			else       mainram_dout[15:8] <= mainram_hi[port_addr];
@@ -1316,6 +1338,8 @@ module gunnail_core #(
 		assign mainram_prot_grant = grant;
 	end
 	endgenerate
+	// Driven in both builds (mainram_dout is). 68000 big-endian: even = high.
+	assign hs_dout = hs_addr[0] ? mainram_dout[7:0] : mainram_dout[15:8];
 
 	// ------------------------------------------------------------------
 	// Palette RAM (1024 x 16)

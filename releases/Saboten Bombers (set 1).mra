@@ -61,4 +61,14 @@
   <rom index="1" zip="sabotenb.zip|nmk004.zip" md5="none">
     <part crc="633ab1c9" name="8.ic37"/>
   </rom>
+
+  <!-- High scores: MAME hiscore.dat entries for sabotenb, and the
+       saved dump. See tools/gen_hiscore_mra.py. -->
+  <rom index="3" md5="none">
+    <part>
+        0C 00 00 00 00 FF 00 02 00 02 00 01 00 FF 02 00
+        00 0F 6E 00 00 6C 00 1E
+    </part>
+  </rom>
+  <nvram index="4" size="108"/>
 </misterromdescription>

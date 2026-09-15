@@ -113,4 +113,14 @@
   <rom index="1" zip="tdragon2.zip" md5="none">
     <part crc="e6ead349" name="10.bpr"/>
   </rom>
+
+  <!-- High scores: MAME hiscore.dat entries for tdragon2, and the
+       saved dump. See tools/gen_hiscore_mra.py. -->
+  <rom index="3" md5="none">
+    <part>
+        0C 00 00 00 00 FF 00 02 00 02 00 01 00 FF 02 00
+        00 1F F1 01 00 6B 18 00
+    </part>
+  </rom>
+  <nvram index="4" size="107"/>
 </misterromdescription>

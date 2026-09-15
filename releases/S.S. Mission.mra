@@ -67,4 +67,14 @@
   <rom index="1" zip="ssmissin.zip|nmk004.zip" md5="none">
     <part crc="ed0bd072" name="ssm-pr1.114"/>
   </rom>
+
+  <!-- High scores: MAME hiscore.dat entries for ssmissin, and the
+       saved dump. See tools/gen_hiscore_mra.py. -->
+  <rom index="3" md5="none">
+    <part>
+        0C 00 00 00 00 FF 00 02 00 02 00 01 00 FF 02 00
+        00 0B 91 00 00 C0 00 6F
+    </part>
+  </rom>
+  <nvram index="4" size="192"/>
 </misterromdescription>

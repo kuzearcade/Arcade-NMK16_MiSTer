@@ -58,4 +58,14 @@
     <!-- oki2, 0x100000 (sabotenb's ic27.sb7) -->
     <part crc="43e33a7e" name="ic27.sb7"/>
   </rom>
+
+  <!-- High scores: MAME hiscore.dat entries for cactus, and the
+       saved dump. See tools/gen_hiscore_mra.py. -->
+  <rom index="3" md5="none">
+    <part>
+        0C 00 00 00 00 FF 00 02 00 02 00 01 00 FF 02 00
+        00 0F 6E 00 00 6C 00 1E
+    </part>
+  </rom>
+  <nvram index="4" size="108"/>
 </misterromdescription>

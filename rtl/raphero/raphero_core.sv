@@ -76,6 +76,20 @@ module raphero_core #(
 	// hiscore module's own pause_cpu request.
 	input pause,
 
+	// Hiscore RAM access (2026-09-15). hiscore.v in the top level owns the
+	// game-RAM port while it has the CPU paused, so no THIRD read port is
+	// added to mainram -- that would duplicate the M10K (NMK-10, and the
+	// dbg_* taps are tied off at HW_ROMS=1 for exactly this reason).
+	// hs_addr is a raw 68000 byte address straight out of hiscore.dat; the
+	// translation to a main-RAM index happens here because only the core
+	// knows this game's mapping, including the address-line swap some of
+	// them apply. Byte lane follows 68000 big-endian: even address = high.
+	input  [23:0] hs_addr,
+	input   [7:0] hs_din,
+	output  [7:0] hs_dout,
+	input         hs_write,
+	input         hs_access,   // hiscore owns the RAM port this cycle
+
 	// Hardware-mode-only ports (HW_ROMS=1) — unused at HW_ROMS=0, see
 	// tdragon2_core.sv's own port comments for the ioctl_index gate and
 	// the ioctl_wait backpressure.
@@ -472,6 +486,10 @@ module raphero_core #(
 	reg [7:0] mainram_lo [0:32767];
 	wire [14:0] mainram_addr_cpu =
 		{byte_addr[15:12], byte_addr[8], byte_addr[10:9], byte_addr[11], byte_addr[7:1]};
+	// Hiscore view of the same mapping (see the hs_* ports).
+	wire [15:0] hs_byte = hs_addr[15:0];
+	wire [14:0] mainram_addr_hs = {hs_byte[15:12], hs_byte[8], hs_byte[10:9], hs_byte[11], hs_byte[7:1]};
+	wire [14:0] mainram_addr_use = hs_access ? mainram_addr_hs : mainram_addr_cpu;
 	reg [15:0] mainram_dout;
 	wire       mainram_ready;
 	generate
@@ -498,18 +516,26 @@ module raphero_core #(
 		// written byte (never consumed — a 68000 bus cycle is read OR
 		// write), otherwise the array. Keep this exact shape; see above.
 		reg [14:0] mainram_addr_cpu_r;
-		wire       we_hi = sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy;
-		wire       we_lo = sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy;
+		// hs_access steals this port for a cycle while the CPU is paused;
+		// both write enables stay flattened, as the template requires.
+		wire       we_hi = (sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy & ~hs_access)
+		                 | (hs_access & hs_write & ~hs_addr[0]);
+		wire       we_lo = (sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy & ~hs_access)
+		                 | (hs_access & hs_write &  hs_addr[0]);
+		wire [7:0] din_hi = hs_access ? hs_din : oEdb[15:8];
+		wire [7:0] din_lo = hs_access ? hs_din : oEdb[7:0];
 		always @(posedge clk_sys) begin
-			if (we_hi) begin mainram_hi[mainram_addr_cpu] <= oEdb[15:8]; mainram_dout[15:8] <= oEdb[15:8]; end
-			else       mainram_dout[15:8] <= mainram_hi[mainram_addr_cpu];
-			if (we_lo) begin mainram_lo[mainram_addr_cpu] <= oEdb[7:0];  mainram_dout[7:0]  <= oEdb[7:0];  end
-			else       mainram_dout[7:0]  <= mainram_lo[mainram_addr_cpu];
-			mainram_addr_cpu_r <= mainram_addr_cpu;
+			if (we_hi) begin mainram_hi[mainram_addr_use] <= din_hi; mainram_dout[15:8] <= din_hi; end
+			else       mainram_dout[15:8] <= mainram_hi[mainram_addr_use];
+			if (we_lo) begin mainram_lo[mainram_addr_use] <= din_lo; mainram_dout[7:0]  <= din_lo; end
+			else       mainram_dout[7:0]  <= mainram_lo[mainram_addr_use];
+			mainram_addr_cpu_r <= mainram_addr_use;
 		end
 		assign mainram_ready = (mainram_addr_cpu_r == mainram_addr_cpu);
 	end
 	endgenerate
+	// Driven in both builds (mainram_dout is). 68000 big-endian: even = high.
+	assign hs_dout = hs_addr[0] ? mainram_dout[7:0] : mainram_dout[15:8];
 
 	// ------------------------------------------------------------------
 	// Palette RAM (1024 x 16)

@@ -61,4 +61,14 @@
     <part repeat="0x20000">00</part>
     <part crc="d3531018" name="afega3.su13"/>
   </rom>
+
+  <!-- High scores: MAME hiscore.dat entries for dolmen, and the
+       saved dump. See tools/gen_hiscore_mra.py. -->
+  <rom index="3" md5="none">
+    <part>
+        0C 00 00 00 00 FF 00 02 00 02 00 01 00 FF 02 00
+        00 0F 06 02 00 4C 4E 53
+    </part>
+  </rom>
+  <nvram index="4" size="76"/>
 </misterromdescription>
