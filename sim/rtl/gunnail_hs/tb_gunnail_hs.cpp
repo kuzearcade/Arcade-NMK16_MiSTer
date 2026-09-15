@@ -65,6 +65,9 @@ int main(int argc, char **argv) {
 	printf("loaded %ld bytes of ROM image for download\n", len);
 
 	top.ioctl_index = 0;
+	top.hs_pause_en  = std::getenv("TB_NO_PAUSE")  ? 0 : 1;
+	top.hs_access_en = std::getenv("TB_NO_ACCESS") ? 0 : 1;
+	printf("tb_hs: hs_pause_en=%d hs_access_en=%d\n", (int)top.hs_pause_en, (int)top.hs_access_en);
 	top.ioctl_download = 1;
 	uint64_t download_ticks = 0;
 	for (long i = 0; i < len; i++) {

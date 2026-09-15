@@ -103,6 +103,7 @@ localparam CONF_STR = {
 	"-;",
 	"O[29],Pause,Off,On;",
 	"P1,Scores;",
+	"P1O[39],High Scores,Off,On;",
 	"P1-;",
 	"P1R[30],Save Scores;",
 	"P1R[31],Reset Scores;",
@@ -451,6 +452,7 @@ wire [7:0] rd_y_screen = game_flip_y ? (8'd223 - rd_y_raw) : rd_y_raw; // out-of
 wire [23:0] hs_addr;
 wire  [7:0] hs_din, hs_dout;
 wire        hs_write, hs_access, hs_pause, hs_configured;
+wire        hs_enable = status[39];   // "High Scores" -- OFF by default (NMK-24)
 wire [23:0] hi_addr;
 wire  [7:0] hi_din;
 wire        hi_write;
@@ -476,7 +478,7 @@ hiscore #(
 	.CFG_LENGTHWIDTH(2)
 ) hi (
 	.clk(clk_sys),
-	.reset(reset | hs_hold),
+	.reset(reset | hs_hold | ~hs_enable),
 	.paused(hs_pause),
 	.autosave(1'b1),
 	.OSD_STATUS(hs_osd),

@@ -88,6 +88,10 @@ module gunnail_hs_top #(
 	output        frame_done,
 
 	input  [15:0] ioctl_index,
+	// NMK-24 rework probe: isolate the two things hiscore does to the
+	// running machine -- pausing the CPU, and taking the RAM port.
+	input         hs_pause_en,
+	input         hs_access_en,
 
 	// Hiscore observability
 	output        hs_pause_o,
@@ -139,7 +143,8 @@ module gunnail_hs_top #(
 	// NMK-24: yield the RAM port ONLY on the cycles hiscore actually needs
 	// it, not for the whole pause. Holding it for the entire pause locks the
 	// protection MCU out of main RAM for the duration of the compare loop.
-	assign hs_access       = hs_pause & (hi_intent_rd | hi_intent_wr);
+	assign hs_access       = hs_access_en & hs_pause & (hi_intent_rd | hi_intent_wr);
+	wire   hs_pause_core   = hs_pause_en & hs_pause;
 	assign hs_pause_o      = hs_pause;
 	assign hs_configured_o = hs_configured;
 	assign hs_addr_o       = hs_addr;
@@ -229,7 +234,7 @@ module gunnail_hs_top #(
 		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFD), .dsw2_i(16'hFFFF),
 		.extra_por_hold(1'b0),
 
-		.pause(hs_pause),
+		.pause(hs_pause_core),
 		.hs_addr(hs_addr), .hs_din(hs_din), .hs_dout(hs_dout),
 		.hs_write(hs_write), .hs_access(hs_access),
 		.dbg_hs_prot_drop(dbg_hs_prot_drop)

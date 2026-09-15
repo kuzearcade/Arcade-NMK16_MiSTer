@@ -1298,6 +1298,7 @@ module gunnail_core #(
 	wire        mr_uds = ~UDSn | mainram_strange;
 	wire        mr_lds = ~LDSn | mainram_strange;
 	reg  [15:0] mainram_dout;
+	wire [15:0] hs_dout_word;
 	wire        mainram_ready;
 	wire        prot_mainram_ready;
 	wire [15:0] prot_mainram_dout;
@@ -1318,32 +1319,54 @@ module gunnail_core #(
 		assign prot_mainram_ready = 1'b1;
 		assign mainram_prot_grant = 1'b1;
 		assign dbg_hs_prot_drop   = 32'd0;   // no arbitration in the sim-RAM build
+		assign hs_dout_word       = mainram_dout;
 	end else begin : g_mainram_hw
-		// NMK-24: ~hs_access is REQUIRED here, not just an optimisation.
-		// grant feeds mainram_prot_grant -> prot_wr_granted_now -> prot_wr_done,
-		// which is what releases prot_stall and lets the MCU move on. Without
-		// it, a grant issued while hiscore owns the port tells the MCU its
-		// write completed, yet we_hi/we_lo below drop that write (they are
-		// qualified with ~hs_access) -- a silently lost byte. hachamf's RAM is
-		// "shared with MCU" (nmk16.cpp hachamf_map), so losing bytes desyncs
-		// the protection handshake and the game dies. hiscore.v pauses the
-		// 68000 in thousands of ~13-cycle bursts while the MCU keeps running,
-		// so the collisions are frequent: 242 dropped writes in 1.3 s of
-		// game time, measured by dbg_hs_prot_drop in sim/rtl/gunnail_hs.
-		// Gating grant makes the MCU stall through the burst instead.
-		wire        grant = prot_acc & prot_sel_mainram & ~(sel_mainram & ~ASn) & ~sprite_dma_busy & ~hs_access;
-		// Three masters now: hiscore (only while the CPU is paused) wins over
-		// the protection MCU, which wins over the CPU.
-		wire [14:0] port_addr = hs_access ? mainram_addr_hs : grant ? prot_addr[15:1] : mainram_addr_cpu;
+		// NMK-24 arbitration. hiscore is now the LOWEST-priority master, not
+		// an overriding one. It used to force port_addr to its own address
+		// whenever hs_access was high, so any other master reading main RAM
+		// that cycle got the hiscore location's data instead of its own.
+		// Measured in sim/rtl/gunnail_hs by isolating the two things hiscore
+		// does to a running machine (hachamf, distinct 68000 PCs in the final
+		// quarter / rendered pixels): pausing the CPU is harmless (380 PCs,
+		// 57344 px, vs a 367/57344 control), taking the port is fatal
+		// (2 PCs, 1000 px, protection-MCU bus accesses 22885 -> 622). The CPU
+		// is normally paused during hiscore access, which masked most of its
+		// own exposure, which is why this presented as an MCU problem.
+		//
+		// So: CPU wins, then the MCU, and hiscore is served only on cycles
+		// nobody else wants the port. hiscore.v has no wait-state input, so it
+		// cannot simply be stalled -- instead its write is latched and retired
+		// on the first free cycle, and its read data is captured with the
+		// address it belongs to. Its CHECK_HOLD/WRITE_HOLD/ACCESS_PAUSEPAD
+		// slack absorbs the latency, and a missed compare is safe: the module
+		// just cancels and retries after CHECK_WAIT.
+		wire        cpu_wants  = sel_mainram & ~ASn & ~sprite_dma_busy;
+		wire        prot_wants = prot_acc & prot_sel_mainram & ~sprite_dma_busy;
+		wire        grant      = prot_wants & ~(sel_mainram & ~ASn);
+		// Pending hiscore write, latched from its ram_write pulse.
+		reg         hs_pend;
+		reg  [14:0] hs_pend_addr;
+		reg         hs_pend_lane;   // 1 = low byte (odd address)
+		reg   [7:0] hs_pend_data;
+		wire        hs_serve   = hs_access & ~cpu_wants & ~prot_wants;
+		wire        hs_w       = hs_serve & hs_pend;
+		wire [14:0] port_addr  = grant ? prot_addr[15:1] :
+		                         hs_serve ? (hs_pend ? hs_pend_addr : mainram_addr_hs) :
+		                         mainram_addr_cpu;
 		reg  [14:0] port_addr_r;
-		reg         port_src_r;
+		reg         port_src_r;    // this cycle's read belonged to the MCU
+		reg         port_hs_r;     // ...or to hiscore
 		wire        prot_w = grant & prot_wr & ~prot_wr_done;
-		wire        we_hi = (hs_access & hs_write & ~hs_addr[0])
-		                  | (~hs_access & ((prot_w & ~prot_addr[0]) | (~grant & sel_mainram & cpu_write & mr_uds & ~sprite_dma_busy)));
-		wire        we_lo = (hs_access & hs_write &  hs_addr[0])
-		                  | (~hs_access & ((prot_w &  prot_addr[0]) | (~grant & sel_mainram & cpu_write & mr_lds & ~sprite_dma_busy)));
-		wire [7:0]  wd_hi = hs_access ? hs_din : prot_w ? prot_wdata : oEdb[15:8];
-		wire [7:0]  wd_lo = hs_access ? hs_din : prot_w ? prot_wdata : oEdb[7:0];
+		// hs_serve is false whenever the CPU or MCU want the port, so these
+		// three write sources are mutually exclusive by construction.
+		wire        we_hi = (hs_w & ~hs_pend_lane)
+		                  | (prot_w & ~prot_addr[0])
+		                  | (~grant & ~hs_serve & sel_mainram & cpu_write & mr_uds & ~sprite_dma_busy);
+		wire        we_lo = (hs_w &  hs_pend_lane)
+		                  | (prot_w &  prot_addr[0])
+		                  | (~grant & ~hs_serve & sel_mainram & cpu_write & mr_lds & ~sprite_dma_busy);
+		wire [7:0]  wd_hi = hs_w ? hs_pend_data : prot_w ? prot_wdata : oEdb[15:8];
+		wire [7:0]  wd_lo = hs_w ? hs_pend_data : prot_w ? prot_wdata : oEdb[7:0];
 		always @(posedge clk_sys) begin
 			if (we_hi) begin mainram_hi[port_addr] <= wd_hi; mainram_dout[15:8] <= wd_hi; end
 			else       mainram_dout[15:8] <= mainram_hi[port_addr];
@@ -1351,8 +1374,29 @@ module gunnail_core #(
 			else       mainram_dout[7:0]  <= mainram_lo[port_addr];
 			port_addr_r  <= port_addr;
 			port_src_r   <= grant;
+			port_hs_r    <= hs_serve & ~hs_pend;   // a read cycle for hiscore
+
+			if (reset) hs_pend <= 1'b0;
+			else if (hs_access & hs_write) begin   // accept (or refresh) the write
+				hs_pend      <= 1'b1;
+				hs_pend_addr <= mainram_addr_hs;
+				hs_pend_lane <= hs_addr[0];
+				hs_pend_data <= hs_din;
+			end else if (hs_w) hs_pend <= 1'b0;    // retired this cycle
 		end
-		assign mainram_ready      = ~port_src_r & (port_addr_r == mainram_addr_cpu);
+		// Hiscore's own read data, captured only on cycles the port actually
+		// served it -- so it can never be handed another master's word, which
+		// is what the old code did (hs_dout came straight off the shared port
+		// register). Initialised because hiscore.v samples it before the first
+		// service cycle. If service is late the module simply sees the
+		// previous word, its compare fails, and it retries after CHECK_WAIT:
+		// a missed compare is safe, and it holds its address across
+		// CHECK_HOLD so a one-cycle wait for the MCU is absorbed.
+		reg [15:0] hs_word = 16'd0;
+		always @(posedge clk_sys) begin
+			if (port_hs_r) hs_word <= mainram_dout;
+		end
+		assign mainram_ready      = ~port_src_r & ~port_hs_r & (port_addr_r == mainram_addr_cpu);
 		assign prot_mainram_dout  = mainram_dout;
 		assign prot_mainram_ready = port_src_r & (port_addr_r == prot_addr[15:1]);
 		assign mainram_prot_grant = grant;
@@ -1364,14 +1408,16 @@ module gunnail_core #(
 		reg [31:0] hs_prot_drop = 32'd0;
 		always @(posedge clk_sys) begin
 			if (reset) hs_prot_drop <= 32'd0;
-			else if (hs_access & grant & prot_wr & ~prot_wr_done)
+			else if (hs_serve & grant & prot_wr & ~prot_wr_done)
 				hs_prot_drop <= hs_prot_drop + 32'd1;
 		end
 		assign dbg_hs_prot_drop = hs_prot_drop;
+		assign hs_dout_word     = hs_word;
 	end
 	endgenerate
-	// Driven in both builds (mainram_dout is). 68000 big-endian: even = high.
-	assign hs_dout = hs_addr[0] ? mainram_dout[7:0] : mainram_dout[15:8];
+	// 68000 big-endian: even address = high byte. In the HW build this is the
+	// address-tagged capture (NMK-24), never the live shared port register.
+	assign hs_dout = hs_addr[0] ? hs_dout_word[7:0] : hs_dout_word[15:8];
 
 	// ------------------------------------------------------------------
 	// Palette RAM (1024 x 16)

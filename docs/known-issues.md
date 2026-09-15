@@ -411,8 +411,9 @@ sprite-and-scroll evidence for that core is the board captures).
 
 ### NMK-24 · Six games lock up once a high-score dump exists
 - **Cores:** NMK16_Gunnail · **Severity:** bug · **Status:** mitigated
-  (2026-09-15) — hiscore removed from the affected sets; arbitration rework
-  outstanding
+  (2026-09-15) — hiscore removed from the affected sets AND the whole feature
+  is now off by default; **root cause still unknown**, see "Three fixes that
+  were each real and none of which was the cause" below
 - **Symptom:** with a saved `.nvm` present, the game boots, draws, then stops
   responding. Video freezes on one frame and audio goes to **exactly 0.0 RMS
   with zero variance** — everything clock-gated, not a crashed 68000 (a crash
@@ -448,6 +449,31 @@ sprite-and-scroll evidence for that core is the board captures).
      `ram_intent_*` outputs instead of the whole pause.
   On hardware hachamf went from a hard freeze to booting further and animating
   before stopping — better, still not playable, hence the `.mra` mitigation.
+- **Three fixes that were each real and none of which was the cause.** All
+  three are in and measured; hachamf with a dump still freezes on hardware
+  (12 identical frames). Do not re-derive any of these as "the" fix:
+
+  | candidate | evidence it is real | why it is not the cause |
+  |---|---|---|
+  | MCU writes acknowledged then dropped | 242 -> 0, MCU bus 4,402 -> 22,885 | MCU-less `hachamfp` fails too |
+  | `hs_access` held across the whole pause | hard freeze -> boots further, animates | still stops short of play |
+  | hiscore overriding the RAM port | stress sim 2 PCs -> 367, 1,000 px -> 57,344 | hardware unchanged, still frozen |
+
+  What is left is the **pause itself**, which remains unexplained. The one
+  experiment that spoke to it was not trustworthy: on the stress config a
+  72-cycle phase shift out of 11.3M (0.0006%) flips the game between 380 and
+  0 distinct PCs, so that config is **chaotic** and only its large structured
+  effects mean anything. Judge any future fix on the realistic config and on
+  hardware, never on the stress config alone.
+- **Second layer of protection (2026-09-15):** high score save/load is now a
+  **"High Scores" option, off by default**, first entry on the Scores page of
+  all four cores. While off the module is held in reset and is completely
+  inert -- verified on hardware: hachamf healthy 8/8 *with a dump present* and
+  the `.nvm` byte-identical afterwards, so autosave cannot clobber a good
+  dump either. Switching it on takes effect **without reloading the core**,
+  because `hiscore.v` does not gate its ioctl capture on `reset` and starts
+  its restore on the FALLING edge of reset (`hiscore.v:381`), so the config
+  and dump the `.mra` already delivered are still there.
 - **Why it is still only partial, and where to resume:** `hiscore.v:193` has
   `ram_intent_read = reading_scores | checking_scores`, and those are
   *state-phase* flags (set at line 591, cleared at 619/633/659) that span the
