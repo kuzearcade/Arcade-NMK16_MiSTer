@@ -132,6 +132,15 @@ int main(int argc, char **argv) {
 	// NMK-24 ordering probe (see the $0082/$00A7/$0FEF00 taps below).
 	unsigned long wd_isr = 0, wd_fire = 0, spin_hits = 0;
 	uint64_t wd_isr_first = 0, wd_fire_first = 0, spin_first = 0;
+	// NMK-24 stuck-bus-cycle detector (see the ASn tracking below).
+	uint64_t as_low_since = 0, as_low_max = 0, as_low_max_tick = 0;
+	uint32_t as_low_max_addr = 0; uint8_t as_low_max_w = 0;
+	// Ring of the last 64 COMPLETED bus cycles. Hoisted out of the loop (it
+	// was a block-scope static) so the end-of-run dump can reach it: when the
+	// CPU stalls with ASn low, the ring holds the last thing it did before
+	// stalling, which is what identifies the wedge.
+	uint32_t ring_addr[64], ring_data[64]; uint8_t ring_w[64], ring_fc[64];
+	uint64_t ring_t[64]; int ring_n = 0;
 	uint16_t snd_last_pc = 0;
 
 	bool prev_as_n = true;
@@ -265,13 +274,23 @@ int main(int argc, char **argv) {
 		// (addr, data at AS release, R/W, FC) and dump them when the CPU
 		// fetches from that PC (an exception handler, say), then stop.
 		static uint32_t trap_pc = std::getenv("TB_TRAP_PC") ? strtoul(std::getenv("TB_TRAP_PC"), nullptr, 16) : 0xFFFFFFFF;
-		static uint32_t ring_addr[64], ring_data[64]; static uint8_t ring_w[64], ring_fc[64]; static uint64_t ring_t[64]; static int ring_n = 0;
 		static uint32_t cur_addr = 0, cur_data = 0; static uint8_t cur_w = 0, cur_fc = 0;
 		if (!top.dbg_as_n) { cur_addr = (uint32_t)top.dbg_eab << 1; cur_data = top.dbg_data; cur_w = top.dbg_write; cur_fc = (top.dbg_fc2 << 2) | (top.dbg_fc1 << 1) | top.dbg_fc0; }
 		if (!prev_as_n && top.dbg_as_n) {
 			int i = ring_n++ & 63; ring_addr[i] = cur_addr; ring_data[i] = cur_data; ring_w[i] = cur_w; ring_fc[i] = cur_fc; ring_t[i] = clk_sys_ticks;
 		}
 		bool as_n_now = top.dbg_as_n;
+		// NMK-24 stuck-bus-cycle detector. The frozen run shows the 68000
+		// executing ~nothing while pause_cpu accounts for only ~5% of those
+		// frames, which means it is stalled waiting for a DTACK that never
+		// arrives -- i.e. ASn held low indefinitely. Record the longest
+		// unbroken ASn-low stretch and the address it was on.
+		if (!as_n_now) {
+			if (as_low_since == 0) as_low_since = clk_sys_ticks;
+			uint64_t held = clk_sys_ticks - as_low_since;
+			if (held > as_low_max) { as_low_max = held; as_low_max_addr = (uint32_t)top.dbg_eab << 1;
+				as_low_max_w = top.dbg_write; as_low_max_tick = as_low_since; }
+		} else as_low_since = 0;
 		if (prev_as_n && !as_n_now && top.dbg_fc1 && !top.dbg_fc0 && ((uint32_t)top.dbg_eab << 1) == trap_pc) {
 			fprintf(stderr, "TRAP: fetch at %06X after %ld instructions; last bus cycles (tick addr data rw fc):\n", trap_pc, m68k_instrs);
 			for (int k = 0; k < 64; k++) { int i = (ring_n + k) & 63; if (ring_n < 64 && i >= ring_n) continue;
@@ -330,6 +349,16 @@ int main(int argc, char **argv) {
 	printf("tb_hs: protection MCU executed %ld instructions, last PC=$%04X, %ld shared-bus accesses, 68000 HALT=%d, NMK214 config writes %u\n",
 	       prot_instrs, prot_last_pc, prot_bus_accesses, (int)top.dbg_halt_68k, cfg_writes);
 	printf("tb_hs: host latch: %u commands, %u distinct replies\n", host_cmds, host_replies);
+	if (std::getenv("TB_DUMP_RING")) {
+		printf("NMK-24: last %d completed bus cycles before end of run (tick addr data rw fc):\n",
+		       ring_n < 64 ? ring_n : 64);
+		for (int k = 0; k < 64; k++) { int i = (ring_n + k) & 63; if (ring_n < 64 && i >= ring_n) continue;
+			printf("  %llu %06X %04X %c fc%d\n", (unsigned long long)ring_t[i], ring_addr[i],
+			       ring_data[i], ring_w[i] ? 'W' : 'R', ring_fc[i]); }
+	}
+	printf("NMK-24: longest unbroken ASn-low (stalled bus cycle) %llu cycles at %06X %c, starting tick %llu\n",
+	       (unsigned long long)as_low_max, as_low_max_addr, as_low_max_w ? 'W' : 'R',
+	       (unsigned long long)as_low_max_tick);
 	printf("NMK-24: watchdog ISR($0082) %lu entries (first tick %llu); "
 	       "watchdog FIRE($00A7) %lu (first tick %llu); "
 	       "68000 spin($0FEF00) %lu fetches (first tick %llu) -> %s\n",

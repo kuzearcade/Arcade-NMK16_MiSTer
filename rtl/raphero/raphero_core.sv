@@ -313,13 +313,27 @@ module raphero_core #(
 	wire scroll_wait  = (sel_scrollram | sel_scrollramy | sel_pad0400) & cpu_read & ~scroll_ready;
 	wire DTACKn = ASn | iack_cycle | rom_wait | mainram_wait | mainram_dma_wait | bgvram_wait | txvram_wait | scroll_wait | palette_wait;
 
+	// NMK-24: gate the CPU clock only on whole phi1+phi2 pairs. fx68k needs
+	// strict alternation -- the two enables are the halves of one CPU clock --
+	// and masking them with a raw `pause` deletes however many pulses fall in
+	// the pause window, often an ODD number, after which fx68k sees two
+	// consecutive phases of the same polarity and wedges mid-bus-cycle. Proven
+	// on gunnail_core in sim/rtl/gunnail_hs: ASn stuck low 57,744,519 cycles in
+	// an IACK at $FFFFF4, picture frozen bit-identically for 36 frames; with
+	// this gate the same run matches the hiscore-OFF control exactly. enPhi1
+	// leads and enPhi2 trails here (see the phase accumulator above), so
+	// sampling on the UNGATED enPhi2 lands on a pair boundary and still ticks
+	// while paused, so the CPU can always be released.
+	reg pause_68k = 1'b0;
+	always @(posedge clk_sys) if (enPhi2) pause_68k <= pause;
+
 	fx68k fx68k_inst (
 		.clk(clk_sys),
 		.HALTn(1'b1), // no protection MCU on this board
 		.extReset(reset),
 		.pwrUp(reset),
-		.enPhi1(enPhi1 & ~pause),
-		.enPhi2(enPhi2 & ~pause),
+		.enPhi1(enPhi1 & ~pause_68k),
+		.enPhi2(enPhi2 & ~pause_68k),
 
 		.eRWn(eRWn), .ASn(ASn), .LDSn(LDSn), .UDSn(UDSn),
 		.E(), .VMAn(VMAn),

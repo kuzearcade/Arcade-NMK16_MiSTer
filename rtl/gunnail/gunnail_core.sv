@@ -732,13 +732,35 @@ module gunnail_core #(
 	wire halt_68k;
 	assign dbg_halt_68k = halt_68k;
 
+	// NMK-24: fx68k needs STRICT enPhi1/enPhi2 alternation -- the two are the
+	// halves of one CPU clock, and its sequencer has no defined behaviour for
+	// two consecutive phases of the same polarity. Masking the enables with a
+	// raw `pause` deletes whatever pulses fall inside the pause window, and
+	// that count is frequently ODD: here the pulses are 2 clk_sys apart and
+	// hiscore's pauses run ~14 cycles, i.e. 7 pulses. The pulse before the gap
+	// and the pulse after it are then the SAME phase, and fx68k wedges.
+	//
+	// Measured (sim/rtl/gunnail_hs, hachamf, hiscore ON): the 68000 stalled
+	// inside an interrupt-acknowledge cycle -- ASn held low for 57,744,519
+	// cycles at $FFFFF4 (CPU space, IRQ level 2), i.e. to the end of the run --
+	// against an 8,201-cycle worst case with hiscore off. The picture froze
+	// bit-identically for 36 consecutive frames.
+	//
+	// Fix: let the gate change only at a pair boundary. enPhi1 leads and
+	// enPhi2 trails (see the cpu_12mhz comment above), so sampling `pause` on
+	// the raw enPhi2 removes whole phi1+phi2 pairs and never a half cycle.
+	// enPhi2 here is the UNGATED pulse, so sampling continues while paused and
+	// the CPU can always be released. Costs at most one CPU clock of latency.
+	reg pause_68k = 1'b0;
+	always @(posedge clk_sys) if (enPhi2) pause_68k <= pause;
+
 	fx68k fx68k_inst (
 		.clk(clk_sys),
 		.HALTn(~halt_68k),
 		.extReset(m68k_extReset),
 		.pwrUp(reset),
-		.enPhi1(enPhi1 & ~pause),
-		.enPhi2(enPhi2 & ~pause),
+		.enPhi1(enPhi1 & ~pause_68k),
+		.enPhi2(enPhi2 & ~pause_68k),
 
 		.eRWn(eRWn), .ASn(ASn), .LDSn(LDSn), .UDSn(UDSn),
 		.E(), .VMAn(VMAn),
