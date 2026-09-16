@@ -605,11 +605,70 @@ sprite-and-scroll evidence for that core is the board captures).
   So the first cause remains the hiscore arbitration wedging the 68000, and
   the whole `$0038` -> `$00A7` -> reboot -> `$0FEF00` chain documented above is
   a *symptom*. Work the arbitration, not the MCU.
+- **The hiscore-OFF control, same binary, same 260M ticks** (`gunnail_hs`,
+  `run_wd_on.log` / `run_wd_off.log`):
+
+  | metric | OFF | ON |
+  |---|---|---|
+  | frames rendered | 366 | 366 |
+  | 68000 instructions | 10,942,638 | 8,470,348 (**-22.6%**) |
+  | watchdog ISR entries | 1127 | 939 (-16.7%) |
+  | host commands | 22 | 23 |
+  | distinct PCs, final quarter | 366 | 473 |
+  | `$0FEF00` spins | 409,202 | 409,199 |
+  | last-frame nonzero px | 57,344/86,016 | 13,835/86,016 |
+
+  Three metrics are now **retired as useless** for this bug, each having
+  briefly looked like evidence:
+  - **`$0FEF00` spin count** -- 409,202 vs 409,199. Identical. It is the
+    game's normal idle-until-interrupt loop, entered every frame.
+  - **host-command count** -- 22 vs 23. The "23 vs 243" reading was a
+    comparison against a *differently configured* older run, not a control.
+  - **distinct PCs in the final quarter** -- ON is *higher* (473 vs 366).
+
+  What does separate them is the 68000 losing **22.6% of its instructions**,
+  and the frame content diverging. Note the MCU only loses 16.7%, so the CPU
+  is slowed ~7% more than the sound MCU rather than exactly in step -- far too
+  little to matter against a 12.8 s watchdog, but worth knowing.
 - **Caveat on the `$0FEF00` tap:** first-spin tick 10.1M is 0.25 s, which is
   *boot* -- `$007F2A` jumps there on every power-up, so "first spin" fires even
-  on a healthy run and must not be read as the wedge. Only the spin *count*
-  (or spin restricted to the final quarter) separates parked from healthy, and
-  that needs the hiscore-OFF control alongside it.
+  on a healthy run. The control above then showed the *count* is useless too.
+- **hachamfp (NO protection MCU) is CLEAN in sim on current master, and that
+  puts the MCU path back in scope.** Same harness, `SEL=11`, 260M ticks, using
+  hachamf's hiscore config -- which is legitimate: hiscore.dat gives
+  `hachamfa`/`hachamfp` `fc000,3df,01,4e` and `hachamf`/`hachamfb`
+  `fc000,3f0,01,4e`, i.e. the **same address and the same start/end check
+  bytes**, differing only in length, so the module engages identically.
+
+  | | hachamfp OFF | hachamfp ON |
+  |---|---|---|
+  | distinct PCs, final quarter | 387 | 387 |
+  | 68000 instructions | 11,579,446 | 11,415,789 (**-1.4%**) |
+  | last-frame nonzero px | 57,344 | 57,344 (identical) |
+
+  1.4% and identical frames = hiscore engages, completes and settles. Compare
+  hachamf's -22.6% with diverging frames: something there keeps thrashing.
+
+  **So the split is the opposite of what this entry assumed.** The set WITHOUT
+  the protection MCU is fine; the set WITH it is not. The earlier note that
+  "the MCU-less hachamfp fails too, so this is not about protection" was
+  measured on the shipped `20260916` bitstreams, which **predate both committed
+  fixes** (`b22abee` `~pause`, `52963f3` CPU read latch). The sim builds from
+  master and has them.
+- **`HS_EXCLUDE` in `tools/gen_hiscore_mra.py` is STALE and must be
+  re-measured.** Every set on that list was determined on pre-fix bitstreams.
+  hachamfp already looks clean in sim with the fixes present, and the release
+  chore (rebuild all four cores from master, re-run the hiscore sweep) is the
+  thing that decides which entries can come off. Do not treat the current list
+  as the set of genuinely broken games.
+- **Caveat on the pixel count:** 13,835 vs 57,344 px is not yet established as
+  a wedge. The ON run is 22.6% slower, so it is at a different point in the
+  attract loop, and a blank-ish screen may simply be a transition. Deciding
+  this needs the frame *series* (`TB_DUMP_PPM=1 TB_PPM_FROM=330`, run in
+  separate directories or the second run overwrites the first's PPMs): a
+  wedged game shows a STATIC picture across many frames, a healthy one does
+  not. Do not quote the single-frame number as a failure metric until that
+  check is done.
 - **What remains: what makes the MCU take that trap.** Freezing it mid-fetch
   is NOT it -- deferring `pause` to a fetch-free point (`snd_pause_eff`,
   sampled only while `~nmk004_rom_rd`) removed the `pause & snd_stall`
