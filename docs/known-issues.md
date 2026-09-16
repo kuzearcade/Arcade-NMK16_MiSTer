@@ -469,98 +469,88 @@ sprite-and-scroll evidence for that core is the board captures).
   box. On a static screen any such change is corruption. Each event changed
   exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
 
-### NMK-24 · Six games lock up once a high-score dump exists
-- **Cores:** NMK16_Gunnail · **Severity:** bug · **Status:** mitigated
-  (2026-09-15) — hiscore removed from the affected sets AND the whole feature
-  is now off by default; **root cause still unknown**, see "Three fixes that
-  were each real and none of which was the cause" below
+### NMK-24 · Eleven games halt themselves once a high-score dump exists
+- **Cores:** NMK16_Gunnail, NMK16_Macross2 · **Severity:** bug ·
+  **Status:** mitigated (hiscore removed from the affected sets and the whole
+  feature off by default); **cause identified 2026-09-16** — the games run
+  their own halt routine. Not fixed: preventing it means stopping their
+  self-check from failing.
 - **Symptom:** with a saved `.nvm` present, the game boots, draws, then stops
-  responding. Video freezes on one frame and audio goes to **exactly 0.0 RMS
-  with zero variance** — everything clock-gated, not a crashed 68000 (a crash
-  leaves the NMK004 droning). Delete the `.nvm` and the game is perfect.
-- **Affected (measured, not predicted):** on NMK16_Gunnail `hachamf`,
-  `hachamfa`, `hachamfb`, `hachamfp`, `strahl`, `strahlj`, `strahlja`,
-  `strahljbl`, `acrobatmbl`; on NMK16_Macross2 `macross2k`, `macross2g`
-  (`game_sel` 1) — 11 `.mra`, 7 distinct `game_sel`. Their
-  `<rom index="3">`/`<nvram index="4">` are removed and the sets are listed in
-  `tools/gen_hiscore_mra.py`'s `HS_EXCLUDE` so regeneration cannot quietly put
-  them back. The other **71** sets keep working high scores.
-- **All four cores have now been swept with the feature ON** (2026-09-16), not
-  just Gunnail: 31 games on Gunnail, then the 25 games with a hiscore region on
-  Macross2/Raphero/Afega, each loaded with a correctly-sized dump and with
-  "High Scores" switched on through the OSD. Only `macross2k` failed there
-  (1 distinct frame of 8; its control with the feature off scores 6). Note its
-  parent `macross2` passes on the **same 5504-byte dump** — another reminder
-  that the affected set follows no rule anyone has found, and must be measured
-  per `game_sel`.
-- **The cause is `hiscore.v` holding the game-RAM port far too long.**
-  `NMK16_Gunnail.sv` asserted `hs_access = 1'b1` for the *entire* `hs_pause`
-  window and left the module's own `ram_intent_read`/`ram_intent_write`
-  outputs unconnected, so the port was withheld from the rest of the machine
-  across the whole of the module's compare loop — which runs forever when the
-  check never passes. Reproduced in `sim/rtl/gunnail_hs` (a new top-level
-  harness that instantiates the real `hiscore.v` alongside the core): the
-  68000 collapses into a **4-PC loop at $00819C–$0081A2** with a black screen.
-- **Two fixes are in and both are real, but they are only partial:**
+  responding, with audio at exactly 0.0 RMS. Delete the `.nvm` and it is
+  perfect.
+- **THE CAUSE: the game deliberately halts itself.** hachamf's 68000 is not
+  crashed, stalled or starved — it is *executing an infinite loop it installed
+  on purpose*. From the ROM (`mame_roms/hachamf.zip`, `7.93`/`6.94`
+  interleaved):
 
-  | measurement (hachamf, `sim/rtl/gunnail_hs`) | before | after |
+  ```
+  007E82: 33F9 00007F30 000FEF00   MOVE.W  $00007F30,$000FEF00  ; copy 60FE...
+  007E8C: 2E0F                     MOVE.L  A7,D7                ; ...i.e. BRA *
+  ...
+  007F1E: 2E47                     MOVEA.L D7,A7                ; restore SP
+  007F20: 598F                     SUBQ.L  #4,A7
+  007F22: 33FC 00FF 000FEF18       MOVE.W  #$00FF,$000FEF18     ; set a flag
+  007F2A: 4EF9 000F EF00           JMP     $000FEF00            ; jump to it
+  007F30: 60FE                     BRA     *                    ; the loop word
+  ```
+
+  `$0FEF00` is **main RAM**. The game copies `BRA *` there, stashes the stack
+  pointer, and jumps in. So NMK-24 is an **error path in the game's own code**,
+  reached because something upstream decided the machine was faulty.
+- **How it was found, after six wrong answers.** Six candidate fixes were
+  derived by reading the RTL. Every one was a real defect; **none was the
+  cause.** What settled it was looking at the hardware instead: two debug
+  bitstreams with an on-screen overlay (a few 8-px cells along the top of the
+  active area, read back out of a native screenshot).
+
+  | probe | what it showed |
+  |---|---|
+  | `hiscore.v` FSM state + `pause_cpu` | `pause_cpu` **0** while frozen for 48 s — *not* a stuck pause |
+  | last instruction-fetch PC + fetch counter | PC `$0FEF00` (RAM, not ROM) and the counter still moving — CPU **alive** |
+  | last in-ROM PC + first out-of-ROM PC (sticky) | jumped from `$007F2A`, stable across frames |
+
+  Healthy hachamf runs at `$008DB2–$008DF6`. **Build the probe; do not reason
+  about the symptom.** Each overlay build was ~35 minutes and worth more than
+  every hypothesis that preceded it.
+- **This explains what defeated every earlier theory.** It freezes even when
+  hiscore provably never writes a byte (the never-matching-marker variant);
+  slowing its retry rate **220x** (135,600/s -> 610/s) changes nothing; a
+  single 5 s OSD pause is harmless (5/5 distinct frames after release); and
+  `acrobatm` vs `acrobatmbl` land on opposite sides of a **byte-identical**
+  hiscore config, as do `macross2` and `macross2k` on the **same 5504-byte
+  dump**. Those are different games' self-checks reacting to the same
+  perturbation — which is exactly why the affected set follows no structural
+  rule and **must be measured per `game_sel`, never predicted**.
+- **Affected (measured):** NMK16_Gunnail `hachamf`, `hachamfa`, `hachamfb`,
+  `hachamfp`, `strahl`, `strahlj`, `strahlja`, `strahljbl`, `acrobatmbl`;
+  NMK16_Macross2 `macross2k`, `macross2g` — 11 `.mra`, 7 `game_sel`. Their
+  `<rom index="3">`/`<nvram index="4">` are removed and the sets are in
+  `tools/gen_hiscore_mra.py`'s `HS_EXCLUDE`. The other **71** sets keep
+  working high scores. All four cores have been swept with the feature ON.
+- **Four real defects were fixed along the way. Keep them; none is the cause.**
+
+  | fix | evidence it is real | why it is not the cause |
   |---|---|---|
-  | protection-MCU writes silently dropped | 242 | **0** |
-  | MCU shared-bus accesses | 4,402 | **22,885** (= healthy control) |
-  | distinct 68000 PCs, final quarter | 4 | 206 (healthy control: 367) |
-  | last frame nonzero pixels | 0 | 21,952 (control: 57,344) |
+  | `grant` ignored `hs_access`, so MCU writes were acknowledged then dropped | 242 -> 0; MCU bus 4,402 -> 22,885 | MCU-less `hachamfp` fails too |
+  | `hs_access` held across the whole pause (`ram_intent_*` unconnected) | hard freeze -> boots further, animates | still stops short of play |
+  | hiscore overrode the RAM port instead of yielding | stress sim 2 PCs -> 367, 1,000 px -> 57,344 | hardware unchanged |
+  | `cpu_wants`/`grant` not qualified with `~pause`, and the CPU read the shared port live (DTACK-to-latch race) | recovered `hachamfb` and `strahl` (1 -> 7/8) | the other five still halt |
 
-  1. `gunnail_core.sv` — `grant` is now qualified with `~hs_access`. A grant
-     issued while hiscore owns the port set `prot_wr_done` and released
-     `prot_stall`, telling the MCU a write had completed that `we_hi`/`we_lo`
-     had just dropped. Silently lost bytes.
-  2. `NMK16_Gunnail.sv` — `hs_access` now follows the module's
-     `ram_intent_*` outputs instead of the whole pause.
-  On hardware hachamf went from a hard freeze to booting further and animating
-  before stopping — better, still not playable, hence the `.mra` mitigation.
-- **Three fixes that were each real and none of which was the cause.** All
-  three are in and measured; hachamf with a dump still freezes on hardware
-  (12 identical frames). Do not re-derive any of these as "the" fix:
+  The last two are cumulative and independent: `~pause` fixed `hachamfb` and
+  not `strahl`; the CPU read latch fixed `strahl`. Both are in
+  (`b22abee`, `52963f3`).
+- **`hiscore.v` has NO synchronous reset** — `reset` appears only as
+  `reset_last` (falling-edge detect) and a `reset == 0` guard, and nothing
+  clears `pause_cpu`. Holding the module in reset therefore cannot release the
+  CPU, so the "High Scores" option gates `pause_cpu` at the **output**
+  (`hs_pause = hs_pause_raw & hs_enable`), not just the module's reset.
+- **Where to resume:** the code at `$007EE0–$007F1E` — a series of
+  `MOVE.W <ROM addr>,Dn` / `DBF` loops, with `$007E8C` stashing the stack
+  pointer that `$007F1E` restores — has the shape of a self-test or protection
+  check. Identifying which condition routes into `$007F2A` would name the
+  exact thing the hiscore module disturbs. Note no arbiter work can prevent
+  this: the game halts *itself*.
 
-  | candidate | evidence it is real | why it is not the cause |
-  |---|---|---|
-  | MCU writes acknowledged then dropped | 242 -> 0, MCU bus 4,402 -> 22,885 | MCU-less `hachamfp` fails too |
-  | `hs_access` held across the whole pause | hard freeze -> boots further, animates | still stops short of play |
-  | hiscore overriding the RAM port | stress sim 2 PCs -> 367, 1,000 px -> 57,344 | hardware unchanged, still frozen |
-
-  What is left is the **pause itself**, which remains unexplained. The one
-  experiment that spoke to it was not trustworthy: on the stress config a
-  72-cycle phase shift out of 11.3M (0.0006%) flips the game between 380 and
-  0 distinct PCs, so that config is **chaotic** and only its large structured
-  effects mean anything. Judge any future fix on the realistic config and on
-  hardware, never on the stress config alone.
-- **Second layer of protection (2026-09-15):** high score save/load is now a
-  **"High Scores" option, off by default**, first entry on the Scores page of
-  all four cores. While off the module is held in reset and is completely
-  inert -- verified on hardware: hachamf healthy 8/8 *with a dump present* and
-  the `.nvm` byte-identical afterwards, so autosave cannot clobber a good
-  dump either. Switching it on takes effect **without reloading the core**,
-  because `hiscore.v` does not gate its ioctl capture on `reset` and starts
-  its restore on the FALLING edge of reset (`hiscore.v:381`), so the config
-  and dump the `.mra` already delivered are still there.
-- **Why it is still only partial, and where to resume:** `hiscore.v:193` has
-  `ram_intent_read = reading_scores | checking_scores`, and those are
-  *state-phase* flags (set at line 591, cleared at 619/633/659) that span the
-  whole check sequence including its `CHECK_WAIT` delays — not per-cycle bus
-  requests. The port is still withheld for most of the pause. Finishing this
-  means serving the game ahead of hiscore rather than the reverse, worked
-  against the module's `CHECK_HOLD`/`WRITE_HOLD`/`ACCESS_PAUSEPAD` slack,
-  because `hiscore.v` has no wait-state input to stall it with.
-- **Do not reason about which sets are affected — measure.** Two models were
-  tried and both failed. "Protected boards with the MCU on main RAM" predicted
-  `tdragon1` would break (it scores **8/8**, perfectly healthy) and that the
-  MCU-less `hachamfp` would be safe (it **freezes**). Dump size is not it
-  either: `gunnail`'s 4,217-byte dump is the largest of all and is fine, while
-  `strahl` fails on 403 bytes. `acrobatm` and `acrobatmbl` share a
-  byte-identical hiscore config and land on **opposite sides**. The list above
-  comes from loading all 31 distinct `game_sel` with a correctly-sized dump and
-  scoring liveness (`/media/fat/hs_sweep_log.txt`); healthy games score 7–8
-  distinct frames of 8, broken ones 1–3, with nothing in between.
 
 ### NMK-20 · ssmissin BG "corruption": two missing driver behaviours
 - **Severity:** bug · **Status:** **FIXED and confirmed on hardware
