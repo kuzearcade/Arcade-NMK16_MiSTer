@@ -497,6 +497,30 @@ sprite-and-scroll evidence for that core is the board captures).
   crash context (`JMP $0FEF00` reached from boot), the `$0FEF00` write snoop
   (the boot placeholder `60FE` is the LAST write, so boot ran after the game
   was already up), and this reset probe naming the term.
+- **Why the NMK004 asserts it: `pause` freezes the MCU MID-ROM-FETCH.**
+  Probed on hardware (sticky latches, armed after reset has been low ~1.7 s):
+
+  | | `pause` seen | **`pause` & `snd_stall`** |
+  |---|---|---|
+  | healthy | 0 | **0** |
+  | frozen | 1 | **1** |
+
+  `snd_cen = (snd_div==4) & ~snd_stall` and `pause` is ANDed on downstream at
+  the instantiation (`.cen(snd_cen & ~pause)`), while
+  `rom_stall = rom_rd & ~rom_ready`. So if `rom_ready` goes high while `pause`
+  holds `cen` low, the stall clears **without the MCU ever consuming the
+  data**, and the next `cen` latches whatever `rom_din` holds by then. The MCU
+  executes garbage, ends up back in its boot init, and `$018B`
+  (`LD (FFC8),#$01`) pulses the 68000 reset. This is the same hazard class as
+  the jt6295 "ADPCM fetch ignores rom_ok" bug ([[project_oki_fetch_hazard]]).
+  **The fix is to hold the fetch result until the MCU actually consumes it**
+  (fold `pause` into the stall/handshake rather than ANDing it onto `cen`),
+  not to stop pausing the MCU.
+- **A measurement caveat:** the same probe counted "TLCS-90 restarts" by
+  watching for a fetch PC below `$0010`. The healthy control already scored 3,
+  because the TLCS-90's interrupt vectors live in low memory and ordinary
+  interrupt servicing lands there. That counter and its "restarted from" PC are
+  NOT evidence; only the `pause & snd_stall` bit is. Take the control first.
 - **What NOT to try: simply not pausing the sound MCU.** Splitting `pause` so
   hiscore gates only the 68000 (leaving NMK004/Z80 running) **regressed**
   `hachamfb` from 7/8 to 3 and fixed nothing -- it breaks the 68000<->NMK004
