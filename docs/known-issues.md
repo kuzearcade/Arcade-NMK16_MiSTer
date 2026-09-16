@@ -469,6 +469,53 @@ sprite-and-scroll evidence for that core is the board captures).
   box. On a static screen any such change is corruption. Each event changed
   exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
 
+### NMK-24 · FIXED (2026-09-16). Was: eleven games halt once a high-score dump exists
+
+**Resolved by `0c1a389`** -- `pause` was masking fx68k's `enPhi1`/`enPhi2`
+independently, breaking the strict phase alternation the sequencer requires.
+Verified on hardware by a full 82-set sweep on the post-fix `20260917`
+bitstreams, with the 64 stashed `.nvm` dumps restored so the failing condition
+was actually reached: **81/82 pass, and 10 of the 11 originally-broken sets are
+recovered** (hachamf, hachamfa, hachamfb, hachamfp, strahl, strahlj, strahlja,
+strahljbl, acrobatmbl, macross2g).
+
+The one holdout, **macross2k, turned out to be a different bug entirely** -- a
+data error, not the clock gating. See `HS_CHECK_OVERRIDE` in
+`tools/gen_hiscore_mra.py`: its hiscore.dat block matches its siblings' except
+the final record's check bytes at `1fd600` (`00,73` vs their `01,63`), and with
+`00,73` the module's check never passes so it retries forever and hammers the
+CPU. Given the parent's bytes it runs. Measured, hiscore ON with a dump:
+
+  | macross2k config | result |
+  |---|---|
+  | hiscore OFF | runs |
+  | `00,73` (dat as written) | FROZEN, both shots byte-identical, reproduced twice |
+  | final record dropped | runs |
+  | `01,63` (parent's bytes) | runs |
+
+`HS_EXCLUDE` is now **empty**, and all 82 hiscore-enabled `.mra` ship their
+regions.
+
+Sweep-method notes worth keeping:
+- The discriminator is the **A->B screenshot diff**, not whether shot A is
+  blank. A wedged game freezes ~5 s after load so both shots are the same
+  frozen frame; a blank shot A is just an attract fade at the 45 s mark.
+  hachamf and hachamfa both read `A lit% = 0.0` while being perfectly healthy,
+  and scoring on blankness would have reported them as failures.
+- Status bits live in `config/<SETNAME>.CFG`, 16 bytes, little-endian:
+  `status[39]` (High Scores) is **byte 4, bit 7 = 0x80**. Writing that file
+  directly is equivalent to toggling it in the OSD (verified byte-identical
+  against one MiSTer wrote itself), which is how 82 games get enabled without
+  82 OSD navigations. `.nvm` files are named by MRA DESCRIPTION, `.CFG` by
+  SETNAME -- they do not match.
+- The dumps live in `/media/fat/hs_nvms/`. They had been moved out of
+  `config/nvram/` to stop the games breaking, so **a sweep that does not
+  restore them passes vacuously**.
+
+---
+
+#### Original investigation (kept for the method, and because the chain was wrong twice)
+
 ### NMK-24 · Eleven games halt themselves once a high-score dump exists
 - **Cores:** NMK16_Gunnail, NMK16_Macross2 · **Severity:** bug ·
   **Status:** mitigated (hiscore removed from the affected sets and the whole

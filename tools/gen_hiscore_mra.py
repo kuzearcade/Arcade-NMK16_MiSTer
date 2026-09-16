@@ -47,13 +47,39 @@ def load_dat(path):
             pending += [x.strip() for x in s[:-1].split(',') if x.strip()]
     return out
 
-def records(lines):
+# NMK-24 sweep, 2026-09-16 (post-fix build 20260917): macross2k FROZE on load
+# with a dump present while its siblings macross2/macross2g were fine. Its
+# hiscore.dat block is identical to theirs except the final record's check
+# bytes at 1fd600 -- they use 01,63 and macross2k uses 00,73. With 00,73 the
+# module's check never passes, so it retries forever and hammers the CPU with
+# pause bursts (the endless CHECK_WAIT loop described in gunnail_core.sv).
+#
+# Measured on hardware, hiscore ON, dump present, 45s + coin/start:
+#   00,73 (dat as written) -> both screenshots byte-identical (FROZEN), twice
+#   record dropped          -> game runs
+#   01,63 (parent's bytes)  -> game runs
+#   hiscore OFF             -> game runs
+# So macross2k is given its parent's check bytes.
+#
+# NOT VERIFIED either way, for macross2k OR for the already-shipping macross2:
+# whether that final region's scores actually restore. The saved dumps hold
+# 00/54 at that record's first/last byte, which matches neither dat value, so
+# the check may simply never pass on either set. That would be benign (no
+# restore of that one region) rather than the hang, but it is unconfirmed.
+HS_CHECK_OVERRIDE = {
+    # setname: {record address: (start, end)}
+    'macross2k': {0x1fd600: (0x01, 0x63)},
+}
+
+def records(lines,setname=None):
     recs=[]; total=0
     for ln in lines:
         f=ln.split(':',1)[1].split(',')
         if len(f)<6: continue
         addr=int(f[2],16); length=int(f[3],16)
         start=int(f[4],16); end=int(f[5],16)
+        ov=HS_CHECK_OVERRIDE.get(setname,{}).get(addr)
+        if ov: start,end=ov
         recs.append([(addr>>24)&0xFF,(addr>>16)&0xFF,(addr>>8)&0xFF,addr&0xFF,
                      (length>>8)&0xFF,length&0xFF,start,end])
         total+=length
@@ -90,7 +116,7 @@ def main():
         sn=re.search(r'<setname>([^<]+)',t).group(1).strip()
         if sn in HS_EXCLUDE: excl+=1; continue
         if sn not in dat: skip+=1; continue
-        recs,total=records(dat[sn])
+        recs,total=records(dat[sn],sn)
         if not recs: skip+=1; continue
         blk=('\n  <!-- High scores: MAME hiscore.dat entries for %s, and the\n'
              '       saved dump. See tools/gen_hiscore_mra.py. -->\n'
