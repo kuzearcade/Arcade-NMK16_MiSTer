@@ -451,8 +451,16 @@ wire [7:0] rd_y_screen = game_flip_y ? (8'd223 - rd_y_raw) : rd_y_raw; // out-of
 // ---------------------------------------------------------------------------
 wire [23:0] hs_addr;
 wire  [7:0] hs_din, hs_dout;
-wire        hs_write, hs_access, hs_pause, hs_configured;
+wire        hs_write, hs_access, hs_configured;
+// NMK-24: hiscore.v has NO synchronous reset -- `reset` appears only as
+// reset_last (falling-edge detect) and a `reset == 0` guard, so holding
+// the module in reset does NOT clear pause_cpu. Without this gate, a user
+// who switches High Scores on, hits the NMK-24 freeze and switches it off
+// again stays frozen until the core is reloaded. Gate the output, not just
+// the module's reset, so turning the option off always releases the CPU.
 wire        hs_enable = status[39];   // "High Scores" -- OFF by default (NMK-24)
+wire        hs_pause_raw;
+wire        hs_pause = hs_pause_raw & hs_enable;
 wire [23:0] hi_addr;
 wire  [7:0] hi_din;
 wire        hi_write;
@@ -479,7 +487,7 @@ hiscore #(
 ) hi (
 	.clk(clk_sys),
 	.reset(reset | hs_hold | ~hs_enable),
-	.paused(hs_pause),
+	.paused(hs_pause_raw),
 	.autosave(1'b1),
 	.OSD_STATUS(hs_osd),
 	.ioctl_upload(ioctl_upload),
@@ -496,7 +504,7 @@ hiscore #(
 	.ram_write(hi_write),
 	.ram_intent_read(hi_intent_rd),
 	.ram_intent_write(hi_intent_wr),
-	.pause_cpu(hs_pause),
+	.pause_cpu(hs_pause_raw),
 	.configured(hs_configured)
 );
 

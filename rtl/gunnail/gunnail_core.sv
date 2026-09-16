@@ -1340,9 +1340,19 @@ module gunnail_core #(
 		// address it belongs to. Its CHECK_HOLD/WRITE_HOLD/ACCESS_PAUSEPAD
 		// slack absorbs the latency, and a missed compare is safe: the module
 		// just cancels and retries after CHECK_WAIT.
-		wire        cpu_wants  = sel_mainram & ~ASn & ~sprite_dma_busy;
+		// ~pause is REQUIRED, not an optimisation. A paused 68000 freezes
+		// mid-bus-cycle with ASn still low, so without it cpu_wants stays high
+		// for the WHOLE pause -- and the pause exists precisely so hiscore can
+		// use the port. hs_serve below would then never assert, hiscore would
+		// never get its read, its compare would never match, and it would
+		// retry forever: an endless CHECK_WAIT loop stop-starting the CPU
+		// ~100,000 times a second. Seen directly on hardware with the NMK-24
+		// debug overlay (hiscore.v's FSM cycling SM_TIMER <-> SM_INIT_RESTORE
+		// for 48 s with pause_cpu low and the game frozen).
+		wire        cpu_wants  = sel_mainram & ~ASn & ~sprite_dma_busy & ~pause;
 		wire        prot_wants = prot_acc & prot_sel_mainram & ~sprite_dma_busy;
-		wire        grant      = prot_wants & ~(sel_mainram & ~ASn);
+		// Same reasoning for the MCU: a frozen CPU must not hold it off either.
+		wire        grant      = prot_wants & ~cpu_wants;
 		// Pending hiscore write, latched from its ram_write pulse.
 		reg         hs_pend;
 		reg  [14:0] hs_pend_addr;
