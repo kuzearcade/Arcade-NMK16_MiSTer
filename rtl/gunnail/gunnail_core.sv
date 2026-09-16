@@ -1299,7 +1299,30 @@ module gunnail_core #(
 	wire        mr_lds = ~LDSn | mainram_strange;
 	reg  [15:0] mainram_dout;
 	wire [15:0] hs_dout_word;
-	wire        mainram_ready;
+	// NMK-24: the CPU must NOT read the shared port register live. The 68000
+	// samples DTACK and latches data on separate enPhi2 edges, and `pause` can
+	// freeze it between the two -- exactly when hiscore repoints the port at
+	// its own address. The CPU would then latch the hiscore location's word
+	// and execute garbage. Same class as the rom_cache1 DTACK-to-latch race
+	// (docs/known-issues.md, the raphero 14 MHz bug): once the port has served
+	// the CPU's address, hold BOTH the data and the ready until its bus cycle
+	// ends, so nothing that happens to the port afterwards can corrupt it.
+	wire        mainram_ready_raw;
+	reg  [15:0] mainram_dout_lat;
+	reg         mainram_ready_lat;
+	always @(posedge clk_sys) begin
+		if (ASn) mainram_ready_lat <= 1'b0;            // bus cycle ended
+		else if (mainram_ready_raw && !mainram_ready_lat) begin
+			mainram_dout_lat  <= mainram_dout;
+			mainram_ready_lat <= 1'b1;
+		end
+	end
+	// HW_ROMS=0 has no arbitration -- ready is constant 1 and mainram_dout is
+	// combinational from the CPU address, so the latch must not engage there
+	// or every reference sim would read a stale word.
+	wire        mainram_lat_en  = (HW_ROMS != 0) && mainram_ready_lat;
+	wire [15:0] mainram_dout_cpu = mainram_lat_en ? mainram_dout_lat : mainram_dout;
+	wire        mainram_ready    = mainram_ready_raw | mainram_lat_en;
 	wire        prot_mainram_ready;
 	wire [15:0] prot_mainram_dout;
 	generate
@@ -1314,7 +1337,7 @@ module gunnail_core #(
 			end
 		end
 		always @(*) mainram_dout = {mainram_hi[mainram_addr_cpu], mainram_lo[mainram_addr_cpu]};
-		assign mainram_ready      = 1'b1;
+		assign mainram_ready_raw  = 1'b1;
 		assign prot_mainram_dout  = {mainram_hi[prot_addr[15:1]], mainram_lo[prot_addr[15:1]]};
 		assign prot_mainram_ready = 1'b1;
 		assign mainram_prot_grant = 1'b1;
@@ -1406,7 +1429,7 @@ module gunnail_core #(
 		always @(posedge clk_sys) begin
 			if (port_hs_r) hs_word <= mainram_dout;
 		end
-		assign mainram_ready      = ~port_src_r & ~port_hs_r & (port_addr_r == mainram_addr_cpu);
+		assign mainram_ready_raw  = ~port_src_r & ~port_hs_r & (port_addr_r == mainram_addr_cpu);
 		assign prot_mainram_dout  = mainram_dout;
 		assign prot_mainram_ready = port_src_r & (port_addr_r == prot_addr[15:1]);
 		assign mainram_prot_grant = grant;
@@ -3146,7 +3169,7 @@ module gunnail_core #(
 		else if (sel_rom)     rdata = rom_dout_dec;
 		else if (sel_tdb_prot) rdata = g_tdragonb3 ? 16'h0000 : 16'h0003;
 		else if (sel_tdb3_ee) rdata = 16'h00EE;
-		else if (sel_mainram) rdata = mainram_dout;
+		else if (sel_mainram) rdata = mainram_dout_cpu;   // NMK-24: latched, not live
 		else if (sel_palette) rdata = palette_dout;
 		else if (sel_bgvram)  rdata = bgvram_dout;
 		else if (sel_bgvram2) rdata = bgvram2_dout;
