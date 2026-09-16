@@ -60,7 +60,11 @@ module video_retime #(
 	output reg [23:0] rgb_r,
 	output reg    hs_r,
 	output reg    vs_r,
-	output reg    de_r
+	output reg    de_r,
+	// Separate blanks for sys/video_mixer.sv (HQ2X/scandoubler), which
+	// needs the two axes independently -- de_r alone cannot be split.
+	output reg    hb_r,
+	output reg    vb_r
 );
 
 	// Geometry per mode (bitmap coordinates in the board's own pixel
@@ -133,7 +137,9 @@ module video_retime #(
 	// Registered buffer read: the address is the current pixel's, stable
 	// for a whole pixel period, so rgb_q holds pixel hcount_r at its tick.
 	wire [9:0]  r_x    = hcount_r - r_x0;
-	wire        r_act  = (hcount_r >= r_x0) && (r_x < r_aw) && (vcount_r >= v_start_r) && (vcount_r < v_end_r);
+	wire        r_hact = (hcount_r >= r_x0) && (r_x < r_aw);
+	wire        r_vact = (vcount_r >= v_start_r) && (vcount_r < v_end_r);
+	wire        r_act  = r_hact && r_vact;
 	reg  [23:0] rgb_q;
 	always @(posedge clk_r) rgb_q <= buf_mem[{vcount_r[0], r_x[8:0]}];
 
@@ -163,6 +169,8 @@ module video_retime #(
 				ce_r     <= 1'b1;
 				rgb_r    <= r_act ? rgb_q : 24'd0;
 				de_r     <= r_act;
+				hb_r     <= ~r_hact;
+				vb_r     <= ~r_vact;
 				hs_r     <= hs_now;
 				vs_r     <= vs_now;
 				if (hcount_r == r_ht - 10'd1) begin
@@ -175,7 +183,7 @@ module video_retime #(
 				pix_div <= pix_div + 4'd1;
 			end
 		end else begin
-			de_r <= 1'b0; hs_r <= 1'b0; vs_r <= 1'b0; rgb_r <= 24'd0;
+			de_r <= 1'b0; hs_r <= 1'b0; vs_r <= 1'b0; rgb_r <= 24'd0; hb_r <= 1'b1; vb_r <= 1'b1;
 		end
 	end
 

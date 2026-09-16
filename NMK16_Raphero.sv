@@ -23,7 +23,6 @@ assign USER_OUT = '1;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 
-assign VGA_SL = 0;
 assign VGA_F1 = 0;
 assign VGA_SCALER  = 0;
 assign VGA_DISABLE = 0;
@@ -49,6 +48,11 @@ localparam CONF_STR = {
 	"Raphero;;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	"O[3:1],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
+	// HQ2X / scanlines via sys/video_mixer.sv. This core has no
+	// video_retime -- it drives the raster straight from the core clock and
+	// already carries hblank_core/vblank_core separately, which is exactly
+	// what the mixer needs.
 	// A vertical (MAME ROT270) game drawn on its side by the board; the
 	// two "Vert" choices both present it upright through the framebuffer,
 	// as MAME does — "Vert 270" (the MAME-correct rotate_ccw direction)
@@ -549,14 +553,30 @@ wire hsync = (hcount_core >= hs_start) && (hcount_core < hs_start + 10'd32);
 wire vsync = (vrel >= vs_rel) && (vrel < vs_rel + 10'd3);
 
 assign CLK_VIDEO = clk_sys;
-assign CE_PIXEL  = ce_pix_core;
 
-assign VGA_DE = ~(hblank_core | vblank_core);
-assign VGA_HS = hsync;
-assign VGA_VS = vsync;
-assign VGA_R  = rd_rgb[23:16];
-assign VGA_G  = rd_rgb[15:8];
-assign VGA_B  = rd_rgb[7:0];
+// HQ2X / scandoubler / scanlines. fx==0 leaves the raster untouched unless
+// hps_io asks for a forced scandoubler; fx==1 is HQ2X; 2..4 are CRT scanlines.
+// The mixer sits ahead of screen_rotate, which measures its framebuffer from
+// the incoming DE and so sizes itself to the scaled raster.
+wire [2:0] fx = status[3:1];
+wire       scandoubler_en = (fx != 3'd0) || forced_scandoubler;
+wire [1:0] sl = fx[2:1];
+assign VGA_SL = sl;
+wire [21:0] vm_gamma_bus;
+
+video_mixer #(.LINE_LENGTH(400), .HALF_DEPTH(0), .GAMMA(0)) video_mixer (
+	.CLK_VIDEO(CLK_VIDEO),
+	.ce_pix(ce_pix_core),
+	.CE_PIXEL(CE_PIXEL),
+	.scandoubler(scandoubler_en),
+	.hq2x(fx == 3'd1),
+	.gamma_bus(vm_gamma_bus),
+	.R(rd_rgb[23:16]), .G(rd_rgb[15:8]), .B(rd_rgb[7:0]),
+	.HSync(hsync), .VSync(vsync), .HBlank(hblank_core), .VBlank(vblank_core),
+	.HDMI_FREEZE(1'b0), .freeze_sync(),
+	.VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B),
+	.VGA_VS(VGA_VS), .VGA_HS(VGA_HS), .VGA_DE(VGA_DE)
+);
 
 // ------------------------------------------------------------------
 // Orientation (status[9:8], "Vert 270"/"Vert 90") and Flip screen

@@ -40,7 +40,6 @@ assign USER_OUT = '1;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 
-assign VGA_SL = 0;
 assign VGA_F1 = 0;
 assign VGA_SCALER  = 0;
 assign VGA_DISABLE = 0;
@@ -66,6 +65,11 @@ localparam CONF_STR = {
 	"NMK16_Afega;;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	"O[3:1],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
+	// HQ2X / scanlines via sys/video_mixer.sv. The mixer sits between
+	// video_retime and VGA_*, so screen_rotate (which measures its
+	// framebuffer from the incoming DE) sees the scaled raster and sizes
+	// itself accordingly. forced_scandoubler from hps_io still forces it on.
 	// A vertical (MAME ROT270) game drawn on its side by the board; the
 	// two "Vert" choices both present it upright through the framebuffer,
 	// as MAME does — "Vert 270" (the MAME-correct rotate_ccw direction)
@@ -605,6 +609,8 @@ wire  [5:0] vshift_sel = status[27:22];
 
 wire clk_vid, pll_video_locked;
 wire [23:0] retimed_rgb;
+wire vm_ce_pix, vm_hs, vm_vs, vm_hb, vm_vb;
+wire [21:0] vm_gamma_bus;
 pll_video48 pll_video
 (
 	.refclk(CLK_50M),
@@ -622,12 +628,31 @@ video_retime #(
 	.hcount_w(hcount_core), .vcount_w(vcount_core), .rgb_w(rd_rgb),
 	.mode1(lowres), .tall240(1'b0), .hshift_sel(hshift_sel), .vshift_sel(vshift_sel),
 	.clk_r(clk_vid),
-	.ce_r(CE_PIXEL), .rgb_r(retimed_rgb), .hs_r(VGA_HS), .vs_r(VGA_VS), .de_r(VGA_DE)
+	.ce_r(vm_ce_pix), .rgb_r(retimed_rgb), .hs_r(vm_hs), .vs_r(vm_vs), .de_r(),
+	.hb_r(vm_hb), .vb_r(vm_vb)
 );
 assign CLK_VIDEO = clk_vid;
-assign VGA_R  = retimed_rgb[23:16];
-assign VGA_G  = retimed_rgb[15:8];
-assign VGA_B  = retimed_rgb[7:0];
+// HQ2X / scandoubler / scanlines. fx==0 leaves the raster untouched unless
+// hps_io asks for a forced scandoubler; fx==1 is HQ2X; 2..4 are CRT scanlines,
+// which the mixer applies via VGA_SL.
+wire [2:0] fx = status[3:1];
+wire       scandoubler_en = (fx != 3'd0) || forced_scandoubler;
+wire [1:0] sl = fx[2:1];
+assign VGA_SL = sl;
+
+video_mixer #(.LINE_LENGTH(400), .HALF_DEPTH(0), .GAMMA(0)) video_mixer (
+	.CLK_VIDEO(CLK_VIDEO),
+	.ce_pix(vm_ce_pix),
+	.CE_PIXEL(CE_PIXEL),
+	.scandoubler(scandoubler_en),
+	.hq2x(fx == 3'd1),
+	.gamma_bus(vm_gamma_bus),
+	.R(retimed_rgb[23:16]), .G(retimed_rgb[15:8]), .B(retimed_rgb[7:0]),
+	.HSync(vm_hs), .VSync(vm_vs), .HBlank(vm_hb), .VBlank(vm_vb),
+	.HDMI_FREEZE(1'b0), .freeze_sync(),
+	.VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B),
+	.VGA_VS(VGA_VS), .VGA_HS(VGA_HS), .VGA_DE(VGA_DE)
+);
 
 // ------------------------------------------------------------------
 // Orientation (status[9:8], "Vert 270"/"Vert 90") and Flip screen

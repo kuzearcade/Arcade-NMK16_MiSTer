@@ -469,6 +469,53 @@ sprite-and-scroll evidence for that core is the board captures).
   box. On a static screen any such change is corruption. Each event changed
   exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
 
+### NMK-27 · HQ2X is exact on 256-wide games, horizontally short on 384-wide ones
+
+`sys/video_mixer.sv` (which wraps `hq2x.sv` + `scandoubler.v`) is now wired into
+all four cores as `"O[3:1],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;"`.
+`VGA_SL` is driven from the selection; `forced_scandoubler` from hps_io still
+forces it on. The mixer sits between the raster and `VGA_*`, ahead of
+`screen_rotate` (which measures its framebuffer from the incoming DE and so
+sizes itself to the scaled raster).
+
+Wiring differs by core: Gunnail/Macross2/Afega feed it from `video_retime`,
+which gained `hb_r`/`vb_r` outputs because the mixer needs the two blanking
+axes independently and `de_r` cannot be split. Raphero has no `video_retime` --
+it drives the raster from `clk_sys` and already carried
+`hblank_core`/`vblank_core` separately.
+
+**Measured on hardware (native screenshot dimensions, which are the core's own
+VGA output):**
+
+  | mode | 256-wide games | 384-wide games |
+  |---|---|---|
+  | None | 256x224 / 384x224 | correct |
+  | **HQ2x** | **512x448 exact 2x** | **597x448 (want 768x448)** |
+  | CRT 25% / 50% / 75% | 256x448 / 384x448 | correct (line-doubled) |
+
+Verified: tharrier, mustang (Gunnail), stagger1 (Afega) -> 512x448; gunnail
+(Gunnail), tdragon2 (Macross2), raphero (Raphero) -> 597x448. The scandoubler
+and all three scanline modes are correct everywhere, and the HQ2X *content* is
+correct and complete -- the 384-wide case is horizontally compressed (aspect
+1.33 against the source's 1.71), not cut off or corrupted.
+
+**NOT root-caused.** The split correlates exactly with the 6 MHz vs 8 MHz pixel
+rate, and `video_mixer`'s own header says *"CLK_VIDEO should be multiple by
+(ce_pix*4)"* -- 48 MHz / (6 MHz * 4) = 2 (exact, works) while
+48 / (8 * 4) = 1.5 (works out short). That is a strong correlation but the
+mechanism is UNCONFIRMED: `scandoubler.v` explicitly claims to handle a
+non-multiple master clock ("use such odd comparison to place ce_x4 evenly if
+master clock isn't multiple of 4"), and by hand the ce_x4o placement does come
+out at 4 pulses per input pixel in both cases. Do not treat the clock-ratio
+story as established without measuring it.
+
+**A PLL change cannot fix all of it.** Gunnail/Afega could move 48 -> 96 MHz
+(96/32 = 3 and 96/24 = 4, both exact). Macross2 runs its video PLL at 56 MHz
+with 8 MHz and 7 MHz pixel modes, needing a common multiple of 32 and 28 =
+224 MHz, which is not feasible. Raphero drives video from `clk_sys`. Any such
+change also moves the video clock for every game on that core, which currently
+works, so it is not a free experiment.
+
 ### NMK-26 · "High scores do not load after saving and reloading the core"
 
 **The save and restore paths are both CORRECT. Two other things caused this.**
