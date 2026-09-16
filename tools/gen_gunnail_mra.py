@@ -458,9 +458,18 @@ NOURYOKUP = dict(
 THARRIER = dict(
     id=20, year=1989, manufacturer="UPL", rot=True, switches="FF,FF",
     # One 16-bit DSW port: SW2 in the low byte (switch byte 0), SW1 in the high byte (byte 1).
+    # NMK-23: Coin A and Coin B are DELIBERATELY NOT LISTED here. tharrier's
+    # MCU is undumped -- MAME fakes it with a 15-byte canned table, and its own
+    # comment at that read path says DSW1 is "almost certainly" read through
+    # the MCU too. The coinage logic is in silicon nobody has, so changing
+    # these settings does nothing (MAME is pixel-identical between default and
+    # Free Play across 41 sampled attract frames, so we match the reference).
+    # Offering a setting that cannot work is worse than not offering it.
+    # The bits stay at the switches="FF,FF" default = all ones = the last id in
+    # COIN8_FREE = 1C_1C, which does work. tharrierb keeps both entries: it
+    # runs a real, fully dumped MC68705R3 and honours Free Play.
     dips=[
         ('0', "Unknown (SW2:8)", "On,Off"), ('1', "Demo Sounds", "Off,On"),
-        ('2,4', "Coin B", COIN8_FREE), ('5,7', "Coin A", COIN8_FREE),
         ('8', "Cabinet", "Cocktail,Upright"), ('9', "Unknown (SW1:7)", "On,Off"),
         ('10,11', "Difficulty", "Hardest,Easy,Hard,Normal"),
         ('12,13', "Bonus Life", "200k 500k & 1 2 3 5 Mil,None,200k and 1 Mil,200k"),

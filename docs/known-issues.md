@@ -401,6 +401,13 @@ sprite-and-scroll evidence for that core is the board captures).
   differed from its default run by **0 px** while `tharrierb` differed by
   **43,885 / 57,334 px** (attract vs. a game in progress). **Use the Lettering
   bootleg set if you want Free Play on this game.**
+- **Both Coin entries are now hidden on `tharrier`/`tharrieru` (2026-09-16).**
+  Offering a setting that provably cannot work is worse than not offering it,
+  so the two `<dip>` lines are gone from those two `.mra` and from the
+  `THARRIER` spec in `tools/gen_gunnail_mra.py`. The bits keep the
+  `switches="FF,FF"` default (all ones = the last id = **1C_1C**, which does
+  work), and `tharrierb` keeps both entries because its MCU is dumped and it
+  honours them.
 - **Method caveat worth repeating:** MAME's Lua `field:set_value()` silently
   does nothing in this build — the same failure as the DIP-setting attempt in
   NMK-21 — so the MAME half of this rests on attract comparison, not on
