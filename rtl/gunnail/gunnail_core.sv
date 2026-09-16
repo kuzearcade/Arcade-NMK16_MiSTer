@@ -2710,7 +2710,13 @@ module gunnail_core #(
 	wire [15:0] in0_eff = HW_ROMS ? in0_i : 16'hFFFF;
 	wire [15:0] in1_eff = HW_ROMS ? in1_i : 16'hFFFF;
 	wire [15:0] th_in0 = {1'b1, 10'd0, ~in0_eff[4:0]};                            // bit 15 "MCU status" (IPT_CUSTOM, active low: idle 1 — the boot loop at 0x88E waits for it), coin1, coin2, service, start1, start2
-	wire [15:0] th_in1 = {7'd0, ~in0_eff[4], 1'b0, ~in0_eff[0], 1'b0, ~in0_eff[1], 3'd0, ~in0_eff[4], ~in0_eff[3]};
+	// NMK-23b: this concatenation was 17 bits wide assigned to a 16-bit wire
+	// (verilator WIDTHTRUNC), so the MSB was dropped and every field above it
+	// sat one bit too high -- IPT_START2 "in game" landed on bit 9 instead of
+	// MAME's 0x0100 (bit 8), so player 2 could not join mid-game. Widths now
+	// sum to exactly 16 and the layout matches tharrier's IN1 as MAME returns
+	// it (~IN1): bit0 START1, bit1 START2, bit5 COIN2, bit7 COIN1, bit8 START2.
+	wire [15:0] th_in1 = {7'd0, ~in0_eff[4], ~in0_eff[0], 1'b0, ~in0_eff[1], 3'd0, ~in0_eff[4], ~in0_eff[3]};
 	wire [15:0] th_in2 = {1'b0, ~in1_eff[11], ~in1_eff[10], ~in1_eff[9], ~in1_eff[8], ~in1_eff[13], ~in1_eff[12], 1'b0,
 	                      ~in1_eff[6], ~in1_eff[3], ~in1_eff[2], ~in1_eff[1], ~in1_eff[0], ~in1_eff[5], ~in1_eff[4], 1'b0};
 	// manybloc: every input bit IP_ACTIVE_HIGH. IN0 (0x080000) carries no

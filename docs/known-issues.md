@@ -469,6 +469,72 @@ sprite-and-scroll evidence for that core is the board captures).
   box. On a static screen any such change is corruption. Each event changed
   exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
 
+### NMK-23b · tharrier's Cabinet=Cocktail cannot flip the screen (undumped MCU)
+
+**Not fixable without the MCU dump, and the core already matches MAME.** Two
+independent blockers, both tracing to `upl.13m` being `NO_DUMP`:
+
+1. **The flipscreen write is not decoded.** `tharrier_map` in `nmk16.cpp` has
+
+   ```cpp
+   //  map(0x080015, 0x080015).w(FUNC(nmk16_state::flipscreen_w));
+   ```
+
+   commented out (and `tharrierb_map` explicitly `unmaprw()`s `0x080014-15`
+   with the comment `// flipscreen`). `gunnail_core.sv` mirrors that exactly:
+   `decode[S_FLIP] = io && (r == 4'hA) && (m != M_THARRIER) && ...`. The game
+   *does* issue the writes -- found in the 68000 ROM (`2.18b`/`3.21b`
+   interleaved):
+
+   | ROM | instruction |
+   |---|---|
+   | `0004F4` | `33C2 00080014`  `MOVE.W D2,$00080014` (D2 = a computed 0/1) |
+   | `007972` | `33FC 0001 00080014`  `MOVE.W #$0001,$00080014` |
+   | `0078E0`, `007958`, `007A2E` | `42F9 ...`  `CLR.W $00080014` |
+
+   -- and both MAME and this core discard them.
+
+2. **The flip bit is read from the wrong source, and nobody knows the right
+   one.** The value written at `0004F4` is built as:
+
+   ```
+   0004D4: 3239 00080002    MOVE.W  $00080002,D1     ; tharrier_mcu_r
+   0004E2: 0241 7FFF        ANDI.W  #$7FFF,D1
+   0004EC: 3401             MOVE.W  D1,D2
+   0004EE: E31A             ROL.B   #1,D2            ; bit7 -> bit0
+   0004F0: 0242 0001        ANDI.W  #$0001,D2
+   0004F4: 33C2 00080014    MOVE.W  D2,$00080014
+   ```
+
+   i.e. **flipscreen = bit 7 of the word read from `$080002`**. That address is
+   `tharrier_mcu_r`, and for a *word* access MAME returns `~IN1`, whose bit 7
+   is `IPT_COIN1` -- not Cabinet. MAME says so itself in that handler:
+   *"it should also read DSW1 from here, almost certainly through the MCU"*.
+
+   **So enabling the decode would make it worse, not better:** the screen would
+   flip whenever a coin is held. The missing piece is the MCU's DSW routing,
+   which is undumped -- the same root cause as NMK-23 (Coin A/Coin B hidden on
+   tharrier/tharrieru).
+
+Verified against MAME 0.289 with the Cabinet DIP genuinely set to Cocktail
+(`DSW1 via bus = FEFF`): the only write to `$080014` in ~900 frames is a single
+`0000` at boot.
+
+**MAME Lua trap worth remembering:** `emu.add_machine_frame_notifier()` and
+`space:install_write_tap()` return subscription tokens that must be stored in a
+**global** -- when they are garbage-collected the callback silently stops
+firing, which looks exactly like a script that never ran. Also
+`manager.machine.screens[":screen"]` threw here, killing the notifier after its
+first call; count frames in the callback instead. And the earlier note that
+`field:set_value()` "does not stick" was wrong -- it was this same GC bug;
+`f.user_value = 0` works, confirmed by reading the DSW back over the bus.
+
+**Fixed in passing (NMK-23b):** `th_in1` was a 17-bit concatenation assigned to
+a 16-bit wire (verilator `WIDTHTRUNC`), so the MSB was dropped and every field
+above it sat one bit high -- `IPT_START2` "in game" landed on bit 9 instead of
+MAME's `0x0100`, meaning **player 2 could not join mid-game**. Corrected to sum
+to exactly 16 bits. Needs a rebuild to reach hardware; not yet board-tested.
+
 ### NMK-24 · FIXED (2026-09-16). Was: eleven games halt once a high-score dump exists
 
 **Resolved by `0c1a389`** -- `pause` was masking fx68k's `enPhi1`/`enPhi2`
