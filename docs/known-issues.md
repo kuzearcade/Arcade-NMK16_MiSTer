@@ -529,11 +529,34 @@ first call; count frames in the callback instead. And the earlier note that
 `field:set_value()` "does not stick" was wrong -- it was this same GC bug;
 `f.user_value = 0` works, confirmed by reading the DSW back over the bus.
 
-**Fixed in passing (NMK-23b):** `th_in1` was a 17-bit concatenation assigned to
-a 16-bit wire (verilator `WIDTHTRUNC`), so the MSB was dropped and every field
-above it sat one bit high -- `IPT_START2` "in game" landed on bit 9 instead of
-MAME's `0x0100`, meaning **player 2 could not join mid-game**. Corrected to sum
-to exactly 16 bits. Needs a rebuild to reach hardware; not yet board-tested.
+**Fixed in passing (NMK-23b), and CONFIRMED ON HARDWARE.** `th_in1` was a
+17-bit concatenation assigned to a 16-bit wire (verilator `WIDTHTRUNC`), so the
+MSB was dropped and every field above it sat one bit high -- `IPT_START2`
+"in game" landed on bit 9 instead of MAME's `0x0100`, meaning **player 2 could
+not join mid-game**. Corrected to sum to exactly 16 bits.
+
+Verified by A/B on the DE10-Nano, identical scripted sequence both times
+(4 coins, start 1P, play ~16 s, then two 0.8 s START2 presses), reading the
+top HUD from the native screenshot:
+
+  | | before START2 | after START2 |
+  |---|---|---|
+  | **pre-fix** (`20260917`, first build) | `1UP 2 0 ... PUSH START 2UP` | `1UP 0 100 ... PUSH START 2UP` |
+  | **post-fix** (`20260917`, rebuilt) | `1UP 2 0 ... PUSH START 2UP` | `1UP 0 100 ... `**`2UP 2 0`** |
+
+i.e. the "PUSH START 2UP" invite is replaced by a live 2UP score with 2 lives.
+Rebuilt Gunnail fits at setup **+0.697** / hold **+0.246**.
+
+The baseline was deliberately re-run with longer key holds and two presses
+first: a press too short to register would fail identically in both halves of
+the A/B and look like a fix that did not work. The input path was also checked
+independently -- `NMK16_Gunnail.sv:264` maps keyboard `2` to `kb_start2` and
+`in0_i` bit 4 is START2, so the press was reaching `th_in1` all along and
+landing on the bit the game never reads.
+
+**NOTE:** `gunnail_core` also backs `NMK16_Afega`, whose bitstream is therefore
+one commit behind. tharrier does not run on that core so its games are
+unaffected, but the two should be rebuilt together at the next release.
 
 ### NMK-24 · FIXED (2026-09-16). Was: eleven games halt once a high-score dump exists
 
