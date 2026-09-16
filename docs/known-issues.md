@@ -521,23 +521,95 @@ sprite-and-scroll evidence for that core is the board captures).
 
   ```
   0082: 02       DI            ; disable interrupts
-  0083: 9F 30    DECW ($30)    ; decrement a 16-bit counter
-  0085: C6 20    JR cc,+$20    ; on expiry -> $00A7: reset the 68000, JP $0000
+  0083: 9F 30    DECW ($30)    ; decrement the counter at $FF30
+  0085: C6 20    JR Z,+$20     ; at ZERO -> $00A7, otherwise fall through
+  0087: 09       EX AF,AF'     ; \ the ordinary music-tick work
+  0088: 0A       EXX           ; /
+  00A6: 1F       RETI
+  00A7: 37 C8 01 LD (FFC8),#01 ; assert the 68000 reset (port 4 bit 0)
+  00AA: 1A 00 00 JP $0000      ; restart the MCU
   ```
 
-  So the timer ISR decrements a counter and resets the whole machine when it
-  reaches zero. Something must periodically RELOAD `$30`; NMK-24 is that
-  reload failing to happen. (The ASCII after the handler is only a copyright
-  banner, "All Music,Effect Software(C)1990 N M K Corporation" -- not a
-  diagnostic.)
+  `cc = 6` is ZF (`tlcs90.sv:559`), so the reset fires only when the counter
+  reaches **zero**. Direct 8-bit addressing is the `$FF00+n` short form, so
+  `($30)` is `$FF30` -- inside the internal RAM window `0xfec0-0xffbf`
+  (`nmk004_core.sv:22`), not an SFR. `$0082` is just the normal music-tick
+  ISR; the watchdog check is its first two instructions. (The ASCII after the
+  handler is only a copyright banner, "All Music,Effect Software(C)1990 N M K
+  Corporation" -- not a diagnostic.)
+- **The reload is the NMI handler, and NMI means "the host sent a command".**
+  The vector table is sparse -- only two live entries, everything else a bare
+  `RETI`:
+
+  | vector | source | target |
+  |---|---|---|
+  | `$0018` | NMI | `JP $0079` |
+  | `$0038` | INTT1 (idx 2) | `JP $0082` |
+
+  and `$0079` does nothing but reload the counter:
+
+  ```
+  0079: 0A            EXX
+  007A: E3 FC EF 4A   LD HL,($EFFC)    ; per-game constant; hachamf: $0800 = 2048
+  007E: 4F 30         LDW ($FF30),HL   ; reload the watchdog
+  0080: 0A            EXX
+  0081: 1F            RETI
+  ```
+
+  The same two instructions appear once more at `$0175`/`$0179`, in boot,
+  immediately before the `37 C8 00 / 37 C8 01 / 37 C8 00` pulse at `$0188`
+  that releases the 68000 -- i.e. boot arms the watchdog, then starts the CPU.
+
+  **So the NMK004 resets the 68000 if it goes 2048 INTT1 ticks without a sound
+  command.** The timeout constant lives at the top of the per-game external
+  ROM (`$EFFC`), which is why the shared boot ROM can implement it generically.
+
+  Note the search trap that hid this for a whole session: a scan for writes to
+  `$FF30` found *nothing*, because the reload is opcode `0x4F`
+  (`LDW ($FF00+n),HL`, `tlcs90.sv:480`) -- the register-store form. Scanning
+  only the immediate (`0x3F`/`0x37`) and prefixed (`0xEF`/`0xEB`) forms misses
+  it. When a byte-pattern scan over a ROM returns zero hits, enumerate the
+  addressing modes from the decoder before concluding the write does not exist.
 - **The watchdog does not drift from the pause.** `nmk004_core` passes the
   same `cen_eff` to BOTH the CPU core and `nmk004_periph`, and the timers are
   `cen`-gated (`nmk004_periph.sv` lines 166/236/333), so pausing the MCU
-  pauses its timers too. The counter and the main loop stay in step.
-- **Next step: snoop writes to the watchdog counter at `$30`** (value + count,
-  the same technique as the `$0FEF00` snoop) and compare healthy vs frozen. If
-  the reload stops in the frozen case, find what the reload depends on -- most
-  likely a handshake with the 68000, which hiscore pauses.
+  pauses its timers too. The counter and the main loop stay in step -- a pause
+  alone cannot expire the watchdog.
+- **MEASURED: the watchdog is DOWNSTREAM. The causal chain recorded earlier in
+  this entry was backwards.** The NMI that reloads the counter is raised by an
+  ordinary 68000 register write (`sel_nmi & cpu_write`,
+  `gunnail_core.sv:2021`), not by a RAM access -- so a *paused* 68000 still
+  reloads it, and only a *wedged* one stops. `sim/rtl/gunnail_hs` with the real
+  `hiscore.v`, hiscore ON, 260M ticks (`tb_gunnail_hs.cpp`, the `$0082` /
+  `$00A7` / `$0FEF00` taps):
+
+  ```
+  watchdog ISR($0082) 939 entries (first tick 26147266)
+  watchdog FIRE($00A7) 0
+  68000 spin($0FEF00) 409199 fetches (first tick 10144920)
+  ```
+
+  The 939 ISR entries span ~234M ticks, i.e. one per ~249k ticks: at
+  clk_sys = 40 MHz that is **INTT1 ~= 160 Hz**, so the 2048-tick timeout is
+  **~12.8 seconds of continuous silence**. Two consequences:
+
+  1. The watchdog cannot be the initiating cause of a freeze that appears
+     immediately -- it needs ~13 s of silence to expire. The **two** reset
+     edges the hardware probe measured are two such cycles: wedge -> watchdog
+     -> reset -> reboot -> wedge again.
+  2. This sim can never exercise the watchdog at all: 260M ticks is 6.5 s,
+     half a single timeout. Any future test of the reset path needs ~800M+
+     ticks (45+ min), and the `wd_fire = 0` above is therefore **not**
+     evidence that the reset does not happen -- only that it is out of range.
+
+  So the first cause remains the hiscore arbitration wedging the 68000, and
+  the whole `$0038` -> `$00A7` -> reboot -> `$0FEF00` chain documented above is
+  a *symptom*. Work the arbitration, not the MCU.
+- **Caveat on the `$0FEF00` tap:** first-spin tick 10.1M is 0.25 s, which is
+  *boot* -- `$007F2A` jumps there on every power-up, so "first spin" fires even
+  on a healthy run and must not be read as the wedge. Only the spin *count*
+  (or spin restricted to the final quarter) separates parked from healthy, and
+  that needs the hiscore-OFF control alongside it.
 - **What remains: what makes the MCU take that trap.** Freezing it mid-fetch
   is NOT it -- deferring `pause` to a fetch-free point (`snd_pause_eff`,
   sampled only while `~nmk004_rom_rd`) removed the `pause & snd_stall`

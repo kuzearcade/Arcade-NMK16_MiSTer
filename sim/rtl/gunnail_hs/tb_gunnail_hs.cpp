@@ -129,6 +129,9 @@ int main(int argc, char **argv) {
 	uint32_t cfg_writes = 0;
 	bool prev_snd_valid = false;
 	long snd_instrs = 0;
+	// NMK-24 ordering probe (see the $0082/$00A7/$0FEF00 taps below).
+	unsigned long wd_isr = 0, wd_fire = 0, spin_hits = 0;
+	uint64_t wd_isr_first = 0, wd_fire_first = 0, spin_first = 0;
 	uint16_t snd_last_pc = 0;
 
 	bool prev_as_n = true;
@@ -246,6 +249,15 @@ int main(int argc, char **argv) {
 		if (snd_valid_now && !prev_snd_valid) {
 			snd_instrs++;
 			snd_last_pc = top.dbg_nmk004_pc;
+			// NMK-24 ordering probe. $0082 is the INTT1 handler (DECW ($30) /
+			// JR Z,$00A7); $00A7 is LD (FFC8),#01, which asserts the 68000
+			// reset, immediately followed by JP $0000. Counting both, with the
+			// tick of the FIRST of each, says whether the watchdog reset leads
+			// the 68000 halt or trails it.
+			if (snd_last_pc == 0x0082) { wd_isr++; if (!wd_isr_first) wd_isr_first = clk_sys_ticks; }
+			if (snd_last_pc == 0x00A7) { wd_fire++; if (!wd_fire_first) wd_fire_first = clk_sys_ticks;
+				fprintf(stderr, "NMK-24: NMK004 watchdog FIRED at tick %llu (ISR entries so far %lu, 68000 spin first seen %llu)\n",
+					(unsigned long long)clk_sys_ticks, wd_isr, (unsigned long long)spin_first); }
 		}
 		prev_snd_valid = snd_valid_now;
 
@@ -269,6 +281,10 @@ int main(int argc, char **argv) {
 		if (prev_as_n && !as_n_now && top.dbg_fc1 && !top.dbg_fc0) {
 			m68k_instrs++;
 			m68k_last_pc = (uint32_t)top.dbg_eab << 1;
+			// The boot code at $007E82 writes 60FE (BRA *) to $0FEF00 and
+			// $007F2A jumps there, so a fetch at $0FEF00 is the 68000 parking
+			// itself. Record the first one to order it against the watchdog.
+			if (m68k_last_pc == 0x0FEF00) { spin_hits++; if (!spin_first) spin_first = clk_sys_ticks; }
 			if (clk_sys_ticks >= last_quarter_start) recent_pcs.insert(m68k_last_pc);
 			static long trace_max = std::getenv("TB_TRACE_MAX") ? atol(std::getenv("TB_TRACE_MAX")) : 2000000;
 			if (m68k_trace && m68k_instrs <= trace_max) fprintf(m68k_trace, "%06X\n", m68k_last_pc);
@@ -314,6 +330,17 @@ int main(int argc, char **argv) {
 	printf("tb_hs: protection MCU executed %ld instructions, last PC=$%04X, %ld shared-bus accesses, 68000 HALT=%d, NMK214 config writes %u\n",
 	       prot_instrs, prot_last_pc, prot_bus_accesses, (int)top.dbg_halt_68k, cfg_writes);
 	printf("tb_hs: host latch: %u commands, %u distinct replies\n", host_cmds, host_replies);
+	printf("NMK-24: watchdog ISR($0082) %lu entries (first tick %llu); "
+	       "watchdog FIRE($00A7) %lu (first tick %llu); "
+	       "68000 spin($0FEF00) %lu fetches (first tick %llu) -> %s\n",
+	       wd_isr, (unsigned long long)wd_isr_first,
+	       wd_fire, (unsigned long long)wd_fire_first,
+	       spin_hits, (unsigned long long)spin_first,
+	       (!wd_fire && !spin_hits) ? "neither happened"
+	       : (!wd_fire)             ? "68000 parked, watchdog never fired"
+	       : (!spin_hits)           ? "watchdog fired, 68000 never parked"
+	       : (spin_first < wd_fire_first) ? "68000 PARKED FIRST -- watchdog is downstream"
+	                                      : "WATCHDOG FIRED FIRST -- reset is upstream");
 	printf("tb_hs: NMK004 wrote to YM2203 %ld times, OKI0 %ld times, OKI1 %ld times\n", ym_writes, oki0_writes, oki1_writes);
 	printf("tb_hs: OKI ADPCM fetch audit: oki0 %u of %u sample bytes unserved at latch, oki1 %u of %u\n",
 	       (unsigned)top.dbg_oki0_adpcm_unserved, (unsigned)top.dbg_oki0_adpcm_total,
