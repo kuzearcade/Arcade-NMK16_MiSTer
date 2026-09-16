@@ -514,6 +514,30 @@ sprite-and-scroll evidence for that core is the board captures).
   pass -- boot init after that restart. Full chain: trap at `$0038` ->
   handler `$0082` -> reset the 68000 at `$00A7` -> 68000 reboots -> `BRA *`
   at `$0FEF00` -> spin.
+- **The `$0038` trap is INTT1, and the handler is a WATCHDOG.**
+  `tlcs90.sv:1337` computes `irq_vector = 0x0010 + (irq_idx+3)*8`, so `$0038`
+  is `irq_idx = 2` -- the third source, a timer interrupt. The handler decodes
+  as:
+
+  ```
+  0082: 02       DI            ; disable interrupts
+  0083: 9F 30    DECW ($30)    ; decrement a 16-bit counter
+  0085: C6 20    JR cc,+$20    ; on expiry -> $00A7: reset the 68000, JP $0000
+  ```
+
+  So the timer ISR decrements a counter and resets the whole machine when it
+  reaches zero. Something must periodically RELOAD `$30`; NMK-24 is that
+  reload failing to happen. (The ASCII after the handler is only a copyright
+  banner, "All Music,Effect Software(C)1990 N M K Corporation" -- not a
+  diagnostic.)
+- **The watchdog does not drift from the pause.** `nmk004_core` passes the
+  same `cen_eff` to BOTH the CPU core and `nmk004_periph`, and the timers are
+  `cen`-gated (`nmk004_periph.sv` lines 166/236/333), so pausing the MCU
+  pauses its timers too. The counter and the main loop stay in step.
+- **Next step: snoop writes to the watchdog counter at `$30`** (value + count,
+  the same technique as the `$0FEF00` snoop) and compare healthy vs frozen. If
+  the reload stops in the frozen case, find what the reload depends on -- most
+  likely a handshake with the 68000, which hiscore pauses.
 - **What remains: what makes the MCU take that trap.** Freezing it mid-fetch
   is NOT it -- deferring `pause` to a fetch-free point (`snd_pause_eff`,
   sampled only while `~nmk004_rom_rd`) removed the `pause & snd_stall`
