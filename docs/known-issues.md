@@ -469,6 +469,68 @@ sprite-and-scroll evidence for that core is the board captures).
   box. On a static screen any such change is corruption. Each event changed
   exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
 
+### NMK-26 · "High scores do not load after saving and reloading the core"
+
+**The save and restore paths are both CORRECT. Two other things caused this.**
+
+**1. The `High Scores` toggle does not survive a core reload — this is the
+actual cause.** MiSTer only writes status bits to `config/<SETNAME>.CFG` on an
+explicit **System -> Save settings**; toggling an option alone persists nothing.
+The option defaults OFF (NMK-24 mitigation), and the cores hold the module in
+reset while it is off (`NMK16_Macross2.sv:628`:
+`.reset(reset | hs_hold | ~hs_enable)`), so after a reload nothing is restored.
+
+Reproduced on tdragon2 with no `.CFG` present, which is exactly a user who never
+used Save settings:
+
+  | step | High Scores | HIGH shown |
+  |---|---|---|
+  | fresh load | Off | 18000 (game default) |
+  | toggled On in the OSD | On | -- |
+  | **core reloaded** | **Off again** | **18000** |
+
+and no `config/tdragon2.CFG` was created. **Workaround: after switching High
+Scores on, do System (Right) -> Save settings.** The real fix is a product
+decision: the reason the option defaults OFF was NMK-24, which is now fixed, so
+defaulting it ON would make this just work.
+
+**2. Every pre-fix `.nvm` in `/media/fat/hs_nvms/` is CORRUPT, and restoring one
+overwrites the game's real table with garbage.** Those dumps were captured
+before the NMK-24 fixes, when hiscore was reading the RAM port through a broken
+path, so what it saved was garbage. Bulk-checked against each `.mra`'s own
+config -- a faithful dump's first and last byte must equal the first record's
+`start` and the last record's `end` check values:
+
+```
+dumps checked: 56       consistent: 4       INCONSISTENT: 52
+```
+
+On tdragon2 the corrupt dump visibly corrupted the table: HIGH went from 18000
+to `54004400` (ASCII 'T','D' landing in the score field). **All 64 were
+quarantined to `/media/fat/hs_nvms_corrupt_20260916/`** so fresh, correct dumps
+get captured. Note the 2026-09-16 sweep restored these 64 -- that does not
+invalidate the sweep (it measured *freezes*, and a corrupt dump still exercises
+the pause path) but it does retract the claim that hachamf's `HIGH 1013210` was
+a genuinely restored score: hachamf's dump is one of the corrupt ones.
+
+**Proof the current save path is correct:** with the dump deleted and High
+Scores on, Scores -> Save Scores wrote a 107-byte file matching MAME's work RAM
+at `$1FF101` **byte for byte**:
+
+```
+saved:  1800 1400 0c50 0000 0180 0000 0800 0c00 ...
+MAME:   18 00 14 00 0C 50 00 00 01 80 00 00 08 00 0C 00 ...
+```
+
+`01 80 00` is BCD 18000, the displayed HIGH, and `18`/`00` match the config's
+start/end checks. Reloading with that dump restores **HIGH = 18000** correctly.
+
+**Proof the restore path reaches game RAM** (the patch-the-dump method, not a
+round trip -- a round trip cannot tell "restored" from "never changed"):
+patching the dump's initials bytes to `0x5A` made HIGH display `5A0050A0`, the
+unpatched dump gave `54004400`, and hiscore off gave `18000`. The displayed
+value tracks the dump contents exactly.
+
 ### NMK-23b · tharrier's Cabinet=Cocktail cannot flip the screen (undumped MCU)
 
 **Not fixable without the MCU dump, and the core already matches MAME.** Two
