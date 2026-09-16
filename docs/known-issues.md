@@ -471,12 +471,21 @@ sprite-and-scroll evidence for that core is the board captures).
   responding. Video freezes on one frame and audio goes to **exactly 0.0 RMS
   with zero variance** — everything clock-gated, not a crashed 68000 (a crash
   leaves the NMK004 droning). Delete the `.nvm` and the game is perfect.
-- **Affected (measured, not predicted):** `hachamf`, `hachamfa`, `hachamfb`,
-  `hachamfp`, `strahl`, `strahlj`, `strahlja`, `strahljbl`, `acrobatmbl` —
-  9 `.mra`, 6 distinct `game_sel`. Their `<rom index="3">`/`<nvram index="4">`
-  are removed and the sets are listed in `tools/gen_hiscore_mra.py`'s
-  `HS_EXCLUDE` so regeneration cannot quietly put them back. The other
-  **73** sets keep working high scores.
+- **Affected (measured, not predicted):** on NMK16_Gunnail `hachamf`,
+  `hachamfa`, `hachamfb`, `hachamfp`, `strahl`, `strahlj`, `strahlja`,
+  `strahljbl`, `acrobatmbl`; on NMK16_Macross2 `macross2k`, `macross2g`
+  (`game_sel` 1) — 11 `.mra`, 7 distinct `game_sel`. Their
+  `<rom index="3">`/`<nvram index="4">` are removed and the sets are listed in
+  `tools/gen_hiscore_mra.py`'s `HS_EXCLUDE` so regeneration cannot quietly put
+  them back. The other **71** sets keep working high scores.
+- **All four cores have now been swept with the feature ON** (2026-09-16), not
+  just Gunnail: 31 games on Gunnail, then the 25 games with a hiscore region on
+  Macross2/Raphero/Afega, each loaded with a correctly-sized dump and with
+  "High Scores" switched on through the OSD. Only `macross2k` failed there
+  (1 distinct frame of 8; its control with the feature off scores 6). Note its
+  parent `macross2` passes on the **same 5504-byte dump** — another reminder
+  that the affected set follows no rule anyone has found, and must be measured
+  per `game_sel`.
 - **The cause is `hiscore.v` holding the game-RAM port far too long.**
   `NMK16_Gunnail.sv` asserted `hs_access = 1'b1` for the *entire* `hs_pause`
   window and left the module's own `ram_intent_read`/`ram_intent_write`

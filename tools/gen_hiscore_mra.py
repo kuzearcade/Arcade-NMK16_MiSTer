@@ -80,6 +80,9 @@ HS_EXCLUDE = {
     'strahljbl',                    # game_sel 49
     'acrobatmbl',                   # game_sel 45 (acrobatm itself is FINE on
                                     # the identical hiscore config)
+    # NMK16_Macross2, game_sel 1 -- found by the 25-game sweep of the other
+    # three cores. macross2 itself passes on the SAME 5504-byte dump.
+    'macross2k', 'macross2g',
 }
 
 def main():
