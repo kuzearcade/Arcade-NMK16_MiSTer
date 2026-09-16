@@ -472,13 +472,41 @@ sprite-and-scroll evidence for that core is the board captures).
 ### NMK-24 · Eleven games halt themselves once a high-score dump exists
 - **Cores:** NMK16_Gunnail, NMK16_Macross2 · **Severity:** bug ·
   **Status:** mitigated (hiscore removed from the affected sets and the whole
-  feature off by default); **cause identified 2026-09-16** — the games run
-  their own halt routine. Not fixed: preventing it means stopping their
-  self-check from failing.
+  feature off by default); **root cause confirmed 2026-09-16** — the NMK004
+  resets the 68000 and the reboot never completes. Not yet fixed.
 - **Symptom:** with a saved `.nvm` present, the game boots, draws, then stops
   responding, with audio at exactly 0.0 RMS. Delete the `.nvm` and it is
   perfect.
-- **THE CAUSE: the game deliberately halts itself.** hachamf's 68000 is not
+- **THE CAUSE (confirmed on hardware 2026-09-16): the NMK004 sound MCU resets
+  the 68000, and the game never finishes rebooting.** `gunnail_core.sv`'s
+  `m68k_extReset = reset | (nmk004_p4[0] & has_nmk004) | prot_loading | ...`
+  gives the sound MCU a direct line to the main CPU's reset. Probing each term
+  separately with a sticky latch (armed only after `reset` has been low ~1.7 s,
+  so the power-on reset cannot pollute it) and reading it off a screenshot:
+
+  | | `reset` | **`nmk004_p4[0]`** | `prot_loading` | extReset edges |
+  |---|---|---|---|---|
+  | healthy | 0 | **0** | 0 | **0** |
+  | frozen | 0 | **1** | 0 | **2** |
+
+  The full chain: hiscore becomes active -> the NMK004 asserts its host-reset
+  line -> the 68000 is reset mid-game -> boot re-runs from the reset vector
+  `$007E42` -> boot writes the `BRA *` placeholder to `$0FEF00` and jumps
+  there before the real routine is copied over it -> the CPU spins forever.
+  Four independent measurements agree: the PC-trap (CPU spinning in RAM), the
+  crash context (`JMP $0FEF00` reached from boot), the `$0FEF00` write snoop
+  (the boot placeholder `60FE` is the LAST write, so boot ran after the game
+  was already up), and this reset probe naming the term.
+- **What NOT to try: simply not pausing the sound MCU.** Splitting `pause` so
+  hiscore gates only the 68000 (leaving NMK004/Z80 running) **regressed**
+  `hachamfb` from 7/8 to 3 and fixed nothing -- it breaks the 68000<->NMK004
+  handshake in a new way. Pausing both together is also not enough, since that
+  is what the shipped build does. The fix must stop the MCU deciding to assert
+  the line, not change who gets paused.
+- **Earlier framing, now superseded:** the halt at `$0FEF00` was first read as
+  an error handler the game jumps to on failure. It is not -- `$007E42` is the
+  **reset vector**, so that code is boot, and `BRA *` is a placeholder boot
+  installs before copying the real routine over it. hachamf's 68000 is not
   crashed, stalled or starved — it is *executing an infinite loop it installed
   on purpose*. From the ROM (`mame_roms/hachamf.zip`, `7.93`/`6.94`
   interleaved):
