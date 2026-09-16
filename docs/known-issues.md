@@ -554,9 +554,11 @@ independently -- `NMK16_Gunnail.sv:264` maps keyboard `2` to `kb_start2` and
 `in0_i` bit 4 is START2, so the press was reaching `th_in1` all along and
 landing on the bit the game never reads.
 
-**NOTE:** `gunnail_core` also backs `NMK16_Afega`, whose bitstream is therefore
-one commit behind. tharrier does not run on that core so its games are
-unaffected, but the two should be rebuilt together at the next release.
+**`NMK16_Afega` rebuilt to match** (it shares `gunnail_core`): setup **+0.541**,
+hold **+0.213**, deployed and md5-verified. All four shipped bitstreams are now
+built from the same commit. Smoke-tested with a hiscore dump loaded so the
+NMK-24 path is live -- stagger1, grdnstrmk, bubl2000 and grdnstrm all reach
+gameplay and respond to input (A->B diff 99.1-100%).
 
 ### NMK-24 · FIXED (2026-09-16). Was: eleven games halt once a high-score dump exists
 
