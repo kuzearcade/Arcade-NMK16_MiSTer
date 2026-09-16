@@ -497,30 +497,34 @@ sprite-and-scroll evidence for that core is the board captures).
   crash context (`JMP $0FEF00` reached from boot), the `$0FEF00` write snoop
   (the boot placeholder `60FE` is the LAST write, so boot ran after the game
   was already up), and this reset probe naming the term.
-- **Why the NMK004 asserts it: `pause` freezes the MCU MID-ROM-FETCH.**
-  Probed on hardware (sticky latches, armed after reset has been low ~1.7 s):
+- **WHY the NMK004 asserts it: it takes a TRAP through vector `$0038`.** A
+  4-deep history of the MCU's fetch PCs, frozen at the instant it asserts
+  `p4[0]`, reads `$0082 <- $0083 <- $0085 <- $00A7` -- sequential execution in
+  the boot ROM's low region. The vector table entry at `$0038` is
+  `1A 82 00` = **`JP $0082`**, so that is the trap handler, and it ends:
 
-  | | `pause` seen | **`pause` & `snd_stall`** |
-  |---|---|---|
-  | healthy | 0 | **0** |
-  | frozen | 1 | **1** |
+  ```
+  00A7: 37 C8 01    LD (FFC8),#$01   ; assert the 68000 reset (port 4 bit 0)
+  00AA: 1A 00 00    JP  $0000        ; restart the MCU itself
+  00AD: "All Music,E..."             ; ASCII diagnostic string
+  ```
 
-  `snd_cen = (snd_div==4) & ~snd_stall` and `pause` is ANDed on downstream at
-  the instantiation (`.cen(snd_cen & ~pause)`), while
-  `rom_stall = rom_rd & ~rom_ready`. So if `rom_ready` goes high while `pause`
-  holds `cen` low, the stall clears **without the MCU ever consuming the
-  data**, and the next `cen` latches whatever `rom_din` holds by then. The MCU
-  executes garbage, ends up back in its boot init, and `$018B`
-  (`LD (FFC8),#$01`) pulses the 68000 reset. This is the same hazard class as
-  the jt6295 "ADPCM fetch ignores rom_ok" bug ([[project_oki_fetch_hazard]]).
-  **The fix is to hold the fetch result until the MCU actually consumes it**
-  (fold `pause` into the stall/handshake rather than ANDing it onto `cen`),
-  not to stop pausing the MCU.
-- **A measurement caveat:** the same probe counted "TLCS-90 restarts" by
-  watching for a fetch PC below `$0010`. The healthy control already scored 3,
-  because the TLCS-90's interrupt vectors live in low memory and ordinary
-  interrupt servicing lands there. That counter and its "restarted from" PC are
-  NOT evidence; only the `pause & snd_stall` bit is. Take the control first.
+  So the sound MCU hits an error trap, deliberately resets the 68000 and
+  restarts. The `$018B` assert caught by the earlier probe is the SECOND
+  pass -- boot init after that restart. Full chain: trap at `$0038` ->
+  handler `$0082` -> reset the 68000 at `$00A7` -> 68000 reboots -> `BRA *`
+  at `$0FEF00` -> spin.
+- **What remains: what makes the MCU take that trap.** Freezing it mid-fetch
+  is NOT it -- deferring `pause` to a fetch-free point (`snd_pause_eff`,
+  sampled only while `~nmk004_rom_rd`) removed the `pause & snd_stall`
+  coincidence entirely and changed nothing: hachamf 1, hachamfp 1, with
+  hachamfb still 8 (no regression). Suspect instead either a bad opcode
+  reaching the decoder or our TLCS-90 raising this trap spuriously when `cen`
+  is gated. Identify which vector `$0038` is on the TMP90C840 and probe the
+  trap condition directly.
+- **Superseded:** `pause` does land mid-ROM-fetch (`pause & snd_stall` is 1
+  frozen, 0 healthy -- that measurement stands), but it is benign; the model
+  that it caused a stale-word latch was wrong.
 - **What NOT to try: simply not pausing the sound MCU.** Splitting `pause` so
   hiscore gates only the 68000 (leaving NMK004/Z80 running) **regressed**
   `hachamfb` from 7/8 to 3 and fixed nothing -- it breaks the 68000<->NMK004
