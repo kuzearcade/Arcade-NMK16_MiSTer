@@ -73,16 +73,11 @@ def fmt(rows):
 # MCU-less hachamfp fails too. See docs/known-issues.md. Remove entries here
 # once the arbitration rework lands and the set has been retested on hardware.
 HS_EXCLUDE = {
-    'hachamf', 'hachamfa',          # game_sel 9
-    'hachamfb',                     # game_sel 13 (no MCU -- still affected)
-    'hachamfp',                     # game_sel 11 (no MCU -- still affected)
-    'strahl', 'strahlj', 'strahlja',# game_sel 7
-    'strahljbl',                    # game_sel 49
-    'acrobatmbl',                   # game_sel 45 (acrobatm itself is FINE on
-                                    # the identical hiscore config)
-    # NMK16_Macross2, game_sel 1 -- found by the 25-game sweep of the other
-    # three cores. macross2 itself passes on the SAME 5504-byte dump.
-    'macross2k', 'macross2g',
+    # EMPTY as of the NMK-24 root-cause fix (pause broke fx68k's enPhi1/enPhi2
+    # alternation; see docs/known-issues.md). Every entry that used to live here
+    # was measured on bitstreams built BEFORE that fix, so the list carried no
+    # information about the fixed cores. Re-populate ONLY from a fresh hardware
+    # sweep on post-fix bitstreams, and say which build measured it.
 }
 
 def main():
