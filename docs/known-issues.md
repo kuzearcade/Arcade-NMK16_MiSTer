@@ -469,6 +469,57 @@ sprite-and-scroll evidence for that core is the board captures).
   box. On a static screen any such change is corruption. Each event changed
   exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
 
+### NMK-28 · Rotated + scandoubler cut the picture off (FIXED)
+
+**Reported by the user:** with HQ2X on, switching Gunnail's Orientation to
+"Vert 270" showed only part of the screen, and scanlines stopped working. Two
+separate causes.
+
+**1. Cut-off picture -- caused by wiring the mixer ahead of `screen_rotate`.**
+`screen_rotate` in `sys/arcade_video.v` has **no backpressure**: it asserts
+`ram_wr` on every `CE_PIXEL & VGA_DE` and never looks at `DDRAM_BUSY`. With the
+scandoubler active the rotated path was writing **4x the pixels per frame**
+into the DDR framebuffer with no flow control, so writes were dropped and the
+frame came out partial. Fixed by gating the scandoubler off whenever the
+rotation framebuffer is active:
+
+```systemverilog
+wire fb_rotating    = ~no_rotate | flip;        // matches screen_rotate's own fb_en
+wire scandoubler_en = ((fx != 3'd0) || forced_scandoubler) && ~fb_rotating;
+```
+
+So Vert orientation is byte-for-byte the pre-HQ2X behaviour again. Verified on
+hardware, gunnail, native raster per mode:
+
+  | | Horz | Vert 270 |
+  |---|---|---|
+  | None | 384x224 | 384x224 |
+  | HQ2x | (doubled) | **384x224** |
+  | CRT 50% | 384x448 | **384x224** |
+
+i.e. in Vert the raster no longer changes with Fx, and the rotated picture is
+complete (full playfield, HUD, shields).
+
+**2. Scanlines stopping in Vert -- NOT a regression, and not fixable here.**
+`sys/sys_top.v:364` is `sl_r <= FB_EN ? 2'b00 : scanlines;` -- the framework
+force-disables scanlines whenever the rotation framebuffer is active. They have
+never worked in a rotated orientation on any MiSTer core and cannot without
+modifying vendored framework code.
+
+**Consequence: "Scandoubler Fx" has no effect while Orientation is Vert, or
+while Flip screen is on.** That is inherent to the framebuffer path: the scaler
+does the scaling there, and scanlines are disabled upstream. The option is left
+visible rather than menu-masked; if that proves confusing it could be hidden
+with `status_menumask` keyed on the same `fb_rotating` term.
+
+**Also from this exchange:** the user identified `video_mode=6` in
+`/media/fat/MiSTer.ini` as the reason the native screenshot geometry looked odd
+and changed it to `video_mode=0` (1280x720@60). HQ2X and scanlines confirmed
+working. Note the horizontal HQ2X screenshot still reads 597 rather than 768
+even at `video_mode=0`, so the NMK-27 caveat stands: that tool is not a reliable
+raster measure for a scandoubled picture. The core's output is 768, proven in
+`sim/rtl/video_mixer_hq2x`.
+
 ### NMK-27 · HQ2X: RESOLVED, there was no defect
 
 `sys/video_mixer.sv` (wrapping `hq2x.sv` + `scandoubler.v`) is wired into all

@@ -1024,8 +1024,17 @@ wire [23:0] final_rgb    = rd_rgb;   // clk_sys domain — written into video_re
 // HQ2X / scandoubler / scanlines. fx==0 leaves the raster untouched unless
 // hps_io asks for a forced scandoubler; fx==1 is HQ2X; 2..4 are CRT scanlines,
 // which the mixer applies via VGA_SL.
+// NMK-28: the scandoubler MUST be off whenever the rotation framebuffer is
+// active. sys/arcade_video.v's screen_rotate has NO backpressure -- it asserts
+// ram_wr on every CE_PIXEL & VGA_DE and never looks at DDRAM_BUSY -- so at the
+// doubled pixel rate it writes 4x the pixels per frame with no flow control,
+// DDR writes are dropped and the picture comes out cut off. Scanlines are moot
+// there in any case: sys/sys_top.v:364 does `sl_r <= FB_EN ? 2'b00 : scanlines`,
+// i.e. the framework force-disables them in framebuffer mode. So "Scandoubler
+// Fx" has no effect while Orientation is Vert (or Flip screen is on).
+wire       fb_rotating = ~((status[9:8] == 2'd0) | game_macross2 | game_powerins | direct_video) | (status[17] & ~direct_video);
 wire [2:0] fx = status[3:1];
-wire       scandoubler_en = (fx != 3'd0) || forced_scandoubler;
+wire       scandoubler_en = ((fx != 3'd0) || forced_scandoubler) && ~fb_rotating;
 wire [1:0] sl = fx[2:1];
 assign VGA_SL = sl;
 
