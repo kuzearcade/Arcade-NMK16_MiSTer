@@ -526,10 +526,47 @@ space) where we return `0xFFFF`. The game reads IN0 as a word
 it with `BTST D5,D7` at `$00CB04` against a 5-entry table at `$00CB3A` holding
 bits **1,0,2,4,3** -- all in the low byte. The high byte is never tested.
 
-**Next step:** instrument on hardware. Put the value the core actually returns
-for IN0 on a debug overlay (the technique that cracked NMK-24) rather than
-reasoning further from the map -- every static check above already passes, so
-what the CPU really sees is the missing datum.
+**MEASURED with a hardware debug overlay -- the input path is CORRECT end to
+end, so the fault is elsewhere.** A temporary build painted 32 cells (8x8 px,
+white = 1) along the top of the active area: `in0_i` live, a sticky "bit seen
+LOW", a sticky AND-accumulate of every value handed to the 68000, and an IN0
+read counter. With three 1.5 s coin presses:
+
+```
+sticky input low  = 01   <- in0_i[0] does go low: the coin reaches the core
+STICKY value read = FE   <- bit 0 CLEAR: the CPU IS handed the coin
+read count        = climbing   <- the decode fires; the CPU polls IN0
+```
+
+So keyboard -> `in0_i` -> CPU read all work, and the 68000 receives exactly the
+`0xFE` low byte MAME's does. **The bug is not in the input path.**
+
+*Probe-design note:* the first build showed "last value read" instead of a
+sticky one and read `FF`, which looks like "the CPU never saw the coin" but is
+meaningless -- the coin is released seconds before the screenshot, so the most
+recent read is always `FF` either way. Latch brief events in hardware; do not
+try to sample them from outside. Same mistake as the short `arecord` windows
+above.
+
+**The high byte is now fully disproven, not just argued.** MAME returns `00FE`
+where we return `FFFE`, but all **ten** sites that read IN0 or the copy the game
+stores at `$0BFFFC` mask it away -- `NOT.W` + `ANDI.W #$0018` (`$00AC8A`,
+`$00B8AE`), `BTST #3` (`$00B000`, `$00B0BA`), `ANDI.L #$3F3F0018` (`$00C8C0`,
+`$00C8DC`). The earlier argument rested on one site; this covers all of them.
+
+Also identified: the `BTST` loop at `$00CB02` that scans bits 1,0,2,4,3 writes
+to `A0 = $000D05E0`, which is **TXVRAM** -- it is the service-mode input
+*display*, not the credit logic. The actual coin-credit path has not been
+located in the ROM yet.
+
+**Next step: suspect the sound subsystem, and test the two symptoms as one.**
+The user reports no audio *and* no coins on both sets, and these Comad boards
+run a Z80 + OKI (`ssmissin_sound_map`: ROM 0-7FFF, RAM 8000-87FF, OKI bank
+`0x9000`, OKI r/w `0x9800`, latch read `0xA000`, no FM, latch-pending drives
+Z80 IRQ0). Probe whether the Z80 runs at all and whether the 68000's soundlatch
+write at `0x0C001F` reaches it -- a dead or wedged sound CPU would explain the
+silence directly, and is the most plausible single cause left that could also
+gate crediting.
 
 ### NMK-28 · Rotated + scandoubler cut the picture off (FIXED)
 
