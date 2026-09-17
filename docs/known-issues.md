@@ -782,7 +782,9 @@ raises an interrupt, and the Raphero build came up **black with audio RMS
 played normally. The other 12 instances are sim-only reference cores whose
 swallowed ports were already `1'b0` tie-offs, so they were behaviourally
 unchanged. Fixed by moving the comment onto its own line in all 13 files;
-Raphero rebuilt. Two lessons: (a) after any regex edit across many files,
+Raphero rebuilt (emu setup slack +0.431, hold +0.242) and verified on the
+board with the same scripted coin/start: in-game, audio RMS **946.8** (was a
+1.2 KB solid frame and 0.0). Two lessons: (a) after any regex edit across many files,
 `grep` for the replacement text *and what follows it on the line*; (b) the
 smoke test after a "neutral" rebuild is not optional -- a black-and-silent
 board is exactly the signature this would have shipped with.
