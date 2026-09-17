@@ -3700,3 +3700,29 @@ is gameplay.
 Captures: `~/d3011df-sweep-captures/<set>/` (291 native PNGs from the main
 pass, plus the second-pass D/E frames), with `judge.txt`, `board_log.txt`
 and `manifest.txt` beside them.
+
+**Second pass, Guardian Storm family (grdnstrm x6, redfoxwp2, redfoxwp2a):
+healthy, and the +45 s / +65 s frames were simply too late.** All eight came
+back on the AFEGA title with `CREDIT 01` at both shots. A MAME oracle
+timeline (`grdnstrmk`, Lua: coin x2, start, a frame every 5 s, no other
+input) shows why: the SELECT screen holds for ~38 s and auto-starts, the
+idle player is dead ~13 s later, a 10 s CONTINUE countdown runs, then the
+title -- 65 s end to end. The pass's button press confirmed SELECT at +6 s
+instead, so the same sequence ended ~30 s earlier and both shots landed on
+the title with the one consumed credit showing. Gameplay frames for these
+eight come from a dense timeline (a shot every 4 s after start + confirm),
+recorded below.
+
+**Second pass and timelines -- every one of the 97 sets has an in-play
+frame.** The 42-set second pass (+45 s / +65 s, with button presses)
+captured play for 21 of them (Power Instinct x6, Strahl x4, Macross II x3,
+Nouryoku x2, Acrobat Mission x2, Mangchi, Pops Pops, Tom Tom Magic) and
+showed the other 21 already on GAME OVER / CONTINUE / RANKING / title with
+the start credit consumed -- unattended shooters die fast. Those 21
+(Guardian Storm x6 + both Red Fox sets, Red Hawk x9 + stagger1, Firehawk,
+spec2k/spec2kh) got a dense timeline (`scratchpad mister_timeline.sh`: a
+native shot every 4 s for 48 s after start + one confirm press), which
+caught all of them in play between ~+13 s and ~+25 s, then CONTINUE, GAME
+OVER and title -- the same cycle the MAME oracle shows. Final count:
+**97/97 start and play** on the 20260917 bitstreams; one data defect found
+and fixed (NMK-30). Capture directory: 417 PNGs, see its `README.txt`.

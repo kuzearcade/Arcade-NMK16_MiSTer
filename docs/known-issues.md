@@ -503,8 +503,17 @@ table 5 in the RTL so an old `.mra` keeps working. The sim harness's
 **62/62** on the campaign's original 20-81 window where id 35 scored 23/62.
 (The runner's "0/300" for frames 150-449 is vacuous -- there are no MAME
 references past frame 100 for this set -- and `mg_cmp.py` crashes on the
-first missing one rather than saying so.) Board verification: pending the
-end of the sweep that found it.
+first missing one rather than saying so.)
+
+**Verified on the board** with the corrected `.mra` on the unchanged
+`Arcade-NMK16_Afega_20260917.rbf` (same scripted coin x2 + start): the
+AFEGA title, `PLAY`/`PUSH START` and `CREDIT 01` render correctly and the
+set behaves exactly like grdnstrmk beside it -- no noise anywhere. A dense
+timeline (a native shot every 4 s after start + confirm) then showed the
+whole cycle: SELECT, STAGE 1, **in play from ~+13 s to ~+25 s**, CONTINUE
+countdown, GAME OVER, title -- frame for frame the same sequence as the
+seven healthy sets of its family run beside it. Data fix only; no
+bitstream changed.
 
 **Lesson:** a smoke test that scores "changed after input" cannot tell a
 running game from noise. Look at the frames -- a contact sheet of 97
