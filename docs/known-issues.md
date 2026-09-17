@@ -509,12 +509,38 @@ master clock isn't multiple of 4"), and by hand the ce_x4o placement does come
 out at 4 pulses per input pixel in both cases. Do not treat the clock-ratio
 story as established without measuring it.
 
-**A PLL change cannot fix all of it.** Gunnail/Afega could move 48 -> 96 MHz
-(96/32 = 3 and 96/24 = 4, both exact). Macross2 runs its video PLL at 56 MHz
-with 8 MHz and 7 MHz pixel modes, needing a common multiple of 32 and 28 =
-224 MHz, which is not feasible. Raphero drives video from `clk_sys`. Any such
-change also moves the video clock for every game on that core, which currently
-works, so it is not a free experiment.
+**THE CLOCK-RATIO THEORY IS DISPROVEN. 96 MHz was tried and reverted
+(2026-09-16).** Gunnail and Afega were rebuilt with the video PLL at 96 MHz
+(`50 * 48/25`, VCO 960 MHz -- note 48 MHz's 1200 MHz VCO could NOT simply be
+doubled, as that implies 2400 MHz, past Cyclone V's 1600 MHz ceiling), with
+`video_retime`'s divisors doubled to 12/16 and `LINE_CLKS` to 6144 so the
+raster geometry was unchanged. At 96 MHz BOTH pixel rates are exact integer
+multiples of `ce_pix*4` (96/32 = 3, 96/24 = 4).
+
+Both closed timing (Gunnail **+0.428**, better than the 48 MHz build's +0.354;
+Afega +0.321) and both were deployed and measured on hardware:
+
+  | game | source | HQ2x @48 MHz | HQ2x @96 MHz |
+  |---|---|---|---|
+  | gunnail | 384x224 | 597x448 | **597x448 (unchanged)** |
+  | tharrier | 256x224 | 512x448 | 512x448 |
+  | stagger1 | 256x224 | 512x448 | 512x448 |
+
+So the `CLK_VIDEO` / `ce_pix*4` ratio is **not** the cause, and the 6 vs 8 MHz
+correlation was a coincidence of which games are 256- vs 384-wide. **Reverted**
+-- a video-clock change to two shipped cores with no benefit is not worth
+carrying; `rtl/pll_video48.v` carries a note so nobody retries it. Kept from
+the experiment: `video_retime`'s counters were generalised (`M0_DIV`/`M1_DIV`
+to 5 bits, `hclk` to 13, `pix_div` to 5) and a `localparam [3:0] DIV_8` found
+that would have silently truncated a DIV of 16 to 0 -- the same class as
+NMK-23b's `th_in1`.
+
+**Still unexplained.** The buffer sizes in `hq2x.sv` work out adequate on paper
+for 384 -> 768 at `LINE_LENGTH(400)` (512-entry input, 1024-entry output), but
+that is paper analysis of the same kind that just produced a wrong answer, so
+the next step is to vary `LINE_LENGTH` empirically rather than reason about it.
+Macross2 (56 MHz, 8 and 7 MHz modes) could not have been fixed by a PLL change
+in any case -- it would need a common multiple of 32 and 28 = 224 MHz.
 
 ### NMK-26 · "High scores do not load after saving and reloading the core"
 

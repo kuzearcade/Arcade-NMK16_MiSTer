@@ -34,9 +34,9 @@
 // boards, 3072 clk_r per line). mode1 selects the second set.
 module video_retime #(
 	parameter [9:0] M0_X0 = 10'd28,  M0_HT = 10'd512, M0_HS = 10'd440, M0_HW = 10'd32, M0_AW = 10'd384,
-	parameter [3:0] M0_DIV = 4'd7,
+	parameter [4:0] M0_DIV = 5'd7,
 	parameter [9:0] M1_X0 = 10'd60,  M1_HT = 10'd448, M1_HS = 10'd404, M1_HW = 10'd28, M1_AW = 10'd320,
-	parameter [3:0] M1_DIV = 4'd8,
+	parameter [4:0] M1_DIV = 5'd8,
 	parameter integer LINE_CLKS = 3584   // clk_r per line: M0_HT*M0_DIV == M1_HT*M1_DIV
 ) (
 	// write side — the core's raster
@@ -75,7 +75,7 @@ module video_retime #(
 	localparam [9:0] R_HS_8 = M0_HS,  R_HS_7 = M1_HS;    // nominal hsync start (3.5 us after active end)
 	localparam [9:0] R_HW_8 = M0_HW,  R_HW_7 = M1_HW;    // hsync width (4 us)
 	localparam [9:0] AW_8   = M0_AW,  AW_7   = M1_AW;    // active width
-	localparam [3:0] DIV_8  = M0_DIV, DIV_7  = M1_DIV;   // clk_r per pixel
+	localparam [4:0] DIV_8  = M0_DIV, DIV_7  = M1_DIV;   // clk_r per pixel (5 bits: may be 16)
 	localparam [9:0] VTOTAL = 10'd278;
 	wire [9:0] v_start = tall240 ? 10'd8   : 10'd16;
 	wire [9:0] v_end   = tall240 ? 10'd248 : 10'd240;   // exclusive: the first vblank line
@@ -115,7 +115,7 @@ module video_retime #(
 	wire [9:0] r_x0 = m7 ? R_X0_7 : R_X0_8;
 	wire [9:0] r_ht = m7 ? R_HT_7 : R_HT_8;
 	wire [9:0] r_aw = m7 ? AW_7   : AW_8;
-	wire [3:0] r_div = m7 ? DIV_7 : DIV_8;
+	wire [4:0] r_div = m7 ? DIV_7 : DIV_8;
 
 	// H/V Shift (the same arithmetic NMK16_Macross2.sv used on the core raster):
 	// positive = picture right/down = sync earlier.
@@ -126,13 +126,18 @@ module video_retime #(
 	wire [9:0] vs_rel    = 10'd24 - vshift_ln;
 
 	reg        running = 1'b0;
-	reg [11:0] hclk;              // clk_r within the line, 0..3583
-	reg [3:0]  pix_div;           // clk_r within the pixel
+	reg [12:0] hclk;              // clk_r within the line (13 bits: LINE_CLKS may be 6144)
+	reg [4:0]  pix_div;           // clk_r within the pixel (5 bits: DIV may be 16)
 	reg [9:0]  hcount_r;          // pixel within the line
 	reg [9:0]  vcount_r;          // line, 0..277 (one behind the write side)
 
-	wire       pix_tick = (pix_div == r_div - 4'd1);
-	wire       line_end = (hclk == LINE_CLKS - 1);
+	wire       pix_tick = (pix_div == r_div - 5'd1);
+	/* verilator lint_off WIDTHTRUNC */
+	// LINE_CLKS is an integer parameter (<= 6144), so both fit 13 bits.
+	localparam [12:0] LINE_END_C  = LINE_CLKS - 1;
+	localparam [12:0] LINE_TAIL_C = LINE_CLKS - 32;
+	/* verilator lint_on WIDTHTRUNC */
+	wire       line_end = (hclk == LINE_END_C);
 
 	// Registered buffer read: the address is the current pixel's, stable
 	// for a whole pixel period, so rgb_q holds pixel hcount_r at its tick.
@@ -151,21 +156,21 @@ module video_retime #(
 	// puts the read side at (line 277, hclk 0) one clock AFTER the frame
 	// edge, so exactly one frame later the edge finds it on the last clock
 	// of line 276 (hclk 3583); accept a window either side of that wrap.
-	wire in_phase = running && (((vcount_r == VTOTAL - 10'd1) && (hclk < 12'd32)) ||
-	                            ((vcount_r == VTOTAL - 10'd2) && (hclk >= LINE_CLKS - 32)));
+	wire in_phase = running && (((vcount_r == VTOTAL - 10'd1) && (hclk < 13'd32)) ||
+	                            ((vcount_r == VTOTAL - 10'd2) && (hclk >= LINE_TAIL_C)));
 
 	always @(posedge clk_r) begin
 		ce_r <= 1'b0;
 		if (frame_edge && !in_phase) begin
 			running  <= 1'b1;
-			hclk     <= 12'd0;
-			pix_div  <= 4'd0;
+			hclk     <= 13'd0;
+			pix_div  <= 5'd0;
 			hcount_r <= 10'd0;
 			vcount_r <= VTOTAL - 10'd1;
 		end else if (running) begin
-			hclk <= line_end ? 12'd0 : hclk + 12'd1;
+			hclk <= line_end ? 13'd0 : hclk + 13'd1;
 			if (pix_tick) begin
-				pix_div  <= 4'd0;
+				pix_div  <= 5'd0;
 				ce_r     <= 1'b1;
 				rgb_r    <= r_act ? rgb_q : 24'd0;
 				de_r     <= r_act;
@@ -180,7 +185,7 @@ module video_retime #(
 					hcount_r <= hcount_r + 10'd1;
 				end
 			end else begin
-				pix_div <= pix_div + 4'd1;
+				pix_div <= pix_div + 5'd1;
 			end
 		end else begin
 			de_r <= 1'b0; hs_r <= 1'b0; vs_r <= 1'b0; rgb_r <= 24'd0; hb_r <= 1'b1; vb_r <= 1'b1;

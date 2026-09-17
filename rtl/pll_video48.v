@@ -1,10 +1,19 @@
-// Video output PLL for the Gunnail rbf (2026-09-11): one 48 MHz output
+// Video output PLL for the Gunnail and Afega rbfs: one 48 MHz output
 // from the 50 MHz reference, 50 * 24/25 (VCO 1200 MHz). 48 MHz divides
-// to both pixel rates this rbf's games use with integer enables — 8 MHz
+// to both pixel rates these rbfs' games use with integer enables — 8 MHz
 // (48/6, gunnail: 512 px @ 16 MHz/2) and 6 MHz (48/8, the nine lowres
 // boards: 384 px @ 12 MHz/2) — for rtl/video_retime.sv. A copy of
 // rtl/pll_video.v (56 MHz, the Macross2 rbf) with the multiplier
 // changed; see that file.
+//
+// NMK-27: raising this to 96 MHz was TRIED and REVERTED on 2026-09-16.
+// The theory was that sys/video_mixer.sv needs CLK_VIDEO to be an integer
+// multiple of ce_pix*4, and 48/(8*4) = 1.5 explained HQ2X coming out
+// 597 px wide instead of 768 on the 384-wide games. 96 MHz makes BOTH
+// rates integral (96/32 = 3, 96/24 = 4) and both cores still closed
+// timing (Gunnail +0.428, Afega +0.321) -- but gunnail measured 597 px
+// again, so the clock ratio is NOT the cause. Do not retry this.
+
 module pll_video48
 (
 	input  refclk,
