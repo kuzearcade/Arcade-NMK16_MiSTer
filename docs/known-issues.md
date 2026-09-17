@@ -469,78 +469,59 @@ sprite-and-scroll evidence for that core is the board captures).
   box. On a static screen any such change is corruption. Each event changed
   exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
 
-### NMK-27 · HQ2X is exact on 256-wide games, horizontally short on 384-wide ones
+### NMK-27 · HQ2X: RESOLVED, there was no defect
 
-`sys/video_mixer.sv` (which wraps `hq2x.sv` + `scandoubler.v`) is now wired into
-all four cores as `"O[3:1],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;"`.
-`VGA_SL` is driven from the selection; `forced_scandoubler` from hps_io still
-forces it on. The mixer sits between the raster and `VGA_*`, ahead of
-`screen_rotate` (which measures its framebuffer from the incoming DE and so
-sizes itself to the scaled raster).
+`sys/video_mixer.sv` (wrapping `hq2x.sv` + `scandoubler.v`) is wired into all
+four cores as `"O[3:1],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;"`.
+`VGA_SL` is driven from the selection; `forced_scandoubler` still forces it on.
+The mixer sits between the raster and `VGA_*`, ahead of `screen_rotate`.
+Gunnail/Macross2/Afega feed it from `video_retime` (which gained `hb_r`/`vb_r`,
+since the mixer needs both blanking axes and `de_r` cannot be split); Raphero
+already carried `hblank_core`/`vblank_core` separately.
 
-Wiring differs by core: Gunnail/Macross2/Afega feed it from `video_retime`,
-which gained `hb_r`/`vb_r` outputs because the mixer needs the two blanking
-axes independently and `de_r` cannot be split. Raphero has no `video_retime` --
-it drives the raster from `clk_sys` and already carried
-`hblank_core`/`vblank_core` separately.
+**The "597 px instead of 768" was a MEASUREMENT ARTIFACT of MiSTer's native
+screenshot, not a video defect.** Two hypotheses were tested and both disproven
+by experiment before that became clear:
 
-**Measured on hardware (native screenshot dimensions, which are the core's own
-VGA output):**
+1. **Clock ratio -- DISPROVEN.** `video_mixer`'s header says CLK_VIDEO should be
+   an integer multiple of `ce_pix*4`, and 48/(8*4) = 1.5 fit the symptom
+   perfectly. Gunnail and Afega were rebuilt at 96 MHz (both rates exact:
+   96/32 = 3, 96/24 = 4), closed timing (Gunnail +0.428, Afega +0.321), were
+   deployed -- and gunnail measured **597 again**. Reverted; see the note in
+   `rtl/pll_video48.v`.
+2. **`LINE_LENGTH` -- DISPROVEN.** Raised 400 -> 1024 on Gunnail (fits, +12 RAM
+   blocks, setup +0.423). Still **597**. Reverted to 400.
 
-  | mode | 256-wide games | 384-wide games |
-  |---|---|---|
-  | None | 256x224 / 384x224 | correct |
-  | **HQ2x** | **512x448 exact 2x** | **597x448 (want 768x448)** |
-  | CRT 25% / 50% / 75% | 256x448 / 384x448 | correct (line-doubled) |
+**What settled it was simulating the mixer instead of guessing.**
+`scratchpad/vmsim` builds `sys/video_mixer.sv` + `scandoubler.v` + `hq2x.sv`
+under Verilator (no Altera primitives, so it compiles; Verilator does reject
+`hq2x.sv`'s procedural assignment to the `Result` wire, so the sim uses a
+patched COPY -- do not edit `sys/`). Driven with gunnail's exact raster, and
+then driven through the **real `rtl/video_retime.sv`**:
 
-Verified: tharrier, mustang (Gunnail), stagger1 (Afega) -> 512x448; gunnail
-(Gunnail), tdragon2 (Macross2), raphero (Raphero) -> 597x448. The scandoubler
-and all three scanline modes are correct everywhere, and the HQ2X *content* is
-correct and complete -- the 384-wide case is horizontally compressed (aspect
-1.33 against the source's 1.71), not cut off or corrupted.
+```
+M0 (384 active): output DE = 768 x 30205 lines     <- correct 2x
+M1 (256 active): output DE = 512 x 30204 lines     <- correct 2x
+identical at LINE_LENGTH 400 and 1024
+```
 
-**NOT root-caused.** The split correlates exactly with the 6 MHz vs 8 MHz pixel
-rate, and `video_mixer`'s own header says *"CLK_VIDEO should be multiple by
-(ce_pix*4)"* -- 48 MHz / (6 MHz * 4) = 2 (exact, works) while
-48 / (8 * 4) = 1.5 (works out short). That is a strong correlation but the
-mechanism is UNCONFIRMED: `scandoubler.v` explicitly claims to handle a
-non-multiple master clock ("use such odd comparison to place ce_x4 evenly if
-master clock isn't multiple of 4"), and by hand the ce_x4o placement does come
-out at 4 pulses per input pixel in both cases. Do not treat the clock-ratio
-story as established without measuring it.
+So the core's raster is genuinely 768 wide and the wiring is right. Confirmed
+on hardware from the HDMI output (what the display actually shows), gunnail
+with HQ2X on vs off:
 
-**THE CLOCK-RATIO THEORY IS DISPROVEN. 96 MHz was tried and reverted
-(2026-09-16).** Gunnail and Afega were rebuilt with the video PLL at 96 MHz
-(`50 * 48/25`, VCO 960 MHz -- note 48 MHz's 1200 MHz VCO could NOT simply be
-doubled, as that implies 2400 MHz, past Cyclone V's 1600 MHz ceiling), with
-`video_retime`'s divisors doubled to 12/16 and `LINE_CLKS` to 6144 so the
-raster geometry was unchanged. At 96 MHz BOTH pixel rates are exact integer
-multiples of `ce_pix*4` (96/32 = 3, 96/24 = 4).
-
-Both closed timing (Gunnail **+0.428**, better than the 48 MHz build's +0.354;
-Afega +0.321) and both were deployed and measured on hardware:
-
-  | game | source | HQ2x @48 MHz | HQ2x @96 MHz |
+  | | active bbox | distinct colours | mean horizontal delta |
   |---|---|---|---|
-  | gunnail | 384x224 | 597x448 | **597x448 (unchanged)** |
-  | tharrier | 256x224 | 512x448 | 512x448 |
-  | stagger1 | 256x224 | 512x448 | 512x448 |
+  | HQ2x off | 573 x 414 | 350 | 4.29 |
+  | HQ2x on | 572 x 414 | **1383** | **3.38** |
 
-So the `CLK_VIDEO` / `ce_pix*4` ratio is **not** the cause, and the 6 vs 8 MHz
-correlation was a coincidence of which games are 256- vs 384-wide. **Reverted**
--- a video-clock change to two shipped cores with no benefit is not worth
-carrying; `rtl/pll_video48.v` carries a note so nobody retries it. Kept from
-the experiment: `video_retime`'s counters were generalised (`M0_DIV`/`M1_DIV`
-to 5 bits, `hclk` to 13, `pix_div` to 5) and a `localparam [3:0] DIV_8` found
-that would have silently truncated a DIV of 16 to 0 -- the same class as
-NMK-23b's `th_in1`.
+Same framing and aspect either way (the display aspect comes from
+`VIDEO_ARX`/`VIDEO_ARY`, not the raster width), with 4x the colours and
+measurably softer edges -- HQ2X blending doing exactly its job.
 
-**Still unexplained.** The buffer sizes in `hq2x.sv` work out adequate on paper
-for 384 -> 768 at `LINE_LENGTH(400)` (512-entry input, 1024-entry output), but
-that is paper analysis of the same kind that just produced a wrong answer, so
-the next step is to vary `LINE_LENGTH` empirically rather than reason about it.
-Macross2 (56 MHz, 8 and 7 MHz modes) could not have been fixed by a PLL change
-in any case -- it would need a common multiple of 32 and 28 = 224 MHz.
+**Lesson: `echo screenshot > /dev/MiSTer_cmd` is not a reliable measure of
+raster width for a scandoubled/HQ2X raster.** It is exact for the plain modes
+(and reported 512 correctly for 256-wide HQ2X), which is what made 597 look
+like a real defect. Measure the HDMI output, or simulate, before believing it.
 
 ### NMK-26 · "High scores do not load after saving and reloading the core"
 
