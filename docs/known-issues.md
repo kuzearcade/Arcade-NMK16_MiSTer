@@ -601,11 +601,39 @@ credit code.
   latch-pending -> IRQ0, and the `0x9800`/`0x9000`/`0xA000` decodes all match
   `ssmissin_sound_map`.
 
-**Next step: find where the 68000 actually spends its time.** Everything about
-the machine checks out, so the remaining question is which code path the game is
-on. Dump the 68000 PC distribution on hardware and diff it against MAME's for
-the same interval (the PC-history technique from NMK-24) -- that will show which
-branch diverges, and the ROM around it should say what condition it tested.
+**MEASURED: a coin sends our 68000 back through initialisation.** A fourth
+overlay build reports a 32-bit map of which 8 KB regions of the 256 KB program
+ROM the CPU touched in the last ~1.7 s (one bucket per overlay cell, windowed
+rather than sticky so it shows where the CPU is *now*; a sticky map saturates to
+all-ones and says nothing). `sim/rtl/nmk29_probes/sspc.lua` makes the identical
+measurement in MAME via a read tap on the same address range, so the two are
+directly comparable:
+
+  | | ours | MAME |
+  |---|---|---|
+  | boot window | `0x003EFE7B` | `0x000048FF` |
+  | steady attract | `0x0000007B` | `0x00000079` |
+  | **after a coin** | **`0x003AEE7B`** | `0x00000079` |
+
+Two divergences:
+1. In steady attract we touch **bucket 1** (`0x02000-0x03FFF`), which MAME never
+   touches.
+2. After a coin our CPU scatters across **buckets 9-21** -- code MAME never
+   executes -- and the pattern closely resembles our own *boot* window. MAME
+   handles the entire coin within buckets 0,3,4,5,6.
+
+**So the coin is not being credited; it is sending the machine back through
+init.** That accounts for every symptom at once: credits never accumulate, the
+sound commands stop with the loop, and attract restarts. It also explains why
+every component check passed -- inputs, CPU, interrupts, Z80 and OKI are all
+fine, and the game is simply being restarted before it can use them.
+
+**Next step: catch the branch.** Trap the first access into a bucket the CPU
+should not reach (bucket 9 or above) and capture the preceding bus cycles --
+the hardware equivalent of `TB_TRAP_PC` in the sims. The ROM at the branch
+should show what condition the game tested. Likely candidates to check first,
+given "re-init on coin": a watchdog this board has and we do not implement, or
+an exception (bus/address error) taken inside the coin handler.
 
 **Superseded hypothesis (kept so it is not retried): suspect the sound
 subsystem.**
