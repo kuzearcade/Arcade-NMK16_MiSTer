@@ -2286,6 +2286,7 @@ module tdragon2_core #(
 	) irq_gen (
 		.clk_sys(clk_sys),
 		.table_sel((HW_ROMS != 0) ? 4'd0 : {3'b0, game_powerins}), // V-PROM table 1 = powerins' 21.u71 (NMK16_Macross2.sv loads a 512-line file)
+		.halfpop(1'b0),   // NMK-29: no half-populated V-PROM on this board
 		.prom_we(vprom_we), .prom_addr(vprom_addr), .prom_data(ioctl_dout),
 		.reset(reset),
 		.line_start(vt_line_start),

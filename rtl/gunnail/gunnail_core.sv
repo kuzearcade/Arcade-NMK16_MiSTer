@@ -3272,16 +3272,21 @@ module gunnail_core #(
 	// 256 skipped bytes zero -- so the load drops the hole blocks and
 	// compacts the address rather than the .mra trying to express it (an
 	// .mra cannot). Every other set streams its PROM unchanged.
-	wire        vprom_halfpop = g_ssmissin;
-	wire        vprom_hole    = vprom_halfpop & ioctl_addr[5];
-	wire        vprom_we   = (HW_ROMS != 0) && ioctl_download && ioctl_wr && (ioctl_index == 16'd1) && !vprom_hole;
-	wire [11:0] vprom_addr = vprom_halfpop ? {4'd0, ioctl_addr[8:6], ioctl_addr[4:0]}
-	                                       : ioctl_addr[11:0];
+	// NMK-29: the V-PROM is loaded RAW, always. The half-populated ssmissin/
+	// airattck dump used to be compacted here, keyed on g_ssmissin -- but
+	// MiSTer sends index 254 (the .mra <switches>, where game_sel comes from)
+	// AFTER the ROM parts, so g_ssmissin was 0 during the index-1 stream and
+	// the raw dump went in untransformed. The compaction now lives in
+	// nmk_irq's read path (halfpop), where game_sel is valid.
+	wire        vprom_we   = (HW_ROMS != 0) && ioctl_download && ioctl_wr && (ioctl_index == 16'd1);
+	wire [11:0] vprom_addr = ioctl_addr[11:0];
+	wire        vprom_halfpop_rd = (HW_ROMS != 0) && g_ssmissin;   // sims use the baked, already-expanded table 8
 	nmk_irq #(
 		.VTIMING_FILE(VTIMING_FILE)
 	) irq_gen (
 		.clk_sys(clk_sys),
 		.table_sel((HW_ROMS != 0) ? 4'd0 : vprom_sel),
+		.halfpop(vprom_halfpop_rd),
 		.prom_we(vprom_we), .prom_addr(vprom_addr), .prom_data(ioctl_dout),
 		.reset(reset),
 		.line_start(vt_line_start),

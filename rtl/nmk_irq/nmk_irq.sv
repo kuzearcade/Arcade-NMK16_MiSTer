@@ -54,6 +54,15 @@ module nmk_irq #(
 	// and selects with this input. A 256-line file (every single-game
 	// build and sim) leaves the other tables unused; tie 0.
 	input  [3:0] table_sel,
+	// NMK-29: half-populated 82S147 dump (ssmissin/airattck, A5 tied to GND).
+	// The dump is loaded RAW (512 bytes at 0..511, hole blocks included) and
+	// the compaction table[i] == dump[{i[7:5],1'b0,i[4:0]}] is applied HERE at
+	// read time. It used to be applied at load time, keyed on game_sel -- but
+	// MiSTer sends the .mra <switches> (index 254, where game_sel comes from)
+	// AFTER the ROM parts, so game_sel was still 0 while the PROM streamed and
+	// the raw dump went in untransformed: 139/139 entries in the read window
+	// wrong, 75 of them zero. game_sel is valid by the time anything is read.
+	input        halfpop,
 
 	// Runtime PROM load (2026-09-15). The V-PROM used to be baked into the
 	// bitstream by the $readmemh below, which meant a shipped .rbf carried
@@ -127,7 +136,7 @@ module nmk_irq #(
 	reg       line_start_d;
 	reg       vcount0_d;
 	always @(posedge clk_sys) begin
-		rom_q        <= vtiming_prom[{table_sel, addr}];
+		rom_q        <= vtiming_prom[halfpop ? {3'd0, addr[7:5], 1'b0, addr[4:0]} : {table_sel, addr}];
 		line_start_d <= line_start;
 		vcount0_d    <= vcount[0];
 	end

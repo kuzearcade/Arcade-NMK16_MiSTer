@@ -343,8 +343,11 @@ sprite-and-scroll evidence for that core is the board captures).
   which every 32-byte block with address bit 5 set was never programmed and
   reads 0x00. The real table is `table[i] == dump[{i[7:5], 1'b0, i[4:0]}]` —
   exact for all 256 entries, with all 256 skipped bytes zero. `gunnail_core`
-  drops the hole blocks and compacts the address on load (`vprom_halfpop`);
-  an `.mra` cannot express a transform, so it belongs in RTL.
+  originally dropped the hole blocks and compacted the address **on load**
+  (`vprom_halfpop`) -- which turned out to be wrong, because `game_sel` (from
+  ioctl index 254) arrives *after* the PROM streams, so the gate was 0 and the
+  raw dump went in. **Now compacted at read time in `nmk_irq` (`halfpop`)** --
+  see NMK-29. An `.mra` cannot express a transform, so it belongs in RTL.
 - **Verified before building**: the whole load path was modelled off-board —
   extract each PROM from the zips its `.mra` actually names, push it through
   the RTL's address logic — and compared against the tables the bitstream used
@@ -469,16 +472,17 @@ sprite-and-scroll evidence for that core is the board captures).
   box. On a static screen any such change is corruption. Each event changed
   exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
 
-### NMK-29 · ssmissin/airattck: coins do not register (OPEN, PRE-EXISTING)
+### NMK-29 · ssmissin/airattck: no coins, no audio -- V-PROM loaded untransformed (FIXED)
 
 **User report:** S.S. Mission and Air Attack have no audio and coin-up does not
 work. Both are `game_sel 52` (ssmissin, airattck, airattcka share it).
 
-**NOT a regression from the 2026-09-16 work.** Verified by running the
-`20260916` bitstream (built before NMK-24, HQ2X and everything else that day,
-extracted from git at `af15364^`): coins fail there identically -- "INSERT COIN"
-still displayed after four coin presses. The HQ2X/NMK-27/NMK-28 changes are
-video-only and the NMK-24 `pause_68k` gate is inert while nothing is pausing.
+**Not from the 2026-09-16 work -- but it IS a regression, from NMK-22 the day
+before.** The `20260916` bitstream (extracted from git at `af15364^`) fails
+identically, so nothing from 09-16 caused it. These sets worked when added on
+09-14 with a baked, pre-expanded V-PROM table; NMK-22 (09-15) moved the PROM
+to `.mra` streaming and introduced the load-time dependency described below.
+The 97/97 sweep after NMK-22 passed because it only checks attract animation.
 
 **The two symptoms are probably ONE bug.** With coins not registering you never
 reach gameplay, so only the sparse attract audio is ever heard. Measured with
@@ -708,13 +712,62 @@ The sequencer advances when the timer at `$3C(A6)` reaches zero
 (`SUBQ.W #1,$3C(A6)` / `BNE`), so a ~60x advance rate means **the timer is being
 loaded with a far smaller value than MAME's** -- or ticked far more often.
 
-**Next step: trap the WRITE DATA at `0x0B5A3C`** (the timer) and compare the
-loaded value with MAME's at the same point. The value comes from the script
-stream, so if it differs while the pointer matches, the script data being read
-is wrong; if the value matches but the rate still differs, the timer is being
-decremented too often -- i.e. the routine is entered more than once per frame.
-That distinction picks between a data problem and a timing problem, and it is
-the last obvious fork before this turns into full script tracing.
+**ROOT CAUSE: the half-populated V-PROM was loaded untransformed, because the
+transform was keyed on `game_sel` and `game_sel` is not known yet when the
+PROM streams.** Every link measured or documented:
+
+1. `ssm-pr1.114` / `82s147.uh6` (CRC ed0bd072) is a half-populated 512-byte
+   dump of a 256-byte 82S147 with A5 tied to GND. Checked the file: **all 256
+   bytes with address bit 5 set are zero.** Real table:
+   `table[i] == dump[{i[7:5], 1'b0, i[4:0]}]`.
+2. `gunnail_core` applied that compaction **at load time**, gated on
+   `vprom_halfpop = g_ssmissin`.
+3. `game_sel` comes from the `.mra` `<switches>` block on ioctl **index 254**
+   (`game_sel_comb = dip_sw[2]...`, reset value 0 = gunnail).
+4. **MiSTer sends index 254 AFTER the `<rom>` parts** -- `docs/hw-bringup.md`
+   states it and it was verified on hardware (`ioctl_last_index=254`); it is
+   also the only ordering consistent with the earlier "254 overwrote the reset
+   vector" bug.
+5. So during the index-1 stream `g_ssmissin == 0`: no hole-dropping, no
+   compaction, raw dump written verbatim. Consequence, computed from the file:
+   **139 of the 139 entries `nmk_irq` reads in `[0x75,0x100)` are wrong, 75 of
+   them zero** -- and a zero entry decodes as trigger-active, IPL 0, with
+   VBLANK/VSYNC/sprite-DMA all asserted at the wrong scanlines.
+
+That accounts for every measurement above without contradiction: interrupts
+still fire and are acknowledged (same 3 triggers/frame, wrong lines and levels);
+the object-script engine ticks ~60x too fast and the main loop starves the
+soundlatch; inputs, Z80, OKI and DIPs all test clean because they *are* clean;
+attract still animates; and **only game_sel 52 is affected**, because it is the
+only set whose PROM load depended on `game_sel` at all. NMK-22's off-board
+verification modelled the transform but **not the ioctl sequencing** -- that
+was the gap.
+
+**Fix:** the PROM is now always loaded raw (512 bytes at 0..511, holes
+included) and the compaction is applied in **`nmk_irq`'s read path** via a new
+`halfpop` input (`{3'd0, addr[7:5], 1'b0, addr[4:0]}`), driven by
+`(HW_ROMS != 0) && g_ssmissin`, which is valid by the time anything is read.
+Sims keep the baked table 8. Every other `nmk_irq` instance ties `halfpop` low.
+
+**Verified on hardware** (Gunnail rebuilt: setup +0.636 / hold +0.193; Afega
++0.462 / +0.248), identical scripted sequence -- coin x2, start, in-game
+`arecord`:
+
+  | set | after start | in-game audio RMS |
+  |---|---|---|
+  | **ssmissin** | **gameplay** (player plane, enemies, no INSERT COIN) | **542.5** (was 0.0) |
+  | **airattck** | **gameplay** (player plane, score HUD) | **311.4** (was 0.0) |
+  | mustang (control) | gameplay | 1833.1 |
+  | gunnail (control) | gameplay | 1504.7 |
+
+Both reported symptoms were one bug, as suspected.
+
+**Lessons worth keeping:** (a) any per-game decision made *during* an ioctl
+stream must not depend on `game_sel` -- index 254 arrives last; make the
+decision at read/run time instead. (b) The sims never see this class of bug:
+they pass `GAME_SEL` as a parameter and stream only index 0, so `game_sel` is
+valid from t=0. A `gunnail_hs` mode that sends index 254 *last*, like the real
+loader, would make it reproducible in Verilator.
 
 **Superseded hypothesis (kept so it is not retried): suspect the sound
 subsystem.**

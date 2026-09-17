@@ -1299,7 +1299,7 @@ module raphero_core #(
 	) irq_gen (
 		.clk_sys(clk_sys),
 		.table_sel(4'd0),
-		.prom_we(vprom_we), .prom_addr(vprom_addr), .prom_data(ioctl_dout),
+		.halfpop(1'b0),   // NMK-29: no half-populated V-PROM on this board.prom_we(vprom_we), .prom_addr(vprom_addr), .prom_data(ioctl_dout),
 		.reset(reset),
 		.line_start(vt_line_start),
 		.vcount(vt_vcount),
