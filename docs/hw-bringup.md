@@ -3318,7 +3318,12 @@ All 14 are Afega sets, so all ran with `INCLUDE_AFEGA=1, INCLUDE_NMK=0`:
 
 Both partials were re-run on the **unsplit** core as controls and scored
 identically — spec2kh 61/62, redfoxwp2 23/62 — so both are pre-existing
-differences against MAME, not split regressions. Combined with part 1,
+differences against MAME, not split regressions. **(2026-09-17: redfoxwp2's
+"pre-existing difference" was a real defect, NMK-30 — id 35 had no
+decryptcode where MAME uses `init_grdnstrm`, so the 68000 crashed at boot
+and the 23 matching frames were the blank ones. On id 31 it is 62/62. A
+partial that starts matching and never recovers is a crash, not a
+rendering difference; look at the first mismatching frame.) Combined with part 1,
 **zero regressions are attributable to the split**, and simulation
 coverage reaches **48 of the core's 52 game ids** (up from 38).
 
@@ -3651,3 +3656,47 @@ residual is a 14-px blinking HUD strip (NMK-16). The build margin
 that used to force NMK16_Raphero seed retries (NMK-10) is gone: the palette
 and VRAM recoding took every core to about half the ALMs and NMK16_Raphero/
 NMK16_Macross2 from 94-95 % to 79-80 % M10K.
+
+## 97-set hardware sweep on the 20260917 bitstreams (commit `d3011df`, 2026-09-17)
+
+The first sweep to require every set to **start a game**, not just boot.
+`tools/mister_sweep3.sh` on the board: load `.mra`, 45 s settle, shot A
+(attract), coin x2 + start on the keyboard (`mister_keys.py 5 5 1`), shot B
+at +12 s, shot C at +22 s; one log line per set so a dropped ssh loses
+nothing. `tools/analyse_sweep3.py` judges off-board (A non-blank and varied,
+B or C differs from A by more than a fade could) and files the shots as
+`<set>_{A,B,C}_*.png` under a capture directory; a labelled contact sheet of
+all 97 C frames was then **looked at**, set by set. 97 x ~80 s = 2 h 10 min.
+
+  | | sets |
+  |---|---|
+  | loaded, drew attract, responded to coin+start | **97/97** |
+  | in play at +22 s | 64 |
+  | started but still on an intro / select / stage card at +22 s | 32 (see below) |
+  | **rendered garbage** | **1 -- redfoxwp2, NMK-30** |
+
+The four judge flags were all attract-only: hachamf/hachamfa/hachamfb2 fade
+to black at the 45 s mark (known from the NMK-24 sweep) and tdragon1 shows a
+7-colour text screen there; all four responded 100 % and were in play at C.
+
+**redfoxwp2 is the finding.** All three frames were full-screen blue noise.
+It had passed every earlier sweep because those scored only "B differs from
+A", and noise differs from noise. Cause and fix in NMK-30: the core's id 35
+was "no decrypt" where MAME's GAME line says `init_grdnstrm`; the `.mra`
+now selects id 31 (grdnstrmk, identical configuration), no rebuild.
+
+**The 32 "started, not yet playing" sets** are a property of the games, not
+the core: Acrobat Mission (story crawl), Guardian Storm x6 + redfoxwp2a
+(character SELECT), Power Instinct x6 (PLAYER SELECT), Macross II x3 (STAGE
+1 card), Nouryoku x2 (round select), Pops Pops (bonus roulette), Firehawk,
+Mangchi, spec2k/spec2kh (intros), Red Hawk x9 + stagger1 (ACE 1 card),
+Strahl x4 (weapon select), tomagic (stage title). A second pass
+(`tools/mister_sweep3_pass2.sh`: same start, then three button presses to
+skip/confirm, shots at ~+45 s and ~+65 s) captured gameplay for those; its
+result is recorded below when it finished. twinactn was on a CONTINUE screen
+at +22 s -- the unattended player had already died -- and its +12 s frame
+is gameplay.
+
+Captures: `~/d3011df-sweep-captures/<set>/` (291 native PNGs from the main
+pass, plus the second-pass D/E frames), with `judge.txt`, `board_log.txt`
+and `manifest.txt` beside them.

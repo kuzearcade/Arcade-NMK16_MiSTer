@@ -385,7 +385,7 @@ module gunnail_core #(
 	                 G_GRDNSTRMJ = 6'd32,  // init_grdnstrmg
 	                 G_GRDNSTRMG = 6'd33,  // init_grdnstrmg, 2 MB BG, sprite byte pairs
 	                 G_GRDNSTRMAU = 6'd34, // horizontal, init_grdnstrmau, 2 MB BG, sprite pairs, firehawk video
-	                 G_REDFOXWP2 = 6'd35,  // no decrypt
+	                 G_REDFOXWP2 = 6'd35,  // init_grdnstrm (NMK-30: was wrongly "no decrypt" -- the 68000 crashed at boot). Same config as id 31; the .mra now uses 31, this id is kept so an old .mra still works
 	                 G_REDFOXWP2A = 6'd36, // init_redfoxwp2a
 	                 G_POPSPOPS = 6'd37,   // init_grdnstrm, screen_update_bubl2000, no sprite ROM
 	                 G_MANGCHI  = 6'd38,   // init_bubl2000, 1 MB BG, 0x80000 sprite pairs, no 8x8 ROM
@@ -501,7 +501,7 @@ module gunnail_core #(
 	                       ((game_sel == G_GRDNSTRM) || (game_sel == G_GRDNSTRMAU) || g_fh_snd) ? 2'd3 : 2'd0; // firehawk, spec2k, spec2kh: the firehawk machine config
 	// decryptcode table (address bits 17..13 of the program ROM), see afega_decrypt
 	wire [3:0] afega_dec = (game_sel == G_REDHAWK)  ? 4'd1 : (game_sel == G_REDHAWKI) ? 4'd2 : (game_sel == G_REDHAWKSA) ? 4'd3 :
-	                       (game_sel == G_REDHAWKG) ? 4'd4 : ((game_sel == G_GRDNSTRMK) || (game_sel == G_POPSPOPS)) ? 4'd5 :
+	                       (game_sel == G_REDHAWKG) ? 4'd4 : ((game_sel == G_GRDNSTRMK) || (game_sel == G_POPSPOPS) || (game_sel == G_REDFOXWP2)) ? 4'd5 :
 	                       ((game_sel == G_GRDNSTRMJ) || (game_sel == G_GRDNSTRMG)) ? 4'd6 : (game_sel == G_GRDNSTRMAU) ? 4'd7 :
 	                       (game_sel == G_REDFOXWP2A) ? 4'd8 : ((game_sel == G_MANGCHI) || (game_sel == G_BUBL2000) || (game_sel == G_HOTBUBLA)) ? 4'd9 :
 	                       ((game_sel == G_SPEC2K) || (game_sel == G_SPEC2KH)) ? 4'd10 : 4'd0;

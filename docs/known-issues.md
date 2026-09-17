@@ -472,6 +472,46 @@ sprite-and-scroll evidence for that core is the board captures).
   box. On a static screen any such change is corruption. Each event changed
   exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
 
+### NMK-30 · redfoxwp2 (Hong Hu Zhanji II, China set 1): noise on screen, never ran (FIXED, data-only)
+
+**Found by the 2026-09-17 97-set hardware sweep** (`tools/mister_sweep3.sh`
++ `tools/analyse_sweep3.py`, three shots per set). All three redfoxwp2
+frames -- attract, +12 s and +22 s after coin+start -- were a full-screen
+field of blue noise. It had **passed every earlier sweep**, because those
+judged only "shot B differs from shot A" and noise changes frame to frame;
+and the reference-sim campaign had it at **23/62 with the note "pre-existing
+difference, not a split regression"** -- the 23 matching frames were the
+blank boot frames, and nobody looked at frame 24.
+
+**Cause: a wrong game-id table entry.** `gunnail_core.sv` declared
+`G_REDFOXWP2 = 35 // no decrypt`, but MAME's GAME line is
+`GAME( 1998, redfoxwp2, grdnstrm, grdnstrmk, grdnstrk, afega_state, init_grdnstrm, ROT270, ...)`
+-- `init_grdnstrm`, the same address scramble as grdnstrmk (bits 17/16 and
+15/14 swapped). Id 35 handed the 68000 scrambled code; it crashed at boot
+and the uninitialised tilemap RAM was drawn. Every column of that GAME
+line matches grdnstrmk's, so the set never needed its own id.
+
+**Fix (no rebuild):** the `.mra` now selects **id 31** (grdnstrmk):
+`<switches default="FF,FF,1F">`, via `tools/gen_gunnail_mra.py`'s
+`REDFOXWP2 = afega(31, ...)`. For the next build, id 35 also maps to decrypt
+table 5 in the RTL so an old `.mra` keeps working. The sim harness's
+`SEL_redfoxwp2` is 31 as well.
+
+**Verification, reference sim** (`sim/rtl/gunnail_mg`, `TB_GAME_SEL=31`,
+320M cycles, `mg_cmp.py` against the MAME snapshot set, which covers frames
+20-100): **81/81 pixel-exact on every frame that has a reference**, and
+**62/62** on the campaign's original 20-81 window where id 35 scored 23/62.
+(The runner's "0/300" for frames 150-449 is vacuous -- there are no MAME
+references past frame 100 for this set -- and `mg_cmp.py` crashes on the
+first missing one rather than saying so.) Board verification: pending the
+end of the sweep that found it.
+
+**Lesson:** a smoke test that scores "changed after input" cannot tell a
+running game from noise. Look at the frames -- a contact sheet of 97
+gameplay shots takes two minutes to scan -- and treat any "pre-existing
+partial" in a sim campaign as an open defect until someone has looked at
+the first non-matching frame.
+
 ### NMK-29 · ssmissin/airattck: no coins, no audio -- V-PROM loaded untransformed (FIXED)
 
 **User report:** S.S. Mission and Air Attack have no audio and coin-up does not

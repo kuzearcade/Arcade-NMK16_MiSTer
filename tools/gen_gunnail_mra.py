@@ -985,8 +985,12 @@ GRDNSTRMAU = afega(34, 1998, "Afega", False, GRDNSTRM_DIPS, [
     ("bgtile, 0x200000 (8bpp: two 4bpp halves, four files)", [("uc15_27c040.10", "0822f7e0"), ("uc19_27c040.8", "fa078e35"), ("uc6_27c040.9", "ec288b95"), ("uc12_27c040.10", "a9ceec33")]),
     ("sprites, 0x200000 (two ROM_LOAD16_BYTE pairs)", [pair(("uc3_27c040.8", "9fc36932"), ("uc10_27c040.9", "6e809d09")), pair(("uc4_27c040.10", "73bd6451"), ("uc11_27c040.8", "e699a3c9"))]),
     ("oki1, 0x040000", [("uc18_27c020.9", "e911ce33")])], bg8=True)
-REDFOXWP2 = afega(35, 1998, "Afega", True, GRDNSTRK_DIPS, [
-    ("maincpu, 0x080000", [pair(("u112", "3f31600b"), ("u107", "daa44ab4"))]),
+# NMK-30: redfoxwp2 is GAME(... grdnstrmk, grdnstrk, init_grdnstrm ...) -- the
+# same configuration as grdnstrmk in every column -- so it shares game id 31.
+# It shipped on id 35, which the core had as "no decrypt": scrambled code,
+# 68000 crash at boot, noise on screen (found by the 2026-09-17 sweep).
+REDFOXWP2 = afega(31, 1998, "Afega", True, GRDNSTRK_DIPS, [
+    ("maincpu, 0x080000 (init_grdnstrm scramble)", [pair(("u112", "3f31600b"), ("u107", "daa44ab4"))]),
     (Z80, [("u92", "864b55c2")]),
     ("fgtile, 0x010000", [("u4", "19239401")]), GS_BG,
     ("sprites, 0x200000 (plain)", [("afega_af1-sp.uc13", "7d4d4985")]),
