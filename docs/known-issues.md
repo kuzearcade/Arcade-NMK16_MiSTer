@@ -766,8 +766,12 @@ Both reported symptoms were one bug, as suspected.
 stream must not depend on `game_sel` -- index 254 arrives last; make the
 decision at read/run time instead. (b) The sims never see this class of bug:
 they pass `GAME_SEL` as a parameter and stream only index 0, so `game_sel` is
-valid from t=0. A `gunnail_hs` mode that sends index 254 *last*, like the real
-loader, would make it reproducible in Verilator.
+valid from t=0. **Done:** `make GAME=ssmissin SWL=1 run` in `gunnail_hs`
+streams the V-PROM on index 1 and the switches on index 254 last, like the
+loader, and reproduces this bug on the pre-fix RTL -- 562 sprite-DMA
+triggers in 281 raster frames (two per frame) and half the soundlatch
+writes, against an identical, healthy `SWL=0` run of the same binary; the
+fixed RTL is clean in both modes. Table and usage in `docs/sim-harness.md`.
 
 **Regression introduced by the fix itself, caught on the board before the
 bitstream shipped (2026-09-17).** The `.halfpop(1'b0)` tie-off was added to

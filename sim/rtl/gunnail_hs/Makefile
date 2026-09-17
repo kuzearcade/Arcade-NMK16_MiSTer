@@ -4,6 +4,9 @@
 # .mra layout (tools/gen_gunnail_mra.py --ioctl <set> lists the regions).
 #   make GAME=bioship run          # obj_dir_bioship, roms/bioship_ioctl.bin
 #   TB_DUMP_PPM=1 make GAME=strahl run
+#   make GAME=ssmissin SWL=1 run   # NMK-29 loader order: V-PROM on index 1,
+#                                  # <switches> on index 254 LAST (game_sel is
+#                                  # 0 while the ROMs stream, as on the board)
 GAME   ?= hachamf
 CYCLES ?=
 
@@ -21,7 +24,13 @@ M68705_DIR := ../../../rtl/m68705
 JT680X_DIR := ../../../rtl/third_party/jt680x/hdl
 RTL_DIR := ../../../rtl
 MODEL_DIR := ../../models
-OBJ_DIR := obj_dir_$(GAME)
+# NMK-29: SWL=1 builds the top with SWITCHES_FROM_IOCTL=1; the tb then pushes
+# the raw V-PROM on index 1 and the <switches> block on index 254 LAST.
+SWL ?= 0
+OBJ_DIR := obj_dir_$(GAME)$(if $(filter 1,$(SWL)),_swl,)
+VPROM_ssmissin := ssm-pr1.114
+VPROM_airattck := 82s147.uh6
+VPROM_airattcka := 82s147.uh6
 TOP := gunnail_hs_top
 R := ../$(GAME)/roms/$(GAME)
 ifneq ($(filter $(GAME),bjtwin cactus),)
@@ -88,13 +97,16 @@ all: run
 roms/$(GAME)_ioctl.bin:
 	cd ../../.. && python3 tools/mk_ioctl_stream.py $$(python3 tools/gen_gunnail_mra.py --ioctl $(GAME)) --out sim/rtl/gunnail_mg_hw/roms/$(GAME)_ioctl.bin
 
+roms/$(GAME)_vprom.bin:
+	unzip -p ../../../mame_roms/$(GAME).zip $(VPROM_$(GAME)) > $@
+
 roms: roms/$(GAME)_ioctl.bin
 
 # ROM_FILE/OKI*_ROM_FILE only feed the golden audits of the HW-path caches.
 $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gunnail_hs.cpp $(FX68K_DIR)/fx68k.sv roms/$(GAME)_ioctl.bin
 	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --top-module $(TOP) $(EXTRA_VFLAGS) \
 		--Mdir $(OBJ_DIR) +define+SIMULATION +define+OKI_CACHE_DIAG \
-		-GGAME_SEL=$(SEL) -GVTIMING_FILE=\"../../../roms/gunnail_multi_vtiming.hex\" \
+		-GGAME_SEL=$(SEL) -GSWITCHES_FROM_IOCTL=$(SWL) -GVTIMING_FILE=\"../../../roms/gunnail_multi_vtiming.hex\" \
 		-GROM_FILE=\"$(R)_maincpu.hex\" -GOKI1_ROM_FILE=\"$(R)_oki1.hex\" -GOKI2_ROM_FILE=\"$(R)_oki2.hex\" \
 		-I$(M68705_DIR) -y $(FX68K_DIR) -y $(JT680X_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl -y $(RTL_DIR)/third_party/jt51/hdl -y $(RTL_DIR)/third_party/jtopl/hdl \
 		$(SOURCES) $(FX68K_DIR)/fx68k.sv $(FX68K_DIR)/fx68kAlu.sv $(FX68K_DIR)/uaddrPla.sv \
@@ -102,8 +114,13 @@ $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_gunnail_hs.cpp $(FX68K_DIR)/fx68k.sv roms/$(GA
 		-o V$(TOP)
 	cp $(FX68K_DIR)/microrom.mem $(FX68K_DIR)/nanorom.mem $(M68705_DIR)/6805.uc .
 
-run: $(OBJ_DIR)/V$(TOP)
-	TB_PREFIX=$(GAME) ./$(OBJ_DIR)/V$(TOP) $(CYCLES)
+SWITCHES ?= FF,FF,$(shell printf %02X $(SEL))
+ifeq ($(SWL),1)
+RUN_ENV := TB_VPROM=roms/$(GAME)_vprom.bin TB_SWITCHES=$(SWITCHES)
+RUN_DEPS := roms/$(GAME)_vprom.bin
+endif
+run: $(OBJ_DIR)/V$(TOP) $(RUN_DEPS)
+	$(RUN_ENV) TB_PREFIX=$(GAME) ./$(OBJ_DIR)/V$(TOP) $(CYCLES)
 
 clean:
 	rm -rf obj_dir_* roms/*_ioctl.bin *_hw_68k.trace *_hw_frame_*.ppm microrom.mem nanorom.mem

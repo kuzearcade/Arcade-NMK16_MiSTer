@@ -84,12 +84,7 @@ int main(int argc, char **argv) {
 
 	// hiscore config (<rom index="3">) then the saved dump (<nvram index="4">),
 	// exactly the two streams MiSTer pushes on the real board.
-	auto push_stream = [&](const char *path, int index) {
-		FILE *hf = fopen(path, "rb");
-		if (!hf) { printf("FAIL: could not open %s\n", path); exit(1); }
-		std::vector<uint8_t> buf; int c;
-		while ((c = fgetc(hf)) != EOF) buf.push_back((uint8_t)c);
-		fclose(hf);
+	auto push_bytes = [&](const std::vector<uint8_t> &buf, int index) {
 		top.ioctl_index = index;
 		top.ioctl_download = 1;
 		for (size_t i = 0; i < buf.size(); i++) {
@@ -102,9 +97,33 @@ int main(int argc, char **argv) {
 		for (int i = 0; i < 20; i++) tick();
 		printf("pushed %zu bytes on ioctl index %d\n", buf.size(), index);
 	};
+	auto push_stream = [&](const char *path, int index) {
+		FILE *hf = fopen(path, "rb");
+		if (!hf) { printf("FAIL: could not open %s\n", path); exit(1); }
+		std::vector<uint8_t> buf; int c;
+		while ((c = fgetc(hf)) != EOF) buf.push_back((uint8_t)c);
+		fclose(hf);
+		push_bytes(buf, index);
+	};
+	// NMK-29 ordering mode: the real MiSTer loader sends <rom index="1"> (the
+	// V-PROM) right after index 0, and the <switches> block on index 254 LAST,
+	// with the core still in reset. TB_VPROM streams the RAW dump on index 1;
+	// TB_SWITCHES ("FF,FF,34") streams the switch bytes on 254 after everything
+	// else. With the top built at SWITCHES_FROM_IOCTL=1, game_sel is 0 during
+	// every ROM/PROM stream -- exactly the hardware sequence.
+	if (const char *vp = std::getenv("TB_VPROM")) push_stream(vp, 1);
 	if (!std::getenv("TB_HS_OFF")) {
 		push_stream(std::getenv("TB_HS_CFG") ? std::getenv("TB_HS_CFG") : "roms/hachamf_hscfg.bin", 3);
 		if (!std::getenv("TB_HS_NODUMP")) push_stream("roms/hachamf_hsdump.bin", 4);
+	}
+	if (const char *sw = std::getenv("TB_SWITCHES")) {
+		std::vector<uint8_t> b; std::string t(sw), tok; 
+		for (size_t i = 0; i <= t.size(); i++) {
+			if (i == t.size() || t[i] == ',') { if (!tok.empty()) b.push_back((uint8_t)strtoul(tok.c_str(), nullptr, 16)); tok.clear(); }
+			else tok += t[i];
+		}
+		printf("tb_hs: <switches> on index 254 LAST: %s (game_sel byte = 0x%02X)\n", sw, b.size() > 2 ? b[2] : 0xFF);
+		push_bytes(b, 254);
 	}
 	top.ioctl_index = 0;
 

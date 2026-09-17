@@ -11,6 +11,12 @@
 // parameters, see the Makefile.
 module gunnail_hs_top #(
 	parameter GAME_SEL      = 0,
+	// NMK-29: 1 = derive game_sel from an ioctl index-254 <switches> stream,
+	// mirroring NMK16_Gunnail.sv (dip_sw capture, game_sel_comb, registered
+	// game_sel_r reset to 0). MiSTer sends that block AFTER the ROM parts, so
+	// game_sel is 0 while every ROM/PROM streams -- the class of bug the
+	// parameter-driven default can never show. The tb must push 254 LAST.
+	parameter SWITCHES_FROM_IOCTL = 0,
 	parameter VTIMING_FILE  = "",
 	parameter ROM_FILE      = "",
 	parameter OKI1_ROM_FILE = "",
@@ -196,12 +202,24 @@ module gunnail_hs_top #(
 		.SDRAM_nCAS(SDRAM_nCAS), .SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nWE(SDRAM_nWE), .SDRAM_CKE(SDRAM_CKE)
 	);
 
+	// ---- NMK-29: index-254 <switches> capture (copy of NMK16_Gunnail.sv) ----
+	reg [7:0] dip_sw [0:7];
+	integer dip_i;
+	initial for (dip_i = 0; dip_i < 8; dip_i = dip_i + 1) dip_sw[dip_i] = 8'hFF;
+	always @(posedge clk_sys)
+		if (ioctl_download && ioctl_wr && (ioctl_index == 16'd254) && !ioctl_addr[24:3])
+			dip_sw[ioctl_addr[2:0]] <= ioctl_dout;
+	wire [5:0] game_sel_comb = (dip_sw[2] == 8'hFF) ? 6'd0 : dip_sw[2][5:0];
+	reg  [5:0] game_sel_r = 6'd0;
+	always @(posedge clk_sys) game_sel_r <= game_sel_comb;
+	wire [5:0] game_sel_eff = (SWITCHES_FROM_IOCTL != 0) ? game_sel_r : GAME_SEL[5:0];
+
 	// VTIMING_FILE is always $readmemh (no HW_ROMS gating). OKI*_ROM_FILE
 	// feed only the golden-byte audit of the HW-path OKI caches.
 	gunnail_core #(.HW_ROMS(1), .VTIMING_FILE(VTIMING_FILE),
 	               .ROM_FILE(ROM_FILE), .DBG_MISS_PAINT(DBG_MISS_PAINT),
 	               .OKI1_ROM_FILE(OKI1_ROM_FILE), .OKI2_ROM_FILE(OKI2_ROM_FILE)) core_inst (
-		.clk_sys(clk_sys), .reset(reset), .game_sel(GAME_SEL[5:0]), .lowres_o(lowres_o),
+		.clk_sys(clk_sys), .reset(reset), .game_sel(game_sel_eff), .lowres_o(lowres_o),
 		.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
 		.ioctl_index(ioctl_index),
 		.sd0_addr(p0_addr), .sd0_wrl(p0_wrl), .sd0_wrh(p0_wrh), .sd0_din(p0_din), .sd0_dout(p0_dout), .sd0_dout_pair(p0_dout_pair), .sd0_req(p0_req), .sd0_ack(p0_ack),

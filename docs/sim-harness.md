@@ -79,3 +79,45 @@ ROM dumps for all 101 romsets (split MAME convention) are available locally at `
 1. A real testbench for the first Tier 1 DUT (`fx68k` wrapper — see `deps.lock`) replacing the `example_counter` smoke test's role as "the thing being proven out."
 2. A full, real oracle trace captured from `cactus`/`bjtwinp`/`nouryokup` covering their complete memory map (not just the narrow work-RAM window used for the validation pass above) — this is the first real oracle trace this project will diff RTL against.
 3. Once fx68k's own bus behavior is diffed clean against that oracle, extend the same harness to `nmk16spr` (sprite engine) and the tilemap engine using the `F` frame-checksum path, per the plan's "frame-level oracle diffing" step.
+
+## Loader-order mode: `gunnail_hs` with `SWL=1` (NMK-29 class)
+
+The hardware-mode sims pass the game as a build parameter (`-GGAME_SEL`) and
+stream only ioctl index 0, so `game_sel` is valid from t=0. MiSTer does not
+work that way: the `.mra` `<switches>` block arrives on **index 254 after
+every `<rom>` part**, so any per-game decision taken *while a ROM streams*
+sees `game_sel == 0`. That is how NMK-29 (the half-populated ssmissin V-PROM
+loaded untransformed) passed every sim and failed on the board.
+
+`sim/rtl/gunnail_hs` now reproduces the real order:
+
+    make GAME=ssmissin SWL=1 run
+
+builds `gunnail_hs_top` with `SWITCHES_FROM_IOCTL=1` (an 8-byte `dip_sw[]`
+latched from index 254, `game_sel` taken from byte 2 exactly as
+`NMK16_Gunnail.sv` does) and the testbench pushes, in loader order: the ROM
+image on index 0, the raw 512-byte V-PROM dump on index 1 (`TB_VPROM`,
+extracted from the MAME zip by the `roms/<game>_vprom.bin` rule), any
+hiscore config, then `TB_SWITCHES` (`FF,FF,<sel>`) on index 254 **last**.
+`SWL=0` is the old behaviour. Objects go to `obj_dir_<game>_swl` so both
+builds coexist.
+
+Same-binary 2x2 on ssmissin, 200M ticks, `TB_HS_OFF=1`, old RTL = `4b2a07b`
+(before the NMK-29 fix), new = `1d59240`+:
+
+  | | sprite-DMA triggers / 281 raster frames | soundlatch writes | 68000 instructions | distinct PCs, last quarter |
+  |---|---|---|---|---|
+  | old, `SWL=0` | 282 | 4 | 7,414,640 | 289 |
+  | **old, `SWL=1`** | **562** (two per frame) | **2** | **7,312,412** | **216** |
+  | new, `SWL=0` | 282 | 4 | 7,414,640 | 289 |
+  | new, `SWL=1` | 282 | 4 | 7,414,215 | 289 |
+
+Only the old RTL under the real loader order deviates; `SWL=0` is healthy on
+both, which is precisely why the bug was invisible before. (The soundlatch
+count is boot-dominated at this length -- MAME also writes it exactly 4
+times in its first 600 frames -- so the DMA-trigger count is the sharp
+discriminator here; a run long enough to reach attract would show the
+~17/s vs ~0.1/s soundlatch gap measured on hardware.)
+
+Use `SWL=1` for any change that touches ioctl-time behaviour keyed on the
+selected game: SDRAM region bases, ROM descrambling, PROM transforms.
