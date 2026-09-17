@@ -469,6 +469,68 @@ sprite-and-scroll evidence for that core is the board captures).
   box. On a static screen any such change is corruption. Each event changed
   exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
 
+### NMK-29 · ssmissin/airattck: coins do not register (OPEN, PRE-EXISTING)
+
+**User report:** S.S. Mission and Air Attack have no audio and coin-up does not
+work. Both are `game_sel 52` (ssmissin, airattck, airattcka share it).
+
+**NOT a regression from the 2026-09-16 work.** Verified by running the
+`20260916` bitstream (built before NMK-24, HQ2X and everything else that day,
+extracted from git at `af15364^`): coins fail there identically -- "INSERT COIN"
+still displayed after four coin presses. The HQ2X/NMK-27/NMK-28 changes are
+video-only and the NMK-24 `pause_68k` gate is inert while nothing is pausing.
+
+**The two symptoms are probably ONE bug.** With coins not registering you never
+reach gameplay, so only the sparse attract audio is ever heard. Measured with
+`arecord` off the capture box (8-10 s windows), with gunnail as the control:
+
+  | | RMS |
+  |---|---|
+  | gunnail (control) | 1308.8 -- capture path good |
+  | ssmissin | 133.4 one run, 0.0 another |
+  | airattck | 0.0 one run, 22.7 another |
+  | twinactn | 268.5 |
+
+The readings **flip between runs**, because an 8-10 s sample lands randomly in
+the attract loop's silent stretches. A single short sample is NOT a valid audio
+measure for these games -- record across a full attract cycle, or fix the coin
+problem first and measure in-game.
+
+**MAME registers the coin; we do not.** Oracle run with a deterministic control
+(`scratchpad/ss4.lua`, screen-hash at fixed frames):
+
+```
+frame 400 (before input):  with-coin 879538   no-coin 879538   <- identical, deterministic
+frame 600 (after 2 coins): with-coin 366219   no-coin 834979   <- differs, so the coin took
+```
+
+**Everything obvious already checks out**, so the cause is subtler than a
+mis-decode:
+- `ssmissin_map` vs our decode: IN0 `0x0C0000` (r=0), IN1 `0x0C0004` (r=2),
+  DSW1 `0x0C0006` (r=3), flip r=0xA, tilebank r=0xC, soundlatch r=0xF -- all match.
+- Regions: mainram `0x0B0000-0x0BFFFF`, scroll `0x0C4000`, palette `0x0C8000`,
+  bgvram `0x0CC000`, txvram `0x0D0000` mirror 0x1800 -- all match.
+- Inputs: MAME IN0 is `IP_ACTIVE_LOW` with bit0 COIN1, bit1 COIN2, bit2 service,
+  bit3 START1, bit4 START2. Our `in0_i` is `~{...}` with exactly that order, so
+  unpressed = `0xFF` low byte and coin = `0xFE`, matching MAME's measured
+  `00FF` -> `00FE`.
+- DIPs: ssmissin IS in `game_mustang` (id 52), so `dsw1_i = {dip_sw[1],
+  dip_sw[0]}` = `0xFFFF`; Coinage `0xe000` = 1C/1C. The `.mra` default
+  `FF,FF,34` equals MAME's computed default.
+- The keyboard coin path works on this core -- tharrier started a game with the
+  same key earlier the same session.
+
+**Disproven:** the high byte. MAME returns `0x00FF` (8-bit port in a 16-bit
+space) where we return `0xFFFF`. The game reads IN0 as a word
+(`$000412: MOVE.W $0C0000,$0BFFFC` and `$00CAE8: MOVE.W $0C0000,D7`) but tests
+it with `BTST D5,D7` at `$00CB04` against a 5-entry table at `$00CB3A` holding
+bits **1,0,2,4,3** -- all in the low byte. The high byte is never tested.
+
+**Next step:** instrument on hardware. Put the value the core actually returns
+for IN0 on a debug overlay (the technique that cracked NMK-24) rather than
+reasoning further from the map -- every static check above already passes, so
+what the CPU really sees is the missing datum.
+
 ### NMK-28 · Rotated + scandoubler cut the picture off (FIXED)
 
 **Reported by the user:** with HQ2X on, switching Gunnail's Orientation to
