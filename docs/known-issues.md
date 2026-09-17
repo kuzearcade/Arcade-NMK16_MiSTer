@@ -675,9 +675,46 @@ while our script pointer at RAM `0x0B5A38` points there. So that pointer value
 is real divergence -- but it is RAM state, i.e. downstream of whatever actually
 goes wrong, not the cause.
 
-**Next step:** find what writes `0x0B5A38`. Trap on a *write* to that address
-and capture the cycles before it, which should identify the code that installs
-the bad pointer; then compare that value against MAME's at the same moment.
+**Write trap on `0x0B5A38` -- the script engine runs ~60x too often.** Same
+overlay, trapping the first post-coin write to that long and separately keeping
+the most recent value written and a write counter. Against
+`sim/rtl/nmk29_probes/ssptr.lua` (MAME reading the same address):
+
+  | | ours | MAME |
+  |---|---|---|
+  | pointer, pre-coin | **`00000000`** | `0001506C` |
+  | pointer, post-coin | `00014116` | `00000000` |
+  | writes to it | **216, then ~171 more in 9 s (~19/s)** | **36 total (~2 per 7 s)** |
+
+Two divergences:
+1. **Rate**: we write the script pointer ~19 times a second; MAME twice in seven
+   seconds -- about **60x** too often.
+2. **State is inverted**: MAME holds an active script pointer during attract and
+   **nulls it on the coin** (the attract object is deactivated as the game leaves
+   attract). Ours is null during attract and becomes active after the coin.
+
+The trapped write came from the same routine MAME reports -- its
+`lastWritePC = 0x0088FA` appears in our ring at slot 6 -- so both run the same
+code at wildly different rates:
+
+```
+TRAPPED: 0B5A38 W fc5
+  0088BC/BE R fc6   0088EE/F0/F2/F4 R fc6   014002 R fc5 (script data)
+  0088F6 R fc6      0B5A06 W fc5            0088F8/FA R fc6
+  0B5A3C W fc5 (the timer)                  0B5A38 W fc5 (the pointer)
+```
+
+The sequencer advances when the timer at `$3C(A6)` reaches zero
+(`SUBQ.W #1,$3C(A6)` / `BNE`), so a ~60x advance rate means **the timer is being
+loaded with a far smaller value than MAME's** -- or ticked far more often.
+
+**Next step: trap the WRITE DATA at `0x0B5A3C`** (the timer) and compare the
+loaded value with MAME's at the same point. The value comes from the script
+stream, so if it differs while the pointer matches, the script data being read
+is wrong; if the value matches but the rate still differs, the timer is being
+decremented too often -- i.e. the routine is entered more than once per frame.
+That distinction picks between a data problem and a timing problem, and it is
+the last obvious fork before this turns into full script tracing.
 
 **Superseded hypothesis (kept so it is not retried): suspect the sound
 subsystem.**
