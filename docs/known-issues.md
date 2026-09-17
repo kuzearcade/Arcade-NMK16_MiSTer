@@ -618,9 +618,17 @@ directly comparable:
 Two divergences:
 1. In steady attract we touch **bucket 1** (`0x02000-0x03FFF`), which MAME never
    touches.
-2. After a coin our CPU scatters across **buckets 9-21** -- code MAME never
-   executes -- and the pattern closely resembles our own *boot* window. MAME
-   handles the entire coin within buckets 0,3,4,5,6.
+2. After a coin our CPU scatters across **buckets 9-21**, far more than MAME's
+   map showed in the same window.
+
+**RETRACTION (same day): "code MAME never executes" was a SAMPLING ARTIFACT.**
+The coverage windows are ~1.7 s and MAME touches those regions only rarely --
+a direct count gives **22 bucket-9 reads pre-coin and 38 post-coin**, and the
+sequencer routine at `0x008876` runs **3275/7435** times. The windows simply
+missed them. Only a *counted* comparison over a full run is valid here; a
+coverage bitmap sampled in short windows is not. The conclusion that the coin
+"sends the machine back through init" rests on that artifact and is **not
+established**.
 
 **So the coin is not being credited; it is sending the machine back through
 init.** That accounts for every symptom at once: credits never accumulate, the
@@ -628,12 +636,48 @@ sound commands stop with the loop, and attract restarts. It also explains why
 every component check passed -- inputs, CPU, interrupts, Z80 and OKI are all
 fine, and the game is simply being restarted before it can use them.
 
-**Next step: catch the branch.** Trap the first access into a bucket the CPU
-should not reach (bucket 9 or above) and capture the preceding bus cycles --
-the hardware equivalent of `TB_TRAP_PC` in the sims. The ROM at the branch
-should show what condition the game tested. Likely candidates to check first,
-given "re-init on coin": a watchdog this board has and we do not implement, or
-an exception (bus/address error) taken inside the coin handler.
+**Bus-cycle trap built (two revisions) -- one genuine anomaly found.** A
+16-row x 32-cell overlay (row 0 the trapped cycle, rows 1-13 a frozen ring of
+the preceding completed bus cycles, row 14 the ring pointer, row 15
+`{coin_seen, frozen, armed, sentinel}`). Word format
+`{FC[2:0], R/W, addr[23:1]}`.
+
+*v1 trapped the wrong thing and looked convincing.* Threshold "bucket >= 7",
+armed on a timer: it fired on `0x00E35A`, a supervisor-data read from the
+**coinage table**, reached from the DSW/coinage setup routine at `0x007D3C`
+(`MOVE.W D2,$0C0014` flipscreen, then index by DSW bits 15,14 into the 4-entry
+table). Exactly the right neighbourhood, so easy to build a theory on -- but the
+capture was byte-identical before and after the coin (it armed on a timer and
+fired before any coin), and MAME runs the same routine (12 fetches, 4 table
+reads in 23 s). **Bucket 7 is legitimate.**
+
+*v2 armed on the coin input itself* (`dbg_coin_seen`) with threshold
+`bucket >= 9`, and captured cleanly -- `frozen=0` before the coin, `frozen=1`
+after:
+
+```
+TRAPPED: 013FF0 R fc5
+  008876/8/A/C R fc6   0B5A3C R fc5   00887E R fc6   0B5A3C W fc5
+  008880/2/4  R fc6    0B5A38 R fc5   0B5A3A R fc5   008886 R fc6
+```
+
+which disassembles to an object-script interpreter:
+
+```
+008878: 536E 003C      SUBQ.W  #1,$3C(A6)     ; timer  -> the 0B5A3C read/write
+00887C: 6600 007C      BNE     +0x7C
+008880: 2A6E 0038      MOVEA.L $38(A6),A5     ; script pointer -> 0B5A38/3A
+008884: 3C1D           MOVE.W  (A5)+,D6       ; -> the trapped 013FF0 read
+```
+
+**The genuine finding: MAME reads `0x013FF0` ZERO times** (pre- and post-coin),
+while our script pointer at RAM `0x0B5A38` points there. So that pointer value
+is real divergence -- but it is RAM state, i.e. downstream of whatever actually
+goes wrong, not the cause.
+
+**Next step:** find what writes `0x0B5A38`. Trap on a *write* to that address
+and capture the cycles before it, which should identify the code that installs
+the bad pointer; then compare that value against MAME's at the same moment.
 
 **Superseded hypothesis (kept so it is not retried): suspect the sound
 subsystem.**
