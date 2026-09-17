@@ -769,6 +769,24 @@ they pass `GAME_SEL` as a parameter and stream only index 0, so `game_sel` is
 valid from t=0. A `gunnail_hs` mode that sends index 254 *last*, like the real
 loader, would make it reproducible in Verilator.
 
+**Regression introduced by the fix itself, caught on the board before the
+bitstream shipped (2026-09-17).** The `.halfpop(1'b0)` tie-off was added to
+the 13 other `nmk_irq` instances by a regex whose replacement put its `//
+NMK-29:` comment on the **same line** as the ports that followed, so in
+`raphero_core.sv` the line became
+`.halfpop(1'b0), // ...board.prom_we(vprom_we), .prom_addr(vprom_addr), .prom_data(ioctl_dout),`
+-- the V-PROM write port silently commented out. Quartus warns about
+unconnected ports and carries on; the PROM never loads, `nmk_irq` never
+raises an interrupt, and the Raphero build came up **black with audio RMS
+0.0** while the Macross2 build from the same commit (tdragon2, hand-edited)
+played normally. The other 12 instances are sim-only reference cores whose
+swallowed ports were already `1'b0` tie-offs, so they were behaviourally
+unchanged. Fixed by moving the comment onto its own line in all 13 files;
+Raphero rebuilt. Two lessons: (a) after any regex edit across many files,
+`grep` for the replacement text *and what follows it on the line*; (b) the
+smoke test after a "neutral" rebuild is not optional -- a black-and-silent
+board is exactly the signature this would have shipped with.
+
 **Superseded hypothesis (kept so it is not retried): suspect the sound
 subsystem.**
 The user reports no audio *and* no coins on both sets, and these Comad boards
