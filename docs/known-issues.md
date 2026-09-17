@@ -559,7 +559,56 @@ to `A0 = $000D05E0`, which is **TXVRAM** -- it is the service-mode input
 *display*, not the credit logic. The actual coin-credit path has not been
 located in the ROM yet.
 
-**Next step: suspect the sound subsystem, and test the two symptoms as one.**
+**MEASURED: the Z80 is innocent; the 68000 barely runs its game loop.** A
+second overlay build counted four links of the Comad sound chain (Z80 M1
+fetches / 68000 soundlatch writes / Z80 latch reads / Z80 OKI writes), with
+gunnail as a control (all zero -- it is on the NMK004 path, so the counters are
+correctly gated):
+
+  | | soundlatch writes | OKI writes |
+  |---|---|---|
+  | MAME, ~20 s attract | **341** | **334** |
+  | MAME, after 2 coins | 470 | 521 |
+  | ours, ~34 s | **4** | **1** |
+
+The Z80 executes (M1 counter wrapping), reads the latch, and services every
+command it is given -- it is simply given four. **The 68000 is the problem**:
+MAME writes the soundlatch ~17x/second, we manage 4 in 34 seconds. That one
+fact accounts for both reported symptoms at once -- no sound commands means
+silence, and a game loop not doing its per-frame work will not credit a coin
+either.
+
+**And the interrupt path is NOT the cause either.** A third overlay counted
+68000 program fetches, `nmk_irq` IPL assertions, IACK cycles and soundlatch
+writes, with mustang as a working control:
+
+```
+ssmissin  fetch 3F->0C (wrapping)  IPL 49->7D (+52)  IACK 49->7D (+52)  latchWr 03->03
+mustang   fetch DB->83 (wrapping)  IPL 60->D4 (+116) IACK 62->D6 (+116) latchWr 00->00
+```
+
+The CPU executes, IPL is raised, and **every interrupt is acknowledged** (IACK
+tracks IPL exactly). So the handler runs and simply never reaches the sound or
+credit code.
+
+**Also cleared, so nobody re-checks them:**
+- V-PROM addressing matches MAME exactly -- `nmk_irq.sv`'s `PROM_START = 9'd117`
+  against MAME's `set_prom_start_offset(0x75)`, `set_vtiming_prom_usage(0x100)`,
+  same address formula. `table_sel` is forced to 0 on hardware, so we read bytes
+  0-255 of `ssm-pr1.114`, which is the range MAME addresses (the 82S147 is
+  half-populated, "A5 tied to GND").
+- Z80 reset (`~reset & g_z80snd`, `g_comad` included), its 4 MHz clock enable,
+  latch-pending -> IRQ0, and the `0x9800`/`0x9000`/`0xA000` decodes all match
+  `ssmissin_sound_map`.
+
+**Next step: find where the 68000 actually spends its time.** Everything about
+the machine checks out, so the remaining question is which code path the game is
+on. Dump the 68000 PC distribution on hardware and diff it against MAME's for
+the same interval (the PC-history technique from NMK-24) -- that will show which
+branch diverges, and the ROM around it should say what condition it tested.
+
+**Superseded hypothesis (kept so it is not retried): suspect the sound
+subsystem.**
 The user reports no audio *and* no coins on both sets, and these Comad boards
 run a Z80 + OKI (`ssmissin_sound_map`: ROM 0-7FFF, RAM 8000-87FF, OKI bank
 `0x9000`, OKI r/w `0x9800`, latch read `0xA000`, no FM, latch-pending drives
