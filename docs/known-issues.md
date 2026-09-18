@@ -42,7 +42,7 @@ but not proven), `infra` (build/test/doc health).
   it is moot.
 
 ### NMK-2 · HSync/VSync placement is an untuned placeholder
-- **Cores:** all three · **Severity:** limitation · **Status:** closed (2026-09-11 — the nominal placement with the H/V Shift trims in place was reported ideal on CRT equipment; nothing to fold in)
+- **Cores:** all three · **Severity:** limitation · **Status:** closed (2026-09-11 — the nominal placement with the H/V Shift trims in place was reported ideal on CRT equipment; nothing to fold in). **2026-09-18: the H/V Shift trims were REPLACED by the CRT Adjust page** (`rtl/crt_chain.sv` around rmonic79's MiSTer-CRT-Adjust: H-Size, H-Position, V-Shift, V-Size) — the nominal sync placement described below is unchanged and is what "CRT Adjust Off" outputs; see NMK-31 and `docs/hw-bringup.md` "CRT Adjust".
 - **Ref:** "H Shift / V Shift options (sync-position trims for CRT users, NMK-2)"
 - Scaler locks and reports 384x224 @ 56.2 Hz; sync *position* has never
   been tuned against a reference (real board sync timing isn't
@@ -471,6 +471,76 @@ sprite-and-scroll evidence for that core is the board captures).
   screen, and count frame-to-frame changes confined to the sprite's bounding
   box. On a static screen any such change is corruption. Each event changed
   exactly 2,894 pixels -- the sprite toggling between two fixed renderings.
+
+### NMK-31 · CRT Adjust (H-Size / H-Position / V-Shift / V-Size): what it can and cannot do
+- **Cores:** all four · **Severity:** limitation · **Status:** open (documented limits of the 2026-09-18 feature; nothing broken)
+- **Ref:** `docs/hw-bringup.md` "CRT Adjust", `rtl/crt_chain.sv`, `sim/rtl/crt_chain`
+- The OSD page **CRT Adjust** replaces the old H Shift / V Shift trims. It
+  is a 15 kHz analog feature: with the scandoubler/HQ2X on, or the
+  rotation framebuffer active (Vert orientation, Flip screen), the chain
+  is bypassed and the native stream goes out. **Off is bit-identical to the
+  native stream** (a wire-for-wire mux, proven in Verilator), and so is
+  On with every control at 0 apart from the two constants below.
+- **H-Size enlarge is limited by the raster's own blanking.** The stretched
+  line must finish before the next sync pulse or its right edge is cut.
+  Hires lines (gunnail, tdragon2, macross2, raphero, bjtwin…: active 28..411,
+  sync at 440 of 512) leave room for **+2** steps (about +4 %); lowres lines
+  (the 256-wide boards: sync at 20, active 92..347 of 384) about **+10**
+  (+15 %). Shrink is unbounded either way. Moving the picture left
+  (H-Position −) buys enlarge room; moving it right spends it.
+- **H-Position beyond the blanking puts the sync pulse inside the picture**
+  (hires: more than +28 earlier or −68 later; lowres: about +56 / −48).
+  The OSD list is ±48 on every core; values past the blanking are not
+  clamped, the picture simply tears until the value is brought back.
+- **Sign convention: "+" = picture right / down = sync EARLIER**, as the old
+  H/V Shift had it and as a CRT sweep works (a pixel's beam position is its
+  distance from the retrace). The upstream module labels the opposite way
+  (its +N delays the pulse); `crt_chain.sv` negates both offsets. Not yet
+  confirmed on a CRT — it cannot be: HDMI frames on DE, so sync moves are
+  invisible there. If a CRT shows it inverted, flip the two negations.
+- **Two constants while On:** the picture sits **one native pixel** further
+  left relative to the sync than when Off (the module's registered read
+  side), and its content is one line late relative to VSync (line-buffer
+  latency) which the chain's own re-timed VSync/VBlank already account for.
+  H-Position +1 restores the pixel if it matters.
+- **V-Size**: one step is 3 lines (about 1.1 %); **±7 steps on Gunnail,
+  Afega and Raphero, ±4 on Macross2.** The ring buffer behind it is 6×MAX+4
+  lines of 384 px (46 lines = 42 M10K, 28 lines = 26). Macross2 sits at
+  539/553 blocks with the 46-line ring and, from about there, Quartus 17
+  **silently** stops inferring the framework's own memories (hq2x's second
+  line buffer, ascal's buffers, the shadowmask: some 20,000 flip-flops, +10k
+  ALMs, and the scaler missing timing) with no message in either report —
+  the tell is `hq2x_buf:buf1` showing registers instead of memory bits in
+  the map report's entity table. 28 lines keeps Macross2 clear of it. PVM
+  mode changes the line rate (a broadcast monitor follows it, an arcade
+  chassis holds only a couple of steps); Cabinet mode keeps native timing
+  and resamples the active lines (2-tap, linear light) — enlarge grows
+  downward, shrink retracts the top, recentre with V-Shift. Ramped one line
+  per frame.
+- **Video PLLs doubled** to make it possible: Gunnail/Afega/Raphero 96 MHz
+  (12 / 16 clocks per pixel), Macross2 112 MHz (14 / 16). crt_vsize's
+  Cabinet pipeline needs ≥ 9 clocks per pixel in this project's copy (see
+  the next point); Raphero, which drove the mixer straight from its 40 MHz
+  clk_sys, gained a `video_retime` stage for the same reason.
+- **`crt_vsize.sv` is a documented fork** (deps.lock): one register between
+  the ring's read mux (42 M10K on the 46-line ring) and the Cabinet square
+  multiplier, that pipeline moved one clock later (unmodified: −0.86 ns at
+  112 MHz, +0.04 at 96), and its integer square root split from two 4-step
+  stages into four 2-step ones (the 4 chained compare-subtracts were
+  −0.06 ns at 112 MHz). The module now needs ≥ 11 clocks per pixel
+  (upstream ≥ 8); every mode here has ≥ 12. `crt_adjust.sv` is untouched.
+  The glue also registers the decoded H-Position before the module's
+  512:1 sync-tap mux (−0.23 ns at 96 MHz when combinational).
+- **The V-Size ring is 400 slots wide, not 384.** `crt_vsize`'s per-line
+  pixel counter saturates at `LINE_PX − 1`, so a ring exactly as wide as
+  the active line records 383 of 384 pixels and every V-Size mode drops
+  the last column — seen on the board as 383×230 native frames, and in the
+  harness as a 4596-clock DE width that a 2-pixel tolerance had let pass.
+  The harness now demands the exact width. Costs one or two M10K.
+- **Verilator 5.032 crashes on `crt_vsize.sv`** (internal error on a function
+  call inside a non-blocking assignment's index); `sim/rtl/crt_chain` uses a
+  sed-generated copy with the calls inlined, regenerated by its Makefile.
+  Quartus compiles the real file.
 
 ### NMK-30 · redfoxwp2 (Hong Hu Zhanji II, China set 1): noise on screen, never ran (FIXED, data-only)
 

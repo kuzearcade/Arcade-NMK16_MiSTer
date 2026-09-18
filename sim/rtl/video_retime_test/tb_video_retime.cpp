@@ -2,13 +2,17 @@
 //
 // Write side: a synthetic 512 x 278 raster at 40 MHz / ce every 5 clocks
 // (video_timing.sv's geometry), pixel value f(x, y, frame) in the active
-// window of the selected mode. Read side: 56 MHz. Clock ratio 5:7 —
-// clk_w half period 7 ticks, clk_r half period 5 ticks (tick = 125/70 ns).
+// window of the selected mode. Read side: 112 MHz (the Macross2 rbf,
+// module defaults) or 96 MHz (profile 1). Clock ratio 40:112 = 5:14 --
+// clk_w half period 14 ticks, clk_r half period 5 ticks -- or 40:96 =
+// 5:12, clk_w half period 12 ticks.
 // Checks on the read side, per frame after the first: every DE pixel's
 // value equals f(x, y, frame) with x counted from DE start and y from the
 // frame's first DE line; DE width = 384 / 320; 224 DE lines; HTOTAL ticks
 // between HS rises = 512 / 448; one VS per frame; and (mode 7) HS start /
-// width in pixels and the H/V Shift trims.
+// width in pixels. (The H/V Shift trims left video_retime on 2026-09-18
+// for the CRT Adjust chain, rtl/crt_chain.sv; argv[2]/argv[3] are kept
+// for the old command lines but must be 0.)
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
@@ -22,23 +26,23 @@ static uint32_t f(int x, int y, int frame) {
 int main(int argc, char **argv) {
 	VerilatedContext ctx; ctx.commandArgs(argc, argv);
 	int mode7 = (argc > 1) ? atoi(argv[1]) : 0;
-	int hshift = (argc > 2) ? atoi(argv[2]) : 0;   // 0..15 raw OSD value
-	int vshift = (argc > 3) ? atoi(argv[3]) : 0;   // 0..40 raw OSD value
+	int hshift = (argc > 2) ? atoi(argv[2]) : 0;   // legacy argument, must be 0
+	int vshift = (argc > 3) ? atoi(argv[3]) : 0;   // legacy argument, must be 0
+	if (hshift || vshift) { fprintf(stderr, "H/V Shift left video_retime on 2026-09-18 (see rtl/crt_chain.sv); pass 0\n"); return 2; }
 	Vvideo_retime top{&ctx};
-	// argv[4]: clock profile — 0 = the Macross2 rbf's 56 MHz set (built with
-	// the module defaults), 1 = the Gunnail rbf's 48 MHz set (-G overrides:
-	// 512 px / 6 or 384 px / 8, LINE_CLKS 3072; clk ratio 40:48 = 5:6).
+	// argv[4]: clock profile — 0 = the Macross2 rbf's 112 MHz set (built with
+	// the module defaults), 1 = the Gunnail rbf's 96 MHz set (-G overrides:
+	// 512 px / 12 or 384 px / 16, LINE_CLKS 6144; clk ratio 40:96 = 5:12).
 	int profile = (argc > 4) ? atoi(argv[4]) : 0;
 	const int HT_R = profile ? (mode7 ? 384 : 512) : (mode7 ? 448 : 512);
 	const int AW   = profile ? (mode7 ? 256 : 384) : (mode7 ? 320 : 384);
 	const int X0   = profile ? (mode7 ? 92 : 28)   : (mode7 ? 60 : 28);
 	const int HS_START_NOM = profile ? (mode7 ? 20 : 440) : (mode7 ? 404 : 440), HS_W = profile ? (mode7 ? 24 : 32) : (mode7 ? 28 : 32);
-	const int CW_HALF = profile ? 6 : 7, CR_HALF = 5; // ticks per half period: 7:5 (40:56) or 6:5 (40:48)
+	const int CW_HALF = profile ? 12 : 14, CR_HALF = 5; // ticks per half period: 14:5 (40:112) or 12:5 (40:96)
 	int hshift_px = ((hshift & 8) ? hshift - 16 : hshift) * 2;
 	int vshift_ln = (vshift <= 20) ? vshift : vshift - 41;
 
 	top.clk_w = 0; top.clk_r = 0; top.reset_w = 1; top.ce_w = 0; top.mode1 = mode7;
-	top.hshift_sel = hshift; top.vshift_sel = vshift;
 	top.hcount_w = 0; top.vcount_w = 0; top.rgb_w = 0;
 	top.eval();
 

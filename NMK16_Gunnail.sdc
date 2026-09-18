@@ -81,3 +81,18 @@ set_multicycle_path -hold  4 -from $snd_regs -to $snd_regs
 set prot_regs [get_registers {*|gunnail_core:core|nmk_prot_core:*prot_mcu|tlcs90:cpu|* *|gunnail_core:core|nmk_prot_core:*prot_mcu|nmk004_periph:periph|*}]
 set_multicycle_path -setup 10 -from $prot_regs -to $prot_regs
 set_multicycle_path -hold  9 -from $prot_regs -to $prot_regs
+
+# ------------------------------------------------------------------
+# CRT Adjust (rtl/crt_chain.sv, 2026-09-18): crt_vsize's PVM output-line
+# setup writes o_active_cyc on the second clock of a line (o_cline == 2)
+# and consumes it in the DE-window clamp on the fourth (o_cline == 4), a
+# 22-bit add/compare chain that is the worst path on the 112 MHz video
+# clock (-0.21 ns on NMK16_Macross2). Two clocks are always available,
+# so it is a legitimate 2-cycle path. Only that source is excepted;
+# the clamp's other inputs (de_start_nat, period_out) can change on any
+# clock and stay single-cycle.
+# ------------------------------------------------------------------
+set vsz_ac [get_registers {*|crt_chain:crt_chain|crt_vsize:u_vsize|o_active_cyc[*]}]
+set vsz_ds [get_registers {*|crt_chain:crt_chain|crt_vsize:u_vsize|o_de_start[*]}]
+set_multicycle_path -setup 2 -from $vsz_ac -to $vsz_ds
+set_multicycle_path -hold  1 -from $vsz_ac -to $vsz_ds

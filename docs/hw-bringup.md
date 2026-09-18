@@ -1375,6 +1375,11 @@ the commit).
 
 ## H Shift / V Shift options (sync-position trims for CRT users, NMK-2)
 
+**Superseded 2026-09-18:** these two trims were removed and replaced by
+the CRT Adjust page (`rtl/crt_chain.sv`; the section "CRT Adjust" at the
+end of this file). The nominal sync placement they trimmed around is
+unchanged and is what the chain outputs when Off. Kept for the record.
+
 *Closure (2026-09-11): the nominal placement below, as shipped with the
 widened ±20-line V range (vsync row 264) and the ±16-px H range, was
 reported ideal on CRT equipment — NMK-2 is closed with the constants
@@ -3726,3 +3731,161 @@ caught all of them in play between ~+13 s and ~+25 s, then CONTINUE, GAME
 OVER and title -- the same cycle the MAME oracle shows. Final count:
 **97/97 start and play** on the 20260917 bitstreams; one data defect found
 and fixed (NMK-30). Capture directory: 417 PNGs, see its `README.txt`.
+
+
+## CRT Adjust replaces the H/V Shift trims (2026-09-18)
+
+The two OSD sync trims (H Shift ±16 px, V Shift ±20 lines, moved inside
+`video_retime`) are gone. In their place every core has a **CRT Adjust**
+page built around rmonic79's
+[MiSTer-CRT-Adjust](https://github.com/rmonic79/MiSTer-CRT-Adjust)
+(`rtl/third_party/crt_adjust`, GPL-3.0-or-later, pinned in `deps.lock`):
+
+  | control | range | mechanism |
+  |---|---|---|
+  | CRT Adjust | Off / On | Off = the native stream, wire for wire |
+  | CRT H-Size | −16..+15 | DAC read rate in quarter-clock steps; HSync native |
+  | CRT H-Position | −48..+48 | HSync moved N pixels, content anchored (`HPOS_SYNCSHIFT`) |
+  | CRT V-Shift | −16..+15 | VSync moved N lines |
+  | CRT V-Size | ±7 (Macross2 ±4), 3 lines/step | PVM: line retimer; Cabinet: native timing, photometric |
+  | CRT V-Size Mode | PVM / Cabinet | |
+
+Status bits 96–108 (the upstream glue's own numbers); "+" is picture
+right/down, i.e. sync earlier — this project's convention and a CRT
+sweep's physics; the upstream module labels the other way and
+`rtl/crt_chain.sv` negates on the way in.
+
+**Where it sits.** `video_retime → crt_vsize → crt_adjust → video_mixer`,
+on the board's 15 kHz raster ahead of HQ2X/scandoubler and the rotation
+framebuffer, and bypassed (wire-for-wire) whenever either of those is in
+use. Raphero, which used to drive the mixer straight from its 40 MHz
+`clk_sys` raster, gained the same `video_retime` stage as gunnail so the
+chain gets a uniform pixel enable with enough clocks per pixel.
+
+**Three things the modules could not know about this raster, all handled
+in the glue or the retimer, all found by the Verilator harness
+(`sim/rtl/crt_chain`, 16 cases: Off / On-at-zero bit-identity on both line
+lengths, each control against its geometric expectation):**
+
+1. *Line length changes with the game mode* (512 vs 384/448 px) while
+   `crt_adjust`'s HSync shift register is sized by a parameter and derives
+   a negative offset as `HTOTAL − N`. Built for the longer line; on the
+   shorter one the difference is subtracted from the offset.
+2. *VBlank phase.* `crt_adjust` samples VBlank at each HSync rise and applies
+   it to the active window that follows. Our hires sync sits AFTER the
+   active area (440 vs 28..411), so the native VBlank at the pulse still
+   belongs to the row that just ended and the first active row was blanked.
+   `video_retime` now also emits `vb_hs_r`, VBlank whose edges move to the
+   end of the active area, which is right for the nominal pulse and for any
+   H-Position shift that keeps the pulse out of the picture.
+3. *VBlank latency.* The module emits each line one line late (ping-pong
+   buffer) but passes VBlank through undelayed, so the LAST active row came
+   out under an asserted VBlank and the mixer blanked it. The upstream glue
+   never derives DE from `vb_out`; this mixer needs a VBlank, so the chain
+   rebuilds the module's own one-line-later gate and hands that on.
+
+**Geometry limits** (NMK-31): H-Size enlarge is cut at the next sync pulse
+— hires +2 steps, lowres about +10; H-Position past the blanking puts the
+pulse into the picture (hires +28 / −68). One native pixel of constant
+offset while On.
+
+**Clocks.** The Cabinet pipeline runs 8 sub-phases per pixel, so the video
+PLLs doubled: `pll_video96` (Gunnail, Afega, Raphero: 8 MHz /12, 6 MHz
+/16, 6144 clk per line) and `pll_video112` (Macross2: 8 MHz /14, 7 MHz
+/16, 7168). 112 is forced by Macross2's two pixel rates (8 and 7 MHz need
+a 56 k clock). The 96 MHz build had been tried before (NMK-27) and closed;
+it was reverted then only because it did not explain that symptom.
+
+**Timing, and the one fork.** The first builds put `crt_vsize`'s ring RAM
+(then 52 × 384 × 24 = 47 M10K) output mux and the Cabinet 8×8 square in
+one clock: −0.860 ns at 112 MHz (Macross2), +0.042 at 96 (Afega). One
+pipeline register there, with the Cabinet phases moved one clock later
+(needs ≥ 9 clocks per pixel; every mode here has ≥ 12), is the only
+change to vendored code, documented in the file header and `deps.lock`.
+The next worst path was the glue's own H-Position decode feeding the
+module's 512:1 sync-tap mux combinationally (−0.23 ns at 96 MHz); the
+decoded offset is static and is now registered. After that, the Cabinet
+pipeline's integer square root — four chained compare-subtract steps in
+one clock, 8.25 ns of data delay — was −0.06 ns at 112 MHz, so it became
+four 2-step stages (phases 7..10; the module now needs ≥ 11 clocks per
+pixel, the slowest mode here has 12). HQ2X's blender sits at 8.34 ns on
+the same clock, i.e. 112 MHz is about as fast as this framework's mixer
+goes; there is no headroom to spend there.
+
+**The M10K trap (Macross2).** With the 52-line ring Macross2 came out at
+28,424 ALMs against 17,936 the day before, with the scaler failing timing.
+Its chain was small; the registers were in `hq2x_buf:buf1` (9,624),
+`ascal` (10,682 vs 4,490 elsewhere) and the shadowmask (3,079): at 539/553
+M10K, Quartus 17 had silently stopped inferring the framework's own RAMs
+— no "uninferred" message, no balancing message, just registers in the
+map report's entity table. Synthesis-only probes (8 min each) put the
+threshold between a 46-line and a 32-line ring, so the V-Size range is a
+per-core parameter: `VSIZE_MAX` 7 (46 lines) on Gunnail, Afega and
+Raphero, 4 (28 lines) on Macross2. Check that table's `hq2x_buf:buf1`
+row on any build that comes out heavier than expected.
+Raphero's first build failed to ROUTE — hold-time fixing congestion,
+because its `.sdc` grouped only `emu|pll|…` and the new video PLL was
+treated as synchronous to `clk_sys`; the pattern is now `pll*` like the
+other three. Final fit/timing (the `20260918` bitstreams; worst of setup
+and hold over the core's own clocks):
+
+  | core | ALMs | M10K | setup | hold | note |
+  |---|---|---|---|---|---|
+  | NMK16_Gunnail | 30,629 (73 %) | 520 / 553 | +0.851 | +0.242 | 96 MHz |
+  | NMK16_Afega | 22,195 (53 %) | 464 / 553 | +0.822 | +0.246 | 96 MHz |
+  | NMK16_Raphero | 24,005 (57 %) | 517 / 553 | +0.998 | +0.246 | 96 MHz, new retimer |
+  | NMK16_Macross2 | 19,511 (47 %) | 524 / 553 | +0.113 | +0.252 | 112 MHz, seed 2 of six tried |
+
+Macross2's 112 MHz is the framework mixer's ceiling — HQ2X's blender is
+8.6 ns of the 8.9 ns period — and its margin is a seed choice (seeds 1,
+2, 3, 5, 7, 11 gave +0.091, +0.113, −0.078, −0.145, −0.112, −0.093);
+seed 2 is recorded in the `.qsf`. A re-seed is the tool if a later
+change moves it, not more pipelining: nothing of this project's is on
+that path.
+
+**One more off-by-one, caught on the board.** The first V-Size captures
+came back 383 pixels wide: `crt_vsize`'s per-line pixel counter saturates
+at `LINE_PX − 1`, so a ring sized exactly to the 384-pixel line records
+383 and the last column is lost in both V-Size modes. The harness had
+measured the same (a 4596-clock DE width) inside a tolerance meant for
+H-Size's pixel-period rounding; it now demands the exact width, and the
+ring is 400 slots wide. A tolerance that covers two different effects
+hides one of them.
+
+**And one of mine, also caught on the board.** The first Cabinet capture
+was blue-only: in splitting the square root I concatenated three 32-bit
+function results into a 24-bit register, so only the blue channel's low
+bytes survived. The harness had never checked a Cabinet pixel value
+(it counted lines). It now drives a flat colour through every mode and
+demands every DE pixel back byte-exact; the geometry checks alone were
+worth nothing against a colour bug.
+
+**Verification.** Verilator: 20/20 (16 geometry cases, 4 flat-colour
+cases). `sim/rtl/video_retime_test` still 4/4 at the new clocks.
+
+**Board** (native screenshots, i.e. the scaler's input; each setting is
+its own core load with the bits written into `config/<set>.CFG`, the
+tooling in the scratchpad `crt_cfg.py` / `crt_board_test.sh`):
+
+  | set (layout) | Off | On at 0 | Cabinet +2 / −3 | PVM +2 | H-Size +2 | H-Pos +20 | V-Shift +8 |
+  |---|---|---|---|---|---|---|---|
+  | raphero (hires 384) | 384×224 | 384×224 | 384×230 / 384×215, colours as Off | 384×224 | 384×224 | 384×224 | 384×224 |
+  | gunnail (hires 384) | 384×224 | 384×224 | 384×230 / 384×215 | 384×224 | 384×224 | 384×224 | 384×224 |
+  | stagger1 (lowres 256) | 256×224 | **identical** to Off | 256×230 / 256×215 | **identical** | **identical** | **identical** | same screen, animation a frame apart |
+  | tharrier (lowres 256) | 256×224 | **identical** to Off | 256×230 / 256×215 | **identical** | **identical** | **identical** | **identical** |
+
+"Identical" is a byte-for-byte match of the whole frame on a static
+title screen: on HDMI the scaler frames on DE, so H-Size (pixel
+duration), H-Position and V-Shift (sync moves) are invisible there by
+design and the content path is proven byte-exact; only V-Size shows,
+as the active line count. The first two rounds on the board caught the
+two defects above (383-wide V-Size frames; blue-only Cabinet), both
+fixed and re-confirmed on raphero; the 384-wide sets are the ones the
+ring-width bug touched, and the lowres sets never showed it. Macross2's
+own layouts on its final (seed 2) bitstream: tdragon2 (hires) Off
+384×224, Cabinet +2 / −3 384×230 / 384×215 with Off's colour balance,
+PVM +2 384×224; powerins (the 448-px / 7 MHz line) 320×224, 320×230 /
+320×215, 320×224 -- the ±4 list decodes as labelled. The final Gunnail
+bitstream re-confirmed the same way on gunnail and tharrier. The
+superseded 20260917 bitstreams sit in `/media/fat/crt_backup/` on the
+board.

@@ -1,20 +1,18 @@
-// Video output PLL for the Gunnail and Afega rbfs: one 48 MHz output
-// from the 50 MHz reference, 50 * 24/25 (VCO 1200 MHz). 48 MHz divides
-// to both pixel rates these rbfs' games use with integer enables — 8 MHz
-// (48/6, gunnail: 512 px @ 16 MHz/2) and 6 MHz (48/8, the nine lowres
-// boards: 384 px @ 12 MHz/2) — for rtl/video_retime.sv. A copy of
-// rtl/pll_video.v (56 MHz, the Macross2 rbf) with the multiplier
-// changed; see that file.
+// Video output PLL for the Gunnail, Afega and Raphero rbfs: one 96 MHz
+// output from the 50 MHz reference, 50 * 48/25 (VCO 960 MHz: M=96, N=5,
+// C=10 -- a plain doubling of the former 48 MHz PLL's 1200 MHz VCO would
+// exceed Cyclone V's 1600 MHz ceiling). 96 MHz divides to both pixel
+// rates these rbfs' games use with integer enables -- 8 MHz (96/12,
+// gunnail/raphero: 512 px @ 16 MHz/2) and 6 MHz (96/16, the lowres
+// boards: 384 px @ 12 MHz/2) -- for rtl/video_retime.sv.
 //
-// NMK-27: raising this to 96 MHz was TRIED and REVERTED on 2026-09-16.
-// The theory was that sys/video_mixer.sv needs CLK_VIDEO to be an integer
-// multiple of ce_pix*4, and 48/(8*4) = 1.5 explained HQ2X coming out
-// 597 px wide instead of 768 on the 384-wide games. 96 MHz makes BOTH
-// rates integral (96/32 = 3, 96/24 = 4) and both cores still closed
-// timing (Gunnail +0.428, Afega +0.321) -- but gunnail measured 597 px
-// again, so the clock ratio is NOT the cause. Do not retry this.
-
-module pll_video48
+// Why 96 and not 48 (2026-09-18): the CRT Adjust chain (rtl/crt_chain.sv)
+// needs >= 8 clocks per pixel -- crt_vsize's Cabinet mode runs an 8-phase
+// pipeline per pixel -- and finer H-Size steps come free with it (one
+// quarter-cycle of 48 = 2%). The same doubling had been tried on
+// 2026-09-16 for NMK-27, closed timing on both cores, and was reverted
+// only because it did not explain that (unrelated) symptom.
+module pll_video96
 (
 	input  refclk,
 	input  rst,
@@ -30,7 +28,7 @@ module pll_video48
 		.bandwidth_type("AUTO"),
 		.clk0_divide_by(25),
 		.clk0_duty_cycle(50),
-		.clk0_multiply_by(24),
+		.clk0_multiply_by(48),
 		.clk0_phase_shift("0"),
 		.compensate_clock("CLK0"),
 		.inclk0_input_frequency(20000),

@@ -70,19 +70,25 @@ localparam CONF_STR = {
 	// vertical game un-rotated (Horz) the way the board naturally outputs
 	// it. Hidden (H0, same tag/mask as Orientation) under direct video.
 	"H0O[17],Flip screen,Off,On;",
-	// Sync-position trims for CRT/analog users (docs/known-issues.md
-	// NMK-2): move the H/V sync pulses within blanking while the active
-	// picture (DE) stays put, so the image shifts on a CRT. Positive =
-	// picture right / down (sync earlier). H: ±16 px in 2-px steps,
-	// listed in two's-complement order so the 4-bit value 0 is the
-	// default = the original placement (hsync at 440). V: ±20 lines,
-	// listed 0..+20 then -20..-1 so the 6-bit value 0 is the default;
-	// the vsync is nominally re-centred in the 54-line vblank (start at
-	// row 264 instead of the original 244, which had only 4 blank lines
-	// before it and could not take a ±20 range) — "+20" therefore
-	// reproduces the pre-2026-09-10 placement exactly.
-	"O[21:18],H Shift,0,+2,+4,+6,+8,+10,+12,+14,-16,-14,-12,-10,-8,-6,-4,-2;",
-	"O[27:22],V Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	// CRT Adjust (rtl/crt_chain.sv around rmonic79's MiSTer-CRT-Adjust,
+	// rtl/third_party/crt_adjust): analog-geometry controls for 15 kHz CRT
+	// users on their own page, replacing the former H/V Shift sync trims.
+	// Off = the native stream, bit for bit. H-Size stretches/shrinks the
+	// picture by changing the DAC read rate in quarter-cycle steps while
+	// HSync stays native; H-Position moves HSync by N pixels with the
+	// content anchored (the old H Shift, wider); V-Shift moves VSync by N
+	// lines (the old V Shift); V-Size is 3 lines per step, PVM retiming
+	// the line rate (broadcast monitors) or Cabinet resampling at native
+	// timing (arcade chassis). Ignored while the scandoubler/HQ2X or the
+	// rotation framebuffer is active -- those paths keep the native
+	// stream (crt_on below). Status bits as in the upstream reference glue.
+	"P3,CRT Adjust;",
+	"P3O[101],CRT Adjust,Off,On;",
+	"P3O[100:96],CRT H-Size,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"P3O[85:79],CRT H-Position,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,+32,+33,+34,+35,+36,+37,+38,+39,+40,+41,+42,+43,+44,+45,+46,+47,+48,-48,-47,-46,-45,-44,-43,-42,-41,-40,-39,-38,-37,-36,-35,-34,-33,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"P3O[78:74],CRT V-Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"P3O[107:104],CRT V-Size,0,+1,+2,+3,+4,+5,+6,+7,-7,-6,-5,-4,-3,-2,-1;",
+	"P3O[108],CRT V-Size Mode,PVM,Cabinet;",
 	// Autofire on button 1: Off, or a frames-on/frames-off pattern
 	// clocked by the game's own vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3,
 	// 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1. While enabled for a player,
@@ -528,31 +534,43 @@ assign AUDIO_L = audio_l;
 assign AUDIO_R = audio_r;
 
 // ------------------------------------------------------------------
-// Video sync — same placeholder pulses as NMK16_Macross2.sv, inside the
-// hblank/vblank windows video_timing.sv defines (HTOTAL=512/HACTIVE
-// 28-412, VTOTAL=278/VACTIVE 16-240).
+// Video output (2026-09-18): rtl/video_retime.sv re-clocks the core's
+// 8 MHz-paced raster (HTOTAL 512 / HACTIVE 28-412, VTOTAL 278 / VACTIVE
+// 16-240, the same geometry as gunnail) to an exact 8 MHz pixel clock
+// from a 96 MHz video PLL (/12, 6144 clk_vid per 64 us line) and
+// regenerates HS/VS/DE there -- hsync at 440 wide 32, vsync at row 264,
+// the placement the former clk_sys sync generator used. Until now this
+// rbf drove the mixer straight from the 40 MHz clk_sys raster; the CRT
+// Adjust chain below needs a uniform pixel enable with >= 8 clocks per
+// pixel, which the retimer provides. The former H/V Shift sync trims
+// are gone: the chain shifts sync downstream instead.
 // ------------------------------------------------------------------
-// H/V Shift (status[21:18], [27:22] — see CONF_STR): the sync pulses
-// move, the DE window does not. Positive = picture right/down = sync
-// earlier, so the start is the nominal MINUS the shift. H: nominal 440,
-// range 426..456 (+32), inside hblank 412..511. V: the 54-line vblank is
-// rows 240..277 followed by rows 0..15 of the next frame, so it is
-// handled as a blank-relative index (240..277 -> 0..37, 0..15 -> 38..53;
-// active rows 16..239 map to 54..277 and can never match). Nominal
-// vsync start = relative 24 = row 264, range 4..44 = row 244 (the
-// original placement, now "+20") .. row 6 of the next frame, pulse
-// end <= 47, always inside blanking.
-wire  [3:0] hshift_sel = status[21:18];
-wire  [9:0] hshift_px  = {{5{hshift_sel[3]}}, hshift_sel, 1'b0};   // two's complement x2: -16..+14
-wire  [5:0] vshift_sel = status[27:22];                              // 0..20 = 0..+20, 21..40 = -20..-1
-wire  [9:0] vshift_ln  = (vshift_sel <= 6'd20) ? {4'd0, vshift_sel} : ({4'd0, vshift_sel} - 10'd41);
-wire  [9:0] vrel   = (vcount_core >= 10'd240) ? (vcount_core - 10'd240) : (vcount_core + 10'd38);
-wire  [9:0] vs_rel = 10'd24 - vshift_ln;
-wire [9:0] hs_start = 10'd440 - hshift_px;
-wire hsync = (hcount_core >= hs_start) && (hcount_core < hs_start + 10'd32);
-wire vsync = (vrel >= vs_rel) && (vrel < vs_rel + 10'd3);
+wire clk_vid, pll_video_locked;
+wire [23:0] retimed_rgb;
+wire [23:0] rt_rgb;
+wire        rt_ce, rt_hs, rt_vs, rt_hb, rt_vb, rt_vb_hs;
+wire vm_ce_pix, vm_hs, vm_vs, vm_hb, vm_vb;
+pll_video96 pll_video
+(
+	.refclk(CLK_50M),
+	.rst(0),
+	.outclk_0(clk_vid),
+	.locked(pll_video_locked)
+);
 
-assign CLK_VIDEO = clk_sys;
+video_retime #(
+	.M0_X0(10'd28), .M0_HT(10'd512), .M0_HS(10'd440), .M0_HW(10'd32), .M0_AW(10'd384), .M0_DIV(5'd12),
+	.M1_X0(10'd28), .M1_HT(10'd512), .M1_HS(10'd440), .M1_HW(10'd32), .M1_AW(10'd384), .M1_DIV(5'd12),
+	.LINE_CLKS(6144)
+) video_retime (
+	.clk_w(clk_sys), .reset_w(reset), .ce_w(ce_pix_core),
+	.hcount_w(hcount_core), .vcount_w(vcount_core), .rgb_w(rd_rgb),
+	.mode1(1'b0), .tall240(1'b0),
+	.clk_r(clk_vid),
+	.ce_r(rt_ce), .rgb_r(rt_rgb), .hs_r(rt_hs), .vs_r(rt_vs), .de_r(),
+	.hb_r(rt_hb), .vb_r(rt_vb), .vb_hs_r(rt_vb_hs)
+);
+assign CLK_VIDEO = clk_vid;
 
 // HQ2X / scandoubler / scanlines. fx==0 leaves the raster untouched unless
 // hps_io asks for a forced scandoubler; fx==1 is HQ2X; 2..4 are CRT scanlines.
@@ -573,15 +591,36 @@ wire [1:0] sl = fx[2:1];
 assign VGA_SL = sl;
 wire [21:0] vm_gamma_bus;
 
+// ------------------------------------------------------------------
+// CRT Adjust (rtl/crt_chain.sv): V-Size, then H-Size / H-Position /
+// V-Shift, on the 15 kHz retimed raster ahead of the mixer. Off -- or
+// while the scandoubler/HQ2X or the rotation framebuffer is in use --
+// it is a registered passthrough with every signal delayed alike.
+// ------------------------------------------------------------------
+wire        crt_on = status[101] & ~scandoubler_en & ~fb_rotating;
+crt_chain #(
+	.HTOTAL0(10'd512), .HTOTAL1(10'd512), .DIV0(5'd12), .DIV1(5'd12),
+	.VTOTAL(278), .LINE_PX(400), .VSIZE_MAX(7)
+) crt_chain (
+	.clk(clk_vid), .ce_in(rt_ce), .rgb_in(rt_rgb),
+	.hs_in(rt_hs), .vs_in(rt_vs), .hb_in(rt_hb), .vb_in(rt_vb), .vb_hs_in(rt_vb_hs),
+	.mode1(1'b0), .enable(crt_on),
+	.hsize($signed(status[100:96])), .hpos_raw(status[85:79]),
+	.vshift($signed(status[78:74])), .vsize_code(status[107:104]),
+	.vsize_mode(status[108]),
+	.ce_out(vm_ce_pix), .rgb_out(retimed_rgb),
+	.hs_out(vm_hs), .vs_out(vm_vs), .hb_out(vm_hb), .vb_out(vm_vb)
+);
+
 video_mixer #(.LINE_LENGTH(400), .HALF_DEPTH(0), .GAMMA(0)) video_mixer (
 	.CLK_VIDEO(CLK_VIDEO),
-	.ce_pix(ce_pix_core),
+	.ce_pix(vm_ce_pix),
 	.CE_PIXEL(CE_PIXEL),
 	.scandoubler(scandoubler_en),
 	.hq2x(fx == 3'd1),
 	.gamma_bus(vm_gamma_bus),
-	.R(rd_rgb[23:16]), .G(rd_rgb[15:8]), .B(rd_rgb[7:0]),
-	.HSync(hsync), .VSync(vsync), .HBlank(hblank_core), .VBlank(vblank_core),
+	.R(retimed_rgb[23:16]), .G(retimed_rgb[15:8]), .B(retimed_rgb[7:0]),
+	.HSync(vm_hs), .VSync(vm_vs), .HBlank(vm_hb), .VBlank(vm_vb),
 	.HDMI_FREEZE(1'b0), .freeze_sync(),
 	.VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B),
 	.VGA_VS(VGA_VS), .VGA_HS(VGA_HS), .VGA_DE(VGA_DE)

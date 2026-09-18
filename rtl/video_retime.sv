@@ -34,10 +34,10 @@
 // boards, 3072 clk_r per line). mode1 selects the second set.
 module video_retime #(
 	parameter [9:0] M0_X0 = 10'd28,  M0_HT = 10'd512, M0_HS = 10'd440, M0_HW = 10'd32, M0_AW = 10'd384,
-	parameter [4:0] M0_DIV = 5'd7,
+	parameter [4:0] M0_DIV = 5'd14,
 	parameter [9:0] M1_X0 = 10'd60,  M1_HT = 10'd448, M1_HS = 10'd404, M1_HW = 10'd28, M1_AW = 10'd320,
-	parameter [4:0] M1_DIV = 5'd8,
-	parameter integer LINE_CLKS = 3584   // clk_r per line: M0_HT*M0_DIV == M1_HT*M1_DIV
+	parameter [4:0] M1_DIV = 5'd16,
+	parameter integer LINE_CLKS = 7168   // clk_r per line: M0_HT*M0_DIV == M1_HT*M1_DIV
 ) (
 	// write side — the core's raster
 	input         clk_w,
@@ -51,8 +51,6 @@ module video_retime #(
 	// VTOTAL and the line period are unchanged, so only the vertical
 	// active window and the vblank-relative vsync placement move.
 	input         tall240,
-	input  [3:0]  hshift_sel,       // OSD H Shift, two's complement x2 px
-	input  [5:0]  vshift_sel,       // OSD V Shift, 0..20 = 0..+20, 21..40 = -20..-1
 
 	// read side — the framework's video clock
 	input         clk_r,
@@ -64,7 +62,19 @@ module video_retime #(
 	// Separate blanks for sys/video_mixer.sv (HQ2X/scandoubler), which
 	// needs the two axes independently -- de_r alone cannot be split.
 	output reg    hb_r,
-	output reg    vb_r
+	output reg    vb_r,
+	// VBlank with its edges moved onto the hsync start, for rtl/crt_chain.sv:
+	// crt_adjust samples VBlank at each HSync rise and applies it to the
+	// active window that FOLLOWS that pulse. Where the pulse sits after the
+	// active area (hires: sync at 440, active from 28 of the next row) the
+	// native vb_r still shows the current row there, so the module would
+	// blank the first active row; this output already reads as the next
+	// row's blanking from the END of the active area on, so it holds for
+	// the nominal pulse and for one moved by H-Position (as long as the
+	// pulse stays out of the picture). Where the pulse precedes the active
+	// area on the same row (lowres: sync at 20, active from 92) that is
+	// the same as vb_r at the pulse. Off-path consumers keep vb_r.
+	output reg    vb_hs_r
 );
 
 	// Geometry per mode (bitmap coordinates in the board's own pixel
@@ -117,13 +127,12 @@ module video_retime #(
 	wire [9:0] r_aw = m7 ? AW_7   : AW_8;
 	wire [4:0] r_div = m7 ? DIV_7 : DIV_8;
 
-	// H/V Shift (the same arithmetic NMK16_Macross2.sv used on the core raster):
-	// positive = picture right/down = sync earlier.
-	wire [9:0] hshift_px = {{5{hshift_sel[3]}}, hshift_sel, 1'b0};
-	wire [9:0] vshift_ln = (vshift_sel <= 6'd20) ? {4'd0, vshift_sel} : ({4'd0, vshift_sel} - 10'd41);
-	wire [9:0] hs_start  = (m7 ? R_HS_7 : R_HS_8) - hshift_px;
+	// Sync placement is nominal: the former OSD H/V Shift trims that moved
+	// these pulses were replaced on 2026-09-18 by the CRT Adjust chain
+	// (rtl/crt_chain.sv), which shifts sync downstream of this module.
+	wire [9:0] hs_start  = m7 ? R_HS_7 : R_HS_8;
 	wire [9:0] hs_width  = m7 ? R_HW_7 : R_HW_8;
-	wire [9:0] vs_rel    = 10'd24 - vshift_ln;
+	wire [9:0] vs_rel    = 10'd24;
 
 	reg        running = 1'b0;
 	reg [12:0] hclk;              // clk_r within the line (13 bits: LINE_CLKS may be 6144)
@@ -145,6 +154,14 @@ module video_retime #(
 	wire        r_hact = (hcount_r >= r_x0) && (r_x < r_aw);
 	wire        r_vact = (vcount_r >= v_start_r) && (vcount_r < v_end_r);
 	wire        r_act  = r_hact && r_vact;
+	// next row's vertical activity, for vb_hs_r (see the port comment)
+	wire [9:0]  vnext_r  = (vcount_r == VTOTAL - 10'd1) ? 10'd0 : vcount_r + 10'd1;
+	wire        r_vact_n = (vnext_r >= v_start_r) && (vnext_r < v_end_r);
+	// From the END of the row's active area on, report the next row's
+	// blanking: every sync pulse that lies outside the picture -- the
+	// nominal one and any H-Position shift of it -- then samples the
+	// blanking of the active window it precedes, on both layouts.
+	wire        vb_hs_now = (hcount_r >= r_x0 + r_aw) ? ~r_vact_n : ~r_vact;
 	reg  [23:0] rgb_q;
 	always @(posedge clk_r) rgb_q <= buf_mem[{vcount_r[0], r_x[8:0]}];
 
@@ -176,6 +193,7 @@ module video_retime #(
 				de_r     <= r_act;
 				hb_r     <= ~r_hact;
 				vb_r     <= ~r_vact;
+				vb_hs_r  <= vb_hs_now;
 				hs_r     <= hs_now;
 				vs_r     <= vs_now;
 				if (hcount_r == r_ht - 10'd1) begin
@@ -188,7 +206,7 @@ module video_retime #(
 				pix_div <= pix_div + 5'd1;
 			end
 		end else begin
-			de_r <= 1'b0; hs_r <= 1'b0; vs_r <= 1'b0; rgb_r <= 24'd0; hb_r <= 1'b1; vb_r <= 1'b1;
+			de_r <= 1'b0; hs_r <= 1'b0; vs_r <= 1'b0; rgb_r <= 24'd0; hb_r <= 1'b1; vb_r <= 1'b1; vb_hs_r <= 1'b1;
 		end
 	end
 

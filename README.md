@@ -46,14 +46,16 @@ Every core is named `NMK16_<family>` and its bitstream ships as
 one family on an SD card shared with other arcade cores.
 
 All four fit the DE10-Nano's Cyclone V `5CSEBA6U23I7` (41,910 ALMs,
-553 M10K) with timing met, as built on 2026-09-17:
+553 M10K) with timing met, as built on 2026-09-18 (the CRT Adjust chain
+and its 96 / 112 MHz video clocks added about 1,500 ALMs and 40–60 M10K
+per core over the day before):
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
-| `NMK16_Macross2` | 17,936 (43%) | 484 / 553 | +0.245 ns |
-| `NMK16_Gunnail` | 29,153 (70%) | 463 / 553 | +0.251 ns |
-| `NMK16_Raphero` | 22,414 (53%) | 458 / 553 | +0.242 ns |
-| `NMK16_Afega` | 20,576 (49%) | 407 / 553 | +0.248 ns |
+| `NMK16_Macross2` | 19,511 (47%) | 524 / 553 | +0.113 ns |
+| `NMK16_Gunnail` | 30,629 (73%) | 520 / 553 | +0.242 ns |
+| `NMK16_Raphero` | 24,005 (57%) | 517 / 553 | +0.246 ns |
+| `NMK16_Afega` | 22,195 (53%) | 464 / 553 | +0.246 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
@@ -115,6 +117,11 @@ verification results.
    Flip screen option: the DIP is the PCB's own cocktail-cabinet
    setting that the game program acts on, the OSD one rotates the
    finished picture in the framework's scaler.
+4. Analog/CRT users have a **CRT Adjust** page in the OSD (H-Size,
+   H-Position, V-Shift, V-Size with PVM and Cabinet modes). Off outputs
+   the native stream unchanged; the page is bypassed while the
+   scandoubler/HQ2X or a Vert orientation is active. Limits and sign
+   convention in `docs/known-issues.md` NMK-31.
 
 ## Building
 
@@ -208,6 +215,7 @@ simulations.
 | YM2151 (jt51) | [jotego/jt51](https://github.com/jotego/jt51) | Jose Tejada | GPL-3.0-or-later |
 | MC68705R3 / 6805 CPU (jt6805) | [jotego/jtcores](https://github.com/jotego/jtcores), `modules/jt680x/hdl` | Jose Tejada | GPL-3.0-or-later |
 | SDRAM controller (`rtl/sdram.sv`) | copied from [rmonic79/Arcade-Darius_MiSTer](https://github.com/rmonic79/Arcade-Darius_MiSTer) | Sorgelig | GPL-3.0-or-later |
+| CRT Adjust: analog H-Size / H-Position / V-Shift (`crt_adjust.sv`) and V-Size (`crt_vsize.sv`) | [rmonic79/MiSTer-CRT-Adjust](https://github.com/rmonic79/MiSTer-CRT-Adjust) | Umberto Parisi (rmonic79), with Andrea Bogazzi | GPL-3.0-or-later |
 
 There is no standalone `jotego/jt680x` repository — jt6805 is a module of
 the **jtcores** monorepo, so `deps.lock` fetches it with a `subdir` kind:

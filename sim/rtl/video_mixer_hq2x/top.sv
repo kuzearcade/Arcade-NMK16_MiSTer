@@ -14,7 +14,7 @@ module vrtop (
     ) vr (
         .clk_w(clk_w), .reset_w(reset_w), .ce_w(ce_w),
         .hcount_w(hcount_w), .vcount_w(vcount_w), .rgb_w(rgb_w),
-        .mode1(mode1), .tall240(1'b0), .hshift_sel(4'd0), .vshift_sel(6'd0),
+        .mode1(mode1), .tall240(1'b0),
         .clk_r(clk_r),
         .ce_r(vm_ce), .rgb_r(rgb), .hs_r(vm_hs), .vs_r(vm_vs), .de_r(), .hb_r(vm_hb), .vb_r(vm_vb)
     );

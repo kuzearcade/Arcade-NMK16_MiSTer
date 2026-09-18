@@ -1,13 +1,15 @@
-// Video output PLL for the Macross2 rbf (2026-09-11, NMK-18): one
-// 56 MHz output from the 50 MHz reference, 50 * 28/25 (VCO 1400 MHz).
-// 56 MHz is the smallest clock that divides to BOTH pixel rates this
-// rbf's games use with integer enables — 8 MHz (56/7, tdragon2/macross2:
-// 512 px @ 16 MHz/2) and 7 MHz (56/8, Power Instinct: 448 px @ 14 MHz/2)
-// — so rtl/video_retime.sv can re-clock the 40 MHz core raster to the
-// exact PCB pixel clock. It cannot share rtl/pll.v's VCO: 40, 96 and
-// 56 MHz have no common VCO in Cyclone V's 600-1600 MHz range.
-// Same hand-written altpll form as rtl/pll.v (no MegaWizard here).
-module pll_video
+// Video output PLL for the Macross2 rbf: one 112 MHz output from the
+// 50 MHz reference, 50 * 56/25 (VCO 1120 MHz). 112 MHz is the smallest
+// clock >= 8x both pixel rates this rbf's games use with integer enables
+// -- 8 MHz (112/14, tdragon2/macross2: 512 px @ 16 MHz/2) and 7 MHz
+// (112/16, Power Instinct: 448 px @ 14 MHz/2) -- so rtl/video_retime.sv
+// can re-clock the 40 MHz core raster to the exact PCB pixel clock and
+// the CRT Adjust chain (rtl/crt_chain.sv) gets the >= 8 clocks per pixel
+// its Cabinet V-Size mode needs. Doubled from 56 MHz on 2026-09-18 for
+// that chain. It cannot share rtl/pll.v's VCO: 40, 96 and 112 MHz have
+// no common VCO in Cyclone V's 600-1600 MHz range. Same hand-written
+// altpll form as rtl/pll.v (no MegaWizard here).
+module pll_video112
 (
 	input  refclk,
 	input  rst,
@@ -23,7 +25,7 @@ module pll_video
 		.bandwidth_type("AUTO"),
 		.clk0_divide_by(25),
 		.clk0_duty_cycle(50),
-		.clk0_multiply_by(28),
+		.clk0_multiply_by(56),
 		.clk0_phase_shift("0"),
 		.compensate_clock("CLK0"),
 		.inclk0_input_frequency(20000),
