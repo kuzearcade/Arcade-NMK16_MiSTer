@@ -177,13 +177,16 @@ but not proven), `infra` (build/test/doc health).
   The mirror is blanking-safe: off-screen positions arrive >= the visible
   size and the modular subtraction keeps them there. `vandyke`/`vandykeb`
   take the inverted sense (`vandyke_flipscreen_w` calls `flipscreen_w(~data)`).
-- **The same mirror now serves the OSD's Flip screen under direct video**
+- **The same mirror now serves the OSD's Flip screen on every output**
   (2026-09-19): each core has an `osd_flip` input, XORed into the board's
-  flip (both Afega axes), driven by the top as `status[17] & direct_video`.
-  Over HDMI the framework's framebuffer flip is still used. That makes the
-  OSD option work for every set on the analog path, including tharrier,
-  whose map has `flipscreen_w` commented out in MAME, so its DIP does
-  nothing on the real board either.
+  flip (both Afega axes), driven straight from the status bit; the
+  framework's framebuffer flip (screen_rotate) is tied off. So the option
+  reaches the analog I/O board's VGA and direct video, which the framebuffer
+  flip never did, no longer forces the framebuffer on over HDMI (the
+  scandoubler and CRT Adjust keep working with it), composes with a Vert
+  orientation as the other Vert, and works for every set, including
+  tharrier, whose map has `flipscreen_w` commented out in MAME, so its DIP
+  does nothing on the real board either.
 - Verified in the reference sim against MAME for both DIP settings:
   tdragon2 194 of 211 frames pixel-exact, gunnail 69 of 85 — every
   non-exact frame a blank boot-lag frame (`sim nonblack 0`), and the
@@ -488,12 +491,13 @@ sprite-and-scroll evidence for that core is the board captures).
   is bypassed and the native stream goes out. **Off is bit-identical to the
   native stream** (a wire-for-wire mux, proven in Verilator), and so is
   On with every control at 0 apart from the two constants below.
-  **Since 2026-09-19 the page exists only under direct video**
-  (`direct_video=1`): menumask bit 11 hides it, and the Scandoubler Fx and
-  Orientation options, on the HDMI/scaler path, and the chain is held off
-  there whatever the saved bits say. Flip screen stays on both paths --
-  under direct video it is the core's own readback mirror (NMK-21's path),
-  over HDMI the framework's framebuffer flip.
+  **Since 2026-09-19 Flip screen no longer bypasses it**: the OSD flip is
+  the core's own readback mirror (NMK-21's path) on every output, so the
+  chain stays active with the picture flipped. The page is offered on every
+  path -- the analog I/O board's VGA carries the same stream the scaler
+  sees and the core cannot tell which monitor is watching -- while the
+  Scandoubler Fx and Orientation options are hidden under direct video
+  (menumask bit 11), where neither path exists.
 - **H-Size enlarge is limited by the raster's own blanking.** The stretched
   line must finish before the next sync pulse or its right edge is cut.
   Hires lines (gunnail, tdragon2, macross2, raphero, bjtwin…: active 28..411,

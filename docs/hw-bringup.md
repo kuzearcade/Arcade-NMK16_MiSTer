@@ -4066,3 +4066,23 @@ bytes, so an absolute `TB_PREFIX` silently truncated to a path that does not
 exist and no frame was written (now 512). `sim/rtl/tdragon2_hw` gained
 `TB_OSD_FLIP=1` (top-level `osd_flip` port); an unflipped and a flipped run
 compared frame by frame is the sim-side check.
+
+**Same day, second cut: every output, not just direct video.** The analog
+I/O board's VGA is the core's VGA_* stream whether or not the HDMI scaler
+is watching it, and the core cannot tell which monitor is connected, so
+gating CRT Adjust and the in-core flip on `direct_video` left the I/O-board
+path without either. Now `osd_flip = status[17]` on every path and
+screen_rotate's flip input is tied off (the `status[17]` term left
+`fb_rotating`, so Flip no longer forces the framebuffer on over HDMI and the
+scandoubler / CRT chain stay usable with it; Vert + Flip composes to the
+other Vert), and the CRT Adjust page is plain `P3` again with `crt_on`
+ungated. Only Scandoubler Fx and Orientation stay hidden under direct video
+(menumask bit 11). Board proof on the HDMI path (`direct_video=0`) below.
+Board proof, HDMI path (`direct_video=0`, tdragon2 with its saved Vert 270
+orientation, game paused from the OSD): Flip screen on vs off native
+screenshots (the VGA_* stream the scaler and the I/O board both take) are
+an exact rot180, **0.00 mean abs diff** (unrotated 42.2, single-axis
+mirrors 34-39); the OSD lists Aspect ratio, Scandoubler Fx, Orientation,
+Flip screen, CRT Adjust, DIP Switches, Pause, ... All four cores rebuilt
+and pass timing first try (Macross2 +0.152 ns on seed 11, Gunnail +0.552,
+Raphero +0.480, Afega +0.551).

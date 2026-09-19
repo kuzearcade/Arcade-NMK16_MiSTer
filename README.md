@@ -56,10 +56,10 @@ seed 11 for this build, where seeds 1, 3, 5 and 7 all missed by 0.05–0.5 ns):
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
-| `NMK16_Macross2` | 20,467 (49%) | 534 / 553 | +0.168 ns |
-| `NMK16_Gunnail` | 31,427 (75%) | 525 / 553 | +0.641 ns |
-| `NMK16_Raphero` | 25,254 (60%) | 520 / 553 | +0.395 ns |
-| `NMK16_Afega` | 23,402 (56%) | 468 / 553 | +0.597 ns |
+| `NMK16_Macross2` | 20,596 (49%) | 534 / 553 | +0.152 ns |
+| `NMK16_Gunnail` | 31,405 (75%) | 525 / 553 | +0.552 ns |
+| `NMK16_Raphero` | 25,324 (60%) | 520 / 553 | +0.480 ns |
+| `NMK16_Afega` | 23,369 (56%) | 468 / 553 | +0.551 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
@@ -118,19 +118,20 @@ verification results.
 3. DIP switches are exposed in the OSD. Player inputs follow MAME's
    default key layout. Vertical games have an Orientation option on the
    HDMI/scaler path. **Flip screen** (a 180-degree turn) is offered for
-   every game on both video paths: over HDMI it turns the finished
-   picture in the framework's scaler; under direct video (`direct_video=1`
-   in MiSTer.ini) the core mirrors its own picture, the same path the
-   games' Flip Screen DIP takes, so it also works for sets whose board
-   ignores that DIP (Task Force Harrier). A game's own Flip Screen DIP
-   stays separate: it is the PCB's cocktail-cabinet setting the game
-   program acts on, and the two compose.
+   every game and works on every output — HDMI, the analog I/O board's
+   VGA and direct video (`direct_video=1` in MiSTer.ini) — because the
+   core mirrors its own picture, the same path the games' Flip Screen
+   DIP takes, so it also works for sets whose board ignores that DIP
+   (Task Force Harrier). A game's own Flip Screen DIP stays separate: it
+   is the PCB's cocktail-cabinet setting the game program acts on, and
+   the two compose. Under direct video the Scandoubler Fx and
+   Orientation options are hidden, since neither path exists there.
 4. Analog/CRT users have a **CRT Adjust** page in the OSD (H-Size,
-   H-Position, V-Shift, V-Size with PVM and Cabinet modes). It is a
-   direct-video feature: the page only appears with `direct_video=1`,
-   where the Scandoubler Fx and Orientation options are hidden instead.
-   Off outputs the native stream unchanged. Limits and sign convention
-   in `docs/known-issues.md` NMK-31.
+   H-Position, V-Shift, V-Size with PVM and Cabinet modes), on every
+   output — the I/O board's VGA carries the same stream the scaler sees,
+   so the page is never hidden. Off outputs the native stream unchanged;
+   the chain is bypassed while the scandoubler/HQ2X or a Vert orientation
+   is active. Limits and sign convention in `docs/known-issues.md` NMK-31.
 5. **High scores** (Scores page) are saved and restored through MAME's
    hiscore.dat tables, but the option is **Off by default**: turn "High
    Scores" On and the scores are restored at boot and saved whenever the

@@ -83,15 +83,14 @@ localparam CONF_STR = {
 	// sessions through the OSD's own settings save.
 	"H0O[9:8],Orientation,Horz,Vert 270,Vert 90;",
 	// Flip screen (180-degree upside-down, no quarter-turn), for a monitor
-	// mounted upside-down. Over HDMI it is screen_rotate's flip, a
-	// framebuffer pass that only takes visible effect while Orientation is
-	// Horz (screen_rotate gates its flip input with no_rotate,
-	// sys/arcade_video.v). Under direct video, where the framebuffer path
-	// is unavailable, the core mirrors its own readback coordinates
-	// instead (osd_flip on the core instance) -- the path the Flip Screen
-	// DIP already takes (NMK-21), so it works for every set, the ones
-	// whose board ignores the DIP included. Shown for every game on both
-	// video paths.
+	// mounted upside-down. Done inside the core on every video path: the
+	// core mirrors its own readback coordinates (osd_flip on the core
+	// instance) -- the path the Flip Screen DIP already takes (NMK-21),
+	// so it works for every set, the ones whose board ignores the DIP
+	// included -- and it reaches the analog I/O board's VGA output and
+	// direct video as well as the HDMI scaler, which the framework's
+	// framebuffer flip (screen_rotate) never did. Composes with
+	// Orientation over HDMI (Vert + Flip = the other Vert).
 	"O[17],Flip screen,Off,On;",
 	// CRT Adjust (rtl/crt_chain.sv around rmonic79's MiSTer-CRT-Adjust,
 	// rtl/third_party/crt_adjust): analog-geometry controls for 15 kHz CRT
@@ -105,15 +104,17 @@ localparam CONF_STR = {
 	// timing (arcade chassis). Ignored while the scandoubler/HQ2X or the
 	// rotation framebuffer is active -- those paths keep the native
 	// stream (crt_on below). Status bits as in the upstream reference glue.
-	// Direct video only (hB, menumask bit 11): the page is hidden and the
-	// bits ignored (crt_on) on the HDMI/scaler path.
-	"hBP3,CRT Adjust;",
-	"hBP3O[101],CRT Adjust,Off,On;",
-	"hBP3O[100:96],CRT H-Size,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
-	"hBP3O[85:79],CRT H-Position,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,+32,+33,+34,+35,+36,+37,+38,+39,+40,+41,+42,+43,+44,+45,+46,+47,+48,-48,-47,-46,-45,-44,-43,-42,-41,-40,-39,-38,-37,-36,-35,-34,-33,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
-	"hBP3O[78:74],CRT V-Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
-	"hBP3O[107:104],CRT V-Size,0,+1,+2,+3,+4,+5,+6,+7,-7,-6,-5,-4,-3,-2,-1;",
-	"hBP3O[108],CRT V-Size Mode,PVM,Cabinet;",
+	// Offered on every path: the analog I/O board takes VGA_* whether or
+	// not the HDMI scaler is in use, and the core cannot tell which
+	// monitor is watching, so only direct video's own menu items are
+	// gated (Scandoubler Fx, Orientation), never this page.
+	"P3,CRT Adjust;",
+	"P3O[101],CRT Adjust,Off,On;",
+	"P3O[100:96],CRT H-Size,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"P3O[85:79],CRT H-Position,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,+32,+33,+34,+35,+36,+37,+38,+39,+40,+41,+42,+43,+44,+45,+46,+47,+48,-48,-47,-46,-45,-44,-43,-42,-41,-40,-39,-38,-37,-36,-35,-34,-33,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"P3O[78:74],CRT V-Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"P3O[107:104],CRT V-Size,0,+1,+2,+3,+4,+5,+6,+7,-7,-6,-5,-4,-3,-2,-1;",
+	"P3O[108],CRT V-Size Mode,PVM,Cabinet;",
 	// Autofire on button 1: Off, or a frames-on/frames-off pattern
 	// clocked by the game's own vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3,
 	// 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1 (this game has no third button
@@ -219,7 +220,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({4'd0, direct_video, hs_enable, ch_avail, 1'b0, autofire_unlock, direct_video | ~game_vertical}), // [11] direct video: hides Scandoubler Fx (HB), shows CRT Adjust (hB); [10] greys Save/Reset Scores (dA) while High Scores is Off; [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation (H0) for direct video and the horizontal games
+	.status_menumask({4'd0, direct_video, hs_enable, ch_avail, 1'b0, autofire_unlock, direct_video | ~game_vertical}), // [11] hides Scandoubler Fx (HB) under direct video; [10] greys Save/Reset Scores (dA) while High Scores is Off; [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation (H0) for direct video and the horizontal games
 	.status_in({status[127:42], ss_slot, status[39:0]}),
 	.status_set(ss_status_update),
 	.info_req(ss_info_req),
@@ -682,9 +683,10 @@ gunnail_core #(.HW_ROMS(1), .INCLUDE_AFEGA(1), .INCLUDE_NMK(0)) core
 	.hblank_o(hblank_core), .vblank_o(vblank_core), .lowres_o(lowres),
 
 	.in0_i(in0_i), .in1_i(in1_i), .dsw1_i(dsw1_i), .dsw2_i(dsw2_i),
-	// OSD Flip screen under direct video: mirrored inside the core (the
-	// DIP's path); over HDMI screen_rotate's flip does it instead (below).
-	.osd_flip(status[17] & direct_video)
+	// OSD Flip screen, every video path: mirrored inside the core (the
+	// DIP's path), so the I/O board's VGA output and direct video get it
+	// too; screen_rotate's own flip input (below) is no longer used.
+	.osd_flip(status[17])
 );
 
 assign AUDIO_L = audio_l;
@@ -742,11 +744,12 @@ assign CLK_VIDEO = clk_vid;
 // DDR writes are dropped and the picture comes out cut off. Scanlines are moot
 // there in any case: sys/sys_top.v:364 does `sl_r <= FB_EN ? 2'b00 : scanlines`,
 // i.e. the framework force-disables them in framebuffer mode. So "Scandoubler
-// Fx" has no effect while Orientation is Vert (or Flip screen is on).
+// Fx" has no effect while Orientation is Vert. (Flip screen is done in
+// the core since 2026-09-19 and no longer needs the framebuffer.)
 // Under direct video the option is hidden (HB) and its bits ignored here,
 // so a setting made on the HDMI path cannot linger unseen; the
 // framework's own forced_scandoubler still applies.
-wire       fb_rotating = ~((status[9:8] == 2'd0) | direct_video | ~game_vertical) | (status[17] & ~direct_video);
+wire       fb_rotating = ~((status[9:8] == 2'd0) | direct_video | ~game_vertical);
 wire [2:0] fx = direct_video ? 3'd0 : status[3:1];
 wire       scandoubler_en = ((fx != 3'd0) || forced_scandoubler) && ~fb_rotating;
 wire [1:0] sl = fx[2:1];
@@ -757,10 +760,10 @@ assign VGA_SL = sl;
 // V-Shift, on the 15 kHz retimed raster ahead of the mixer. Off -- or
 // while the scandoubler/HQ2X or the rotation framebuffer is in use --
 // it is a registered passthrough with every signal delayed alike.
-// Direct video only: the page is hidden (hB) and the bits ignored on the
-// HDMI/scaler path.
+// Active on every path (the I/O board's VGA output is this same stream
+// whether or not the HDMI scaler is watching it too).
 // ------------------------------------------------------------------
-wire        crt_on = status[101] & direct_video & ~scandoubler_en & ~fb_rotating;
+wire        crt_on = status[101] & ~scandoubler_en & ~fb_rotating;
 crt_chain #(
 	.HTOTAL0(10'd512), .HTOTAL1(10'd384), .DIV0(5'd12), .DIV1(5'd16),
 	.VTOTAL(278), .LINE_PX(400), .VSIZE_MAX(7)
@@ -790,31 +793,26 @@ video_mixer #(.LINE_LENGTH(400), .HALF_DEPTH(0), .GAMMA(0)) video_mixer (
 );
 
 // ------------------------------------------------------------------
-// Orientation (status[9:8], "Vert 270"/"Vert 90") and Flip screen
-// (status[17]): the framework's screen_rotate (sys/arcade_video.v)
-// copies the finished frame into a DDR3 framebuffer and hands it to
-// the scaler (FB_EN). With Horz selected and Flip screen off,
-// no_rotate holds FB_EN low and the scaler takes the direct VGA_*
-// path — the core's own video pipeline is untouched either way. ROT270
-// in MAME: the board's image is turned counter-clockwise to stand
-// upright, which is screen_rotate's rotate_ccw=1 case ("Vert 270");
-// "Vert 90" is rotate_ccw=0, the opposite quarter-turn, for cabinets
-// whose vertical monitor is mounted the other way around. Flip screen
-// only takes visible effect while Orientation is Horz (screen_rotate's
-// own flip input is gated by no_rotate internally), giving a
-// 180-degree upside-down image with no quarter-turn — for a horizontal
-// monitor mounted upside-down, playing this game un-rotated. Under
-// direct video none of this framebuffer path is available, so Flip
-// screen is done inside the core instead (osd_flip on the core
-// instance above: the readback-coordinate mirror the Flip Screen DIP
-// uses, NMK-21).
+// Orientation (status[9:8], "Vert 270"/"Vert 90"): the framework's
+// screen_rotate (sys/arcade_video.v) copies the finished frame into a
+// DDR3 framebuffer and hands it to the scaler (FB_EN). With Horz
+// selected, no_rotate holds FB_EN low and the scaler takes the direct
+// VGA_* path — the core's own video pipeline is untouched either way.
+// ROT270 in MAME: the board's image is turned counter-clockwise to
+// stand upright, which is screen_rotate's rotate_ccw=1 case ("Vert
+// 270"); "Vert 90" is rotate_ccw=0, the opposite quarter-turn, for
+// cabinets whose vertical monitor is mounted the other way around.
+// Flip screen (status[17]) no longer goes through here: it is the
+// core's own readback-coordinate mirror (osd_flip on the core instance
+// above, the Flip Screen DIP's path, NMK-21), which reaches the analog
+// I/O board's VGA output and direct video as well as the scaler.
+// screen_rotate's flip input is tied off.
 // ------------------------------------------------------------------
 wire  [1:0] orientation = status[9:8];
-wire        flip_screen = status[17];
 wire        video_rotated;
 wire        no_rotate = (orientation == 2'd0) | direct_video | ~game_vertical;
 wire        rotate_ccw = orientation != 2'd2;
-wire        flip = flip_screen & ~direct_video;
+wire        flip = 1'b0;
 // The DDRAM port is shared with the savestate engine: screen_rotate's write
 // wins any cycle it appears on (it has no backpressure of its own), the
 // engine fills the gaps. Both run on CLK_VIDEO (screen_rotate's DDRAM_CLK).
