@@ -533,8 +533,43 @@ module tdragon2_core #(
 	// ioctl_rom_wr gate existed.
 	output [7:0]  ioctl_session_count_o,
 	output [15:0] ioctl_last_index_o,
-	output [15:0] ioctl_nonrom_word0_o
+	output [15:0] ioctl_nonrom_word0_o,
+
+	// Savestates (2026-09-18) — rtl/savestate/savestate.sv drives this; see
+	// gunnail_core.sv for the mechanism. This core's image is 0x12400 words:
+	//   0x00000-0x07FFF main RAM (array order)   0x08000-0x0FFFF BG VRAM
+	//   0x10000-0x107FF TX VRAM                  0x10800-0x10FFF palette
+	//   0x11000-0x11FFF Z80 RAM (little-endian pairs)
+	//   0x12000-0x121FF FM shadow (chip 0 = YM2203 only)
+	//   0x12200-0x1227F registers (ss_misc_rd below)
+	input         ss_freeze,
+	input         ss_resume,
+	input         ss_active,
+	output        ss_frozen,
+	output        ss_parked,
+	input  [19:0] ss_addr,
+	output reg [15:0] ss_rdata,
+	input         ss_wr,
+	input  [15:0] ss_wdata,
+	input         ss_replay,
+	output        ss_replay_done
 );
+
+	wire ss_sel_mainram = (ss_addr[19:15] == 5'd0);
+	wire ss_sel_bgvram  = (ss_addr[19:15] == 5'd1);
+	wire ss_sel_txvram  = (ss_addr[19:11] == 9'h020);
+	wire ss_sel_palette = (ss_addr[19:11] == 9'h021);
+	wire ss_sel_z80ram  = (ss_addr[19:12] == 8'h11);
+	wire ss_sel_fm      = (ss_addr[19:9]  == 11'h090);
+	wire ss_sel_misc    = (ss_addr[19:7]  == 13'h0244);
+	wire ss_w = ss_active & ss_wr;
+	wire ss_misc_w = ss_w & ss_sel_misc;
+	wire [6:0] ss_mi = ss_addr[6:0];
+	wire m68k_parked, z80_parked;
+	wire [15:0] ss_n112_rdata, ss_m68k_rdata, ss_z80_rdata;
+	wire       rep_on = ss_replay;
+	reg        rep_ym_we = 1'b0, rep_a0 = 1'b0;
+	reg  [7:0] rep_data = 8'h00;
 
 	// ------------------------------------------------------------------
 	// HW_ROMS=1 only: a power-on-only reset for the SDRAM req/arb
@@ -675,6 +710,19 @@ module tdragon2_core #(
 
 	wire iack_cycle = FC0 & FC1 & FC2 & ~ASn;
 	wire VPAn = ~iack_cycle;
+	// savestate park controller (rtl/savestate/ss_m68k_park.sv), overlay at
+	// 0x1E8000: unmapped on every map here (TX VRAM ends at 0x171FFF, the
+	// powerins/tdragon2 work RAM sits at 0x180000 / 0x1F0000).
+	wire [2:0]  m68k_ipl_park;
+	wire        m68k_sel_mon;
+	wire [15:0] m68k_mon_data;
+	ss_m68k_park #(.MON_BASE(15'h0F40)) m68k_park (
+		.clk(clk_sys), .reset(reset), .phi(enPhi2),
+		.park_req(ss_freeze), .parked(m68k_parked), .resume(ss_resume),
+		.eab(eab), .ASn(ASn), .eRWn(eRWn), .FC0(FC0), .FC1(FC1), .FC2(FC2), .oEdb(oEdb),
+		.ipl_park(m68k_ipl_park), .sel_mon(m68k_sel_mon), .mon_data(m68k_mon_data),
+		.ss_sel(ss_addr[1:0]), .ss_wr(ss_misc_w & (ss_mi[6:2] == 5'b00011)), .ss_wdata(ss_wdata), .ss_rdata(ss_m68k_rdata)   // words 12-15
+	);
 	// HW_ROMS=1 only: hold DTACKn off while the maincpu ROM cache hasn't
 	// yet produced data for the current address (see rom_cache1/sd0
 	// wiring below), or while the mainram/bgvram registered read (see
@@ -1387,7 +1435,8 @@ module tdragon2_core #(
 	wire [15:0] hs_byte = hs_addr[15:0];
 	wire [14:0] mainram_addr_hs = (game_macross2 | game_powerins) ? hs_byte[15:1] :
 		{hs_byte[15:12], hs_byte[8], hs_byte[10:9], hs_byte[11], hs_byte[7:1]};
-	wire [14:0] mainram_addr_use = hs_access ? mainram_addr_hs : mainram_addr_cpu;
+	wire [14:0] mainram_addr_use = ss_active ? ss_addr[14:0] : hs_access ? mainram_addr_hs : mainram_addr_cpu;
+	wire        ss_mr_w = ss_w & ss_sel_mainram;
 	reg [15:0] mainram_dout;
 	reg        mainram_ready;
 	// HW_ROMS=1 only: registered (synchronous) CPU-side read, write
@@ -1417,12 +1466,14 @@ module tdragon2_core #(
 	generate
 	if (!HW_ROMS) begin : g_mainram_cpu_sim
 		always @(posedge clk_sys) begin
-			if (sel_mainram & cpu_write & ~sprite_dma_busy) begin
+			if (ss_active) begin
+				if (ss_mr_w) begin mainram_hi[mainram_addr_use] <= ss_wdata[15:8]; mainram_lo[mainram_addr_use] <= ss_wdata[7:0]; end
+			end else if (sel_mainram & cpu_write & ~sprite_dma_busy) begin
 				if (~UDSn) mainram_hi[mainram_addr_cpu] <= oEdb[15:8];
 				if (~LDSn) mainram_lo[mainram_addr_cpu] <= oEdb[7:0];
 			end
 		end
-		always @(*) mainram_dout  = {mainram_hi[mainram_addr_cpu], mainram_lo[mainram_addr_cpu]};
+		always @(*) mainram_dout  = {mainram_hi[mainram_addr_use], mainram_lo[mainram_addr_use]};
 		always @(*) mainram_ready = 1'b1;
 	end else begin : g_mainram_cpu_hw
 		// Write conditions flattened to top-level ANDed ifs, not nested
@@ -1440,12 +1491,12 @@ module tdragon2_core #(
 		// hs_access steals this port for one cycle while the CPU is paused.
 		// The two write enables stay flattened top-level ANDed expressions —
 		// the shape above is what makes byte-enable inference work.
-		wire       we_hi = (sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy & ~hs_access)
-		                 | (hs_access & hs_write & ~hs_addr[0]);
-		wire       we_lo = (sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy & ~hs_access)
-		                 | (hs_access & hs_write &  hs_addr[0]);
-		wire [7:0] din_hi = hs_access ? hs_din : oEdb[15:8];
-		wire [7:0] din_lo = hs_access ? hs_din : oEdb[7:0];
+		wire       we_hi = ss_mr_w | (~ss_active & ((sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy & ~hs_access)
+		                 | (hs_access & hs_write & ~hs_addr[0])));
+		wire       we_lo = ss_mr_w | (~ss_active & ((sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy & ~hs_access)
+		                 | (hs_access & hs_write &  hs_addr[0])));
+		wire [7:0] din_hi = ss_active ? ss_wdata[15:8] : hs_access ? hs_din : oEdb[15:8];
+		wire [7:0] din_lo = ss_active ? ss_wdata[7:0]  : hs_access ? hs_din : oEdb[7:0];
 		always @(posedge clk_sys) begin
 			if (we_hi) begin mainram_hi[mainram_addr_use] <= din_hi; mainram_dout[15:8] <= din_hi; end
 			else       mainram_dout[15:8] <= mainram_hi[mainram_addr_use];
@@ -1474,26 +1525,30 @@ module tdragon2_core #(
 	// CPU reads take one DTACK wait (palette_wait), the bgvram pattern.
 	reg [15:0] palette [0:2047]; // 2048 for powerins (gfx_powerins: BG 0x000, TX 0x200, sprites 0x400-0x7FF); the other games decode only 0x000-0x3FF
 	wire [10:0] palette_addr = byte_addr[11:1];
+	wire [10:0] pal_a = ss_active ? ss_addr[10:0] : palette_addr;
+	wire        ss_pal_w = ss_w & ss_sel_palette;
+	wire        pal_we_hi = ss_pal_w | (~ss_active & sel_palette & cpu_write & ~UDSn);
+	wire        pal_we_lo = ss_pal_w | (~ss_active & sel_palette & cpu_write & ~LDSn);
+	wire [7:0]  pal_wd_hi = ss_active ? ss_wdata[15:8] : oEdb[15:8];
+	wire [7:0]  pal_wd_lo = ss_active ? ss_wdata[7:0]  : oEdb[7:0];
 	reg [15:0] palette_dout;
 	wire       palette_ready;
 	generate
 	if (!HW_ROMS) begin : g_palette_sim
 		always @(posedge clk_sys) begin
-			if (sel_palette & cpu_write) begin
-				if (~UDSn) palette[palette_addr][15:8] <= oEdb[15:8];
-				if (~LDSn) palette[palette_addr][7:0]  <= oEdb[7:0];
-			end
+			if (pal_we_hi) palette[pal_a][15:8] <= pal_wd_hi;
+			if (pal_we_lo) palette[pal_a][7:0]  <= pal_wd_lo;
 		end
-		always @(*) palette_dout = palette[palette_addr];
+		always @(*) palette_dout = palette[pal_a];
 		assign palette_ready = 1'b1;
 	end else begin : g_palette_hw
 		// Combinational ready on the registered address (raphero_core.sv's
 		// mainram_ready explains why not a registered flag).
 		reg [10:0] palette_addr_r;
 		always @(posedge clk_sys) begin
-			if (sel_palette & cpu_write & ~UDSn) palette[palette_addr][15:8] <= oEdb[15:8];
-			if (sel_palette & cpu_write & ~LDSn) palette[palette_addr][7:0]  <= oEdb[7:0];
-			palette_dout   <= palette[palette_addr];
+			if (pal_we_hi) palette[pal_a][15:8] <= pal_wd_hi;
+			if (pal_we_lo) palette[pal_a][7:0]  <= pal_wd_lo;
+			palette_dout   <= palette[pal_a];
 			palette_addr_r <= palette_addr;
 		end
 		assign palette_ready = (palette_addr_r == palette_addr);
@@ -1506,7 +1561,8 @@ module tdragon2_core #(
 	// Lane arrays + true-dual-port CPU port, as mainram above (NMK-10).
 	reg [7:0] bgvram_hi [0:32767];
 	reg [7:0] bgvram_lo [0:32767];
-	wire [14:0] bgvram_addr = byte_addr[15:1];
+	wire [14:0] bgvram_addr = ss_active ? ss_addr[14:0] : byte_addr[15:1];
+	wire        ss_bg_w = ss_w & ss_sel_bgvram;
 	// Same reasoning/mechanism as mainram above — CPU write folded into
 	// the same always block as the CPU read, keeping bgvram within
 	// Cyclone V's 2-independent-port-per-M10K limit (CPU port + video
@@ -1517,7 +1573,9 @@ module tdragon2_core #(
 	generate
 	if (!HW_ROMS) begin : g_bgvram_cpu_sim
 		always @(posedge clk_sys) begin
-			if (sel_bgvram & cpu_write) begin
+			if (ss_active) begin
+				if (ss_bg_w) begin bgvram_hi[bgvram_addr] <= ss_wdata[15:8]; bgvram_lo[bgvram_addr] <= ss_wdata[7:0]; end
+			end else if (sel_bgvram & cpu_write) begin
 				if (~UDSn) bgvram_hi[bgvram_addr] <= oEdb[15:8];
 				if (~LDSn) bgvram_lo[bgvram_addr] <= oEdb[7:0];
 			end
@@ -1528,16 +1586,18 @@ module tdragon2_core #(
 		// Same flattened-condition fix as mainram above — see its own
 		// comment for the full story — in the true-dual-port shape.
 		reg [14:0] bgvram_addr_r;
-		wire       we_hi = sel_bgvram & cpu_write & ~UDSn;
-		wire       we_lo = sel_bgvram & cpu_write & ~LDSn;
+		wire       we_hi = ss_bg_w | (~ss_active & sel_bgvram & cpu_write & ~UDSn);
+		wire       we_lo = ss_bg_w | (~ss_active & sel_bgvram & cpu_write & ~LDSn);
+		wire [7:0] wd_hi = ss_active ? ss_wdata[15:8] : oEdb[15:8];
+		wire [7:0] wd_lo = ss_active ? ss_wdata[7:0]  : oEdb[7:0];
 		always @(posedge clk_sys) begin
-			if (we_hi) begin bgvram_hi[bgvram_addr] <= oEdb[15:8]; bgvram_dout_r[15:8] <= oEdb[15:8]; end
+			if (we_hi) begin bgvram_hi[bgvram_addr] <= wd_hi; bgvram_dout_r[15:8] <= wd_hi; end
 			else       bgvram_dout_r[15:8] <= bgvram_hi[bgvram_addr];
-			if (we_lo) begin bgvram_lo[bgvram_addr] <= oEdb[7:0];  bgvram_dout_r[7:0]  <= oEdb[7:0];  end
+			if (we_lo) begin bgvram_lo[bgvram_addr] <= wd_lo;  bgvram_dout_r[7:0]  <= wd_lo;  end
 			else       bgvram_dout_r[7:0]  <= bgvram_lo[bgvram_addr];
 			bgvram_addr_r <= bgvram_addr;
 		end
-		always @(*) bgvram_ready = (bgvram_addr_r == bgvram_addr); // see mainram_ready
+		always @(*) bgvram_ready = (bgvram_addr_r == byte_addr[15:1]); // see mainram_ready
 		assign bgvram_dout = bgvram_dout_r;
 	end
 	endgenerate
@@ -1548,7 +1608,8 @@ module tdragon2_core #(
 	// Lane arrays + true-dual-port CPU port, as mainram above (NMK-10).
 	reg [7:0] txvram_hi [0:2047];
 	reg [7:0] txvram_lo [0:2047];
-	wire [10:0] txvram_addr = byte_addr[11:1];
+	wire [10:0] txvram_addr = ss_active ? ss_addr[10:0] : byte_addr[11:1];
+	wire        ss_tx_w = ss_w & ss_sel_txvram;
 	// Despite its modest 32,768-bit storage, an asynchronous read of a
 	// 2048-entry array still costs real logic: Quartus's own multiplexer
 	// restructuring reported a bare "2048:1" mux for this exact
@@ -1564,7 +1625,9 @@ module tdragon2_core #(
 	generate
 	if (!HW_ROMS) begin : g_txvram_cpu_sim
 		always @(posedge clk_sys) begin
-			if (sel_txvram & cpu_write) begin
+			if (ss_active) begin
+				if (ss_tx_w) begin txvram_hi[txvram_addr] <= ss_wdata[15:8]; txvram_lo[txvram_addr] <= ss_wdata[7:0]; end
+			end else if (sel_txvram & cpu_write) begin
 				if (~UDSn) txvram_hi[txvram_addr] <= oEdb[15:8];
 				if (~LDSn) txvram_lo[txvram_addr] <= oEdb[7:0];
 			end
@@ -1573,16 +1636,18 @@ module tdragon2_core #(
 		always @(*) txvram_ready = 1'b1;
 	end else begin : g_txvram_cpu_hw
 		reg [10:0] txvram_addr_r;
-		wire       we_hi = sel_txvram & cpu_write & ~UDSn;
-		wire       we_lo = sel_txvram & cpu_write & ~LDSn;
+		wire       we_hi = ss_tx_w | (~ss_active & sel_txvram & cpu_write & ~UDSn);
+		wire       we_lo = ss_tx_w | (~ss_active & sel_txvram & cpu_write & ~LDSn);
+		wire [7:0] wd_hi = ss_active ? ss_wdata[15:8] : oEdb[15:8];
+		wire [7:0] wd_lo = ss_active ? ss_wdata[7:0]  : oEdb[7:0];
 		always @(posedge clk_sys) begin
-			if (we_hi) begin txvram_hi[txvram_addr] <= oEdb[15:8]; txvram_dout_r[15:8] <= oEdb[15:8]; end
+			if (we_hi) begin txvram_hi[txvram_addr] <= wd_hi; txvram_dout_r[15:8] <= wd_hi; end
 			else       txvram_dout_r[15:8] <= txvram_hi[txvram_addr];
-			if (we_lo) begin txvram_lo[txvram_addr] <= oEdb[7:0];  txvram_dout_r[7:0]  <= oEdb[7:0];  end
+			if (we_lo) begin txvram_lo[txvram_addr] <= wd_lo;  txvram_dout_r[7:0]  <= wd_lo;  end
 			else       txvram_dout_r[7:0]  <= txvram_lo[txvram_addr];
 			txvram_addr_r <= txvram_addr;
 		end
-		always @(*) txvram_ready = (txvram_addr_r == txvram_addr); // see mainram_ready
+		always @(*) txvram_ready = (txvram_addr_r == byte_addr[11:1]); // see mainram_ready
 		assign txvram_dout = txvram_dout_r;
 	end
 	endgenerate
@@ -1701,6 +1766,14 @@ module tdragon2_core #(
 			z80_reset_n_reg <= 1'b0; // held in reset until the 68000 releases it
 			tilerambank_reg <= 2'd0;
 			for (si = 0; si < 4; si = si + 1) scroll_reg[si] <= 8'h00;
+		end else if (ss_misc_w) begin
+			case (ss_mi)
+				7'd0: {flip_screen_reg, bgbank_reg} <= ss_wdata;
+				7'd1: {scroll_reg[0], scroll_reg[1]} <= ss_wdata;
+				7'd2: {scroll_reg[2], scroll_reg[3]} <= ss_wdata;
+				7'd3: begin tilerambank_reg <= ss_wdata[10:9]; z80_reset_n_reg <= ss_wdata[8]; end
+				default: ;
+			endcase
 		end else if (cpu_write) begin
 			if (sel_flip & ~LDSn)     flip_screen_reg <= oEdb[7:0];
 			if (sel_tilebank & ~LDSn) bgbank_reg      <= oEdb[7:0];
@@ -1714,6 +1787,7 @@ module tdragon2_core #(
 	reg [2:0] pia_okibank;
 	always @(posedge clk_sys) begin
 		if (reset) pia_okibank <= 3'd0;
+		else if (ss_misc_w & (ss_mi == 7'd3)) pia_okibank <= ss_wdata[7:5];
 		else if (sel_pia_okibank & cpu_write & ~LDSn) pia_okibank <= oEdb[2:0]; // set_entry(data & 7)
 	end
 
@@ -1727,6 +1801,7 @@ module tdragon2_core #(
 
 	always @(posedge clk_sys) begin
 		if (reset) soundlatch_data <= 8'h00;
+		else if (ss_misc_w & (ss_mi == 7'd4)) soundlatch_data <= ss_wdata[15:8];
 		else if (sel_soundlatch_w & cpu_write & ~LDSn) soundlatch_data <= oEdb[7:0];
 	end
 
@@ -1747,21 +1822,36 @@ module tdragon2_core #(
 	reg        irq120_pending = 1'b0;
 	wire       z80_iack = ~z80_m1_n & ~z80_iorq_n;
 	always @(posedge clk_sys) begin
-		if (irq120_cnt == 19'd333332) irq120_cnt <= 19'd0; else irq120_cnt <= irq120_cnt + 19'd1; // 40 MHz / 120
+		if (ss_misc_w & (ss_mi == 7'd5)) irq120_cnt[15:0] <= ss_wdata;
+		else if (ss_misc_w & (ss_mi == 7'd6)) irq120_cnt[18:16] <= ss_wdata[2:0];
+		else if (ss_freeze) irq120_cnt <= irq120_cnt;   // the bootlegs' 120 Hz timer stops with the CPUs
+		else if (irq120_cnt == 19'd333332) irq120_cnt <= 19'd0; else irq120_cnt <= irq120_cnt + 19'd1; // 40 MHz / 120
 		if (~z80_reset_n) irq120_pending <= 1'b0;
+		else if (ss_misc_w & (ss_mi == 7'd3)) irq120_pending <= ss_wdata[1];
+		else if (ss_freeze) irq120_pending <= irq120_pending;
 		else if (irq120_cnt == 19'd0) irq120_pending <= 1'b1;
 		else if (z80_iack) irq120_pending <= 1'b0;
 	end
 	assign z80_int_n = z80_bootleg ? ~irq120_pending : ym_chip_irq_n;
 	wire z80_reset_n = ~reset & (z80_reset_n_reg | game_powerins) & ~game_pi_nosnd; // powerins: no 68000-driven Z80 reset (0x100016 is a nopw); powerinsa: no Z80
 
+	wire z80_nmi_park, z80_sel_mon;
+	wire [7:0] z80_mon_data;
+	ss_z80_park z80_park (
+		.clk(clk_sys), .cen(z80_cen), .reset_n(z80_reset_n),
+		.park_req(ss_freeze), .parked(z80_parked), .resume(ss_resume),
+		.a(z80_a), .m1_n(z80_m1_n), .mreq_n(z80_mreq_n), .iorq_n(z80_iorq_n), .rd_n(z80_rd_n), .wr_n(z80_wr_n), .wait_n(z80_wait_n),
+		.dout(z80_do), .din_bus(z80_di),
+		.nmi_park(z80_nmi_park), .sel_mon(z80_sel_mon), .mon_data(z80_mon_data),
+		.ss_sel(ss_addr[0]), .ss_wr(ss_misc_w & (ss_mi[6:1] == 6'b001000)), .ss_wdata(ss_wdata), .ss_rdata(ss_z80_rdata)   // words 16-17
+	);
 	T80s z80_cpu (
 		.RESET_n(z80_reset_n),
 		.CLK(clk_sys),
 		.CEN(z80_cen & ~pause),
 		.WAIT_n(z80_wait_n),
 		.INT_n(z80_int_n),
-		.NMI_n(1'b1),
+		.NMI_n(~z80_nmi_park),
 		.BUSRQ_n(1'b1),
 		.OUT0(1'b0),
 		.DI(z80_di),
@@ -1897,16 +1987,29 @@ module tdragon2_core #(
 	reg [2:0] audiobank_reg;
 	always @(posedge clk_sys) begin
 		if (~z80_reset_n) audiobank_reg <= 3'd0;
+		else if (ss_misc_w & (ss_mi == 7'd3)) audiobank_reg <= ss_wdata[4:2];
 		else if (sel_mem_audiobank_w) audiobank_reg <= z80_do[2:0]; // macross2_audiobank_w
 	end
 
-	reg [7:0] z80_ram [0:8191];
-	always @(posedge clk_sys) if (sel_z80_ram & z80_mem_we) z80_ram[z80_a[12:0]] <= z80_do;
+	// 8 KB as two byte lanes so the savestate engine can move a word per
+	// access; the Z80's own (asynchronous) read is unchanged in effect.
+	reg [7:0] z80_ram_e [0:4095];
+	reg [7:0] z80_ram_o [0:4095];
+	wire [11:0] zr_a = ss_active ? ss_addr[11:0] : z80_a[12:1];
+	always @(posedge clk_sys) begin
+		if (ss_active) begin
+			if (ss_wr & ss_sel_z80ram) begin z80_ram_e[zr_a] <= ss_wdata[7:0]; z80_ram_o[zr_a] <= ss_wdata[15:8]; end
+		end else if (sel_z80_ram & z80_mem_we) begin
+			if (z80_a[0]) z80_ram_o[zr_a] <= z80_do; else z80_ram_e[zr_a] <= z80_do;
+		end
+	end
+	wire [7:0] z80_ram_q = z80_a[0] ? z80_ram_o[z80_a[12:1]] : z80_ram_e[z80_a[12:1]];
 
 	wire [16:0] z80_bank_phys = {audiobank_reg, 14'd0} + {3'd0, z80_a[13:0]};
 
 	always @(posedge clk_sys) begin
 		if (~z80_reset_n) soundlatch2_data <= 8'h00;
+		else if (ss_misc_w & (ss_mi == 7'd4)) soundlatch2_data <= ss_wdata[7:0];
 		else if (sel_z80_soundlatch2_w) soundlatch2_data <= z80_do;
 	end
 
@@ -1919,12 +2022,14 @@ module tdragon2_core #(
 	reg       ym_addr_latch;
 	reg [5:0] ym_wr_hold = 6'd0;
 	reg       ym_we_prev = 1'b0;
-	wire      ym_we_raw = z80_io_we & sel_io_ym & ~game_pi_bootleg; // powerinsb/c: no YM2203 fitted, the sound code's writes go nowhere
+	wire      ym_we_raw = rep_on ? rep_ym_we : (z80_io_we & sel_io_ym & ~game_pi_bootleg); // powerinsb/c: no YM2203 fitted, the sound code's writes go nowhere
+	wire      ym_a0_src = rep_on ? rep_a0 : sel_io_ym_data;
+	wire [7:0] ym_d_src = rep_on ? rep_data : z80_do;
 	always @(posedge clk_sys) begin
 		ym_we_prev <= ym_we_raw;
 		if (ym_we_raw && !ym_we_prev) begin
-			ym_din_latch  <= z80_do;
-			ym_addr_latch <= sel_io_ym_data;
+			ym_din_latch  <= ym_d_src;
+			ym_addr_latch <= ym_a0_src;
 			ym_wr_hold    <= 6'd40;
 		end else if (ym_wr_hold != 6'd0) begin
 			ym_wr_hold <= ym_wr_hold - 6'd1;
@@ -1978,7 +2083,8 @@ module tdragon2_core #(
 		.ROM1_BYTES(2097152)  // ww930915.3, 0x200000 (oki2 — macross2's own bp932an.a05 is half this; harmless, see header)
 	) nmk112_inst (
 		.clk_sys(clk_sys), .reset(reset),
-		.reg_sel(z80_a[2:0]), .reg_data(z80_do), .reg_we(nmk112_we), .hold(nmk112_hold),
+		.reg_sel(z80_a[2:0]), .reg_data(z80_do), .reg_we(nmk112_we & ~ss_active), .hold(nmk112_hold),
+		.ss_wr(ss_misc_w & (ss_mi[6:2] == 5'b00010)), .ss_sel(ss_mi[1:0]), .ss_wdata(ss_wdata), .ss_rdata(ss_n112_rdata),   // words 8-11
 		.rom0_addr_in(oki0_rom_addr_raw), .rom0_addr_out(oki0_rom_addr_n112),
 		.rom1_addr_in(oki1_rom_addr_raw), .rom1_addr_out(oki1_rom_addr)
 	);
@@ -2223,21 +2329,116 @@ module tdragon2_core #(
 	always @(*) begin
 		if (z80_mem_re & sel_z80_rom)        z80_rdata = audiocpu_dout;
 		else if (z80_mem_re & sel_z80_bank)  z80_rdata = audiocpu_dout;
-		else if (z80_mem_re & sel_z80_ram)   z80_rdata = z80_ram[z80_a[12:0]];
+		else if (z80_mem_re & sel_z80_ram)   z80_rdata = z80_ram_q;
 		else if (z80_mem_re & sel_z80_soundlatch_r) z80_rdata = soundlatch_data;
 		else if (z80_io_re & sel_io_ym)   z80_rdata = game_pi_bootleg ? {7'd0, sel_io_ym_addr} : ym_chip_dout; // bootleg: powerins_bootleg_fake_ym2203_r = 1 on port 0, port 1 nop
 		else if (z80_io_re & sel_io_oki0) z80_rdata = oki0_chip_dout;
 		else if (z80_io_re & sel_io_oki1) z80_rdata = oki1_chip_dout;
 		else                     z80_rdata = 8'hFF;
 	end
-	assign z80_di = z80_rdata;
+	assign z80_di = z80_sel_mon ? z80_mon_data : z80_rdata;   // savestate monitor overlay
+
+	// ------------------------------------------------------------------
+	// Savestates: YM2203 register shadow and its replay after a load —
+	// gunnail_core.sv's scheme with one chip (see its comment: key-on
+	// register 0x28 is replaced by a key-off sweep, 0x2C-0x2F skipped).
+	// ------------------------------------------------------------------
+	reg  [7:0] fm_sh_e [0:511];
+	reg  [7:0] fm_sh_o [0:511];
+	reg  [7:0] ym_sh_addr = 8'h00;
+	reg [15:0] fm_sh_q;
+	reg  [8:0] rep_addr = 9'd0;
+	wire [8:0] fm_raddr = ss_active ? ss_addr[8:0] : rep_addr;
+	wire       ym_wr_edge = ym_we_raw & ~ym_we_prev;
+	always @(posedge clk_sys) begin
+		if (ss_w & ss_sel_fm) begin
+			fm_sh_e[ss_addr[8:0]] <= ss_wdata[7:0];
+			fm_sh_o[ss_addr[8:0]] <= ss_wdata[15:8];
+		end else if (~rep_on & ym_wr_edge) begin
+			if (~ym_a0_src) ym_sh_addr <= ym_d_src;
+			else if (ym_sh_addr[0]) fm_sh_o[{2'd0, ym_sh_addr[7:1]}] <= ym_d_src;
+			else                    fm_sh_e[{2'd0, ym_sh_addr[7:1]}] <= ym_d_src;
+		end
+		fm_sh_q <= {fm_sh_o[fm_raddr], fm_sh_e[fm_raddr]};
+	end
+	localparam [3:0] R_IDLE = 4'd0, R_FETCH = 4'd1, R_FETCH2 = 4'd2, R_ADDR = 4'd3, R_W1 = 4'd4,
+	                 R_DATA = 4'd5, R_W2 = 4'd6, R_NEXT = 4'd7, R_DONE = 4'd8;
+	reg  [3:0]  rep_st = R_IDLE;
+	reg         rep_odd = 1'b0;
+	reg [15:0]  rep_word;
+	reg  [8:0]  rep_wait;
+	reg         rep_done_r = 1'b0;
+	wire [6:0]  rep_idx = rep_addr[6:0];
+	wire        rep_sweep = (rep_addr[8:7] == 2'd1);          // after chip 0: 0x28 <- 0/1/2
+	wire [7:0]  rep_reg  = rep_sweep ? 8'h28 : {rep_idx, rep_odd};
+	wire [7:0]  rep_val  = rep_sweep ? {5'd0, rep_idx[2:0]} : rep_odd ? rep_word[15:8] : rep_word[7:0];
+	wire        rep_skip = rep_sweep ? rep_odd : ((rep_reg == 8'h28) | (rep_reg[7:2] == 6'b001011));
+	wire        rep_last = rep_sweep & (rep_idx == 7'd3);
+	assign ss_replay_done = rep_done_r;
+	always @(posedge clk_sys) begin
+		rep_ym_we <= 1'b0;
+		case (rep_st)
+			R_IDLE: begin
+				rep_done_r <= 1'b0;
+				if (ss_replay) begin rep_addr <= 9'd0; rep_odd <= 1'b0; rep_st <= R_FETCH; end
+			end
+			R_FETCH:  rep_st <= R_FETCH2;
+			R_FETCH2: begin rep_word <= fm_sh_q; rep_st <= R_ADDR; end
+			R_ADDR: begin
+				if (rep_skip | rep_last) rep_st <= R_NEXT;
+				else begin rep_data <= rep_reg; rep_a0 <= 1'b0; rep_ym_we <= 1'b1; rep_wait <= 9'd0; rep_st <= R_W1; end
+			end
+			R_W1: begin rep_wait <= rep_wait + 1'b1; if (rep_wait == 9'd255) rep_st <= R_DATA; end
+			R_DATA: begin rep_data <= rep_val; rep_a0 <= 1'b1; rep_ym_we <= 1'b1; rep_wait <= 9'd0; rep_st <= R_W2; end
+			R_W2: begin rep_wait <= rep_wait + 1'b1; if (rep_wait == 9'd255) rep_st <= R_NEXT; end
+			R_NEXT: begin
+				if (rep_last) rep_st <= R_DONE;
+				else if (~rep_odd) begin rep_odd <= 1'b1; rep_st <= R_ADDR; end
+				else begin rep_odd <= 1'b0; rep_addr <= rep_addr + 1'b1; rep_st <= R_FETCH; end
+			end
+			R_DONE: begin rep_done_r <= 1'b1; if (~ss_replay) rep_st <= R_IDLE; end
+			default: rep_st <= R_IDLE;
+		endcase
+		if (reset) begin rep_st <= R_IDLE; rep_done_r <= 1'b0; end
+	end
+
+	// savestate register words (0x12200 + n)
+	reg [15:0] ss_misc_rd;
+	always @(*) begin
+		case (ss_mi)
+			7'd0: ss_misc_rd = {flip_screen_reg, bgbank_reg};
+			7'd1: ss_misc_rd = {scroll_reg[0], scroll_reg[1]};
+			7'd2: ss_misc_rd = {scroll_reg[2], scroll_reg[3]};
+			7'd3: ss_misc_rd = {5'd0, tilerambank_reg, z80_reset_n_reg, pia_okibank, audiobank_reg, irq120_pending, irq4_pending};
+			7'd4: ss_misc_rd = {soundlatch_data, soundlatch2_data};
+			7'd5: ss_misc_rd = irq120_cnt[15:0];
+			7'd6: ss_misc_rd = {13'd0, irq120_cnt[18:16]};
+			7'd8, 7'd9, 7'd10, 7'd11: ss_misc_rd = ss_n112_rdata;
+			7'd12, 7'd13, 7'd14, 7'd15: ss_misc_rd = ss_m68k_rdata;
+			7'd16, 7'd17: ss_misc_rd = ss_z80_rdata;
+			default: ss_misc_rd = 16'h0000;
+		endcase
+	end
+	always @(*) begin
+		if (ss_sel_mainram)      ss_rdata = mainram_dout;
+		else if (ss_sel_bgvram)  ss_rdata = bgvram_dout;
+		else if (ss_sel_txvram)  ss_rdata = txvram_dout;
+		else if (ss_sel_palette) ss_rdata = palette_dout;
+		else if (ss_sel_z80ram)  ss_rdata = {z80_ram_o[ss_addr[11:0]], z80_ram_e[ss_addr[11:0]]};
+		else if (ss_sel_fm)      ss_rdata = fm_sh_q;
+		else if (ss_sel_misc)    ss_rdata = ss_misc_rd;
+		else                     ss_rdata = 16'h0000;
+	end
+	assign ss_frozen = m68k_parked & z80_parked;
+	assign ss_parked = m68k_parked | (z80_parked & z80_reset_n);
 
 	// ------------------------------------------------------------------
 	// 68000 read-data mux
 	// ------------------------------------------------------------------
 	reg [15:0] rdata;
 	always @(*) begin
-		if (sel_rom)          rdata = rom_dout;
+		if (m68k_sel_mon)     rdata = m68k_mon_data;   // savestate monitor overlay / vector 31
+		else if (sel_rom)     rdata = rom_dout;
 		else if (sel_mainram) rdata = mainram_dout;
 		else if (sel_palette) rdata = palette_dout;
 		else if (sel_bgvram)  rdata = bgvram_dout;
@@ -2304,10 +2505,11 @@ module tdragon2_core #(
 	reg  irq4_pending = 1'b0;
 	always @(posedge clk_sys) begin
 		if (reset) irq4_pending <= 1'b0;
+		else if (ss_misc_w & (ss_mi == 7'd3)) irq4_pending <= ss_wdata[0];
 		else if (vbl_start) irq4_pending <= 1'b1;
 		else if (iack_cycle && eab[3:1] == 3'd4) irq4_pending <= 1'b0;
 	end
-	assign ipl_level          = game_pi_bootleg ? (irq4_pending ? 3'd4 : 3'd0) : ipl_level_prom;
+	assign ipl_level          = (game_pi_bootleg ? (irq4_pending ? 3'd4 : 3'd0) : ipl_level_prom) | m68k_ipl_park;
 	assign sprite_dma_trigger = game_pi_bootleg ? vbl_start : sprite_dma_trigger_prom;
 
 	// ------------------------------------------------------------------

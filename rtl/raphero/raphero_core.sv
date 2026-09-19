@@ -203,8 +203,51 @@ module raphero_core #(
 
 	// Hold por_rst's countdown while the PLL is not locked — see
 	// tdragon2_core.sv's own por_rst comment.
-	input extra_por_hold
+	input extra_por_hold,
+
+	// Savestates (2026-09-18) — rtl/savestate/savestate.sv drives this; see
+	// gunnail_core.sv for the mechanism. This core's image is 0x12480 words:
+	//   0x00000-0x07FFF main RAM (array order)   0x08000-0x0FFFF BG VRAM
+	//   0x10000-0x107FF TX VRAM                  0x10800-0x10BFF palette
+	//   0x10C00-0x10FFF scroll RAM (all 1024 words)
+	//   0x11000-0x11F5F TLCS-90 external RAM (little-endian pairs)
+	//   0x12000-0x1207F TLCS-90 internal RAM     0x12080-0x1209F its registers (tlcs90.sv map)
+	//   0x120A0-0x120BF its peripherals (nmk004_periph.sv map)
+	//   0x12200-0x123FF FM shadow (chip 0 = YM2203 only)
+	//   0x12400-0x1247F registers (ss_misc_rd below)
+	input         ss_freeze,
+	input         ss_resume,
+	input         ss_active,
+	output        ss_frozen,
+	output        ss_parked,
+	input  [19:0] ss_addr,
+	output reg [15:0] ss_rdata,
+	input         ss_wr,
+	input  [15:0] ss_wdata,
+	input         ss_replay,
+	output        ss_replay_done
 );
+
+	wire ss_sel_mainram = (ss_addr[19:15] == 5'd0);
+	wire ss_sel_bgvram  = (ss_addr[19:15] == 5'd1);
+	wire ss_sel_txvram  = (ss_addr[19:11] == 9'h020);
+	wire ss_sel_palette = (ss_addr[19:10] == 10'h042);
+	wire ss_sel_scroll  = (ss_addr[19:10] == 10'h043);
+	wire ss_sel_sext    = (ss_addr[19:12] == 8'h11) && (ss_addr[11:0] < 12'd3936);
+	wire ss_sel_sint    = (ss_addr[19:7]  == 13'h0240);
+	wire ss_sel_scpu    = (ss_addr[19:5]  == 15'h0904);
+	wire ss_sel_sper    = (ss_addr[19:5]  == 15'h0905);
+	wire ss_sel_fm      = (ss_addr[19:9]  == 11'h091);
+	wire ss_sel_misc    = (ss_addr[19:7]  == 13'h0248);
+	wire ss_w = ss_active & ss_wr;
+	wire ss_misc_w = ss_w & ss_sel_misc;
+	wire [6:0] ss_mi = ss_addr[6:0];
+	wire mcu_freeze = ss_freeze & ~ss_resume;
+	wire m68k_parked, snd_ss_frozen;
+	wire [15:0] ss_n112_rdata, ss_m68k_rdata, ss_scpu_rdata, ss_sper_rdata;
+	wire       rep_on = ss_replay;
+	reg        rep_ym_we = 1'b0, rep_a0 = 1'b0;
+	reg  [7:0] rep_data = 8'h00;
 
 	// ------------------------------------------------------------------
 	// Power-on-only reset for the SDRAM req/arb instances — see
@@ -294,13 +337,27 @@ module raphero_core #(
 	wire [15:0] iEdb, oEdb;
 	wire [23:1] eab;
 
-	wire [2:0] ipl_level;
+	wire [2:0] ipl_level, ipl_level_prom;
+	assign ipl_level = ipl_level_prom | m68k_ipl_park;
 	wire       IPL0n = ~ipl_level[0];
 	wire       IPL1n = ~ipl_level[1];
 	wire       IPL2n = ~ipl_level[2];
 
 	wire iack_cycle = FC0 & FC1 & FC2 & ~ASn;
 	wire VPAn = ~iack_cycle;
+	// savestate park controller (rtl/savestate/ss_m68k_park.sv), overlay at
+	// 0x1E8000: unmapped in raphero_map (TX VRAM ends at 0x171FFF, work RAM
+	// starts at 0x1F0000).
+	wire [2:0]  m68k_ipl_park;
+	wire        m68k_sel_mon;
+	wire [15:0] m68k_mon_data;
+	ss_m68k_park #(.MON_BASE(15'h0F40)) m68k_park (
+		.clk(clk_sys), .reset(reset), .phi(enPhi2),
+		.park_req(ss_freeze), .parked(m68k_parked), .resume(ss_resume),
+		.eab(eab), .ASn(ASn), .eRWn(eRWn), .FC0(FC0), .FC1(FC1), .FC2(FC2), .oEdb(oEdb),
+		.ipl_park(m68k_ipl_park), .sel_mon(m68k_sel_mon), .mon_data(m68k_mon_data),
+		.ss_sel(ss_addr[1:0]), .ss_wr(ss_misc_w & (ss_mi[6:2] == 5'b00011)), .ss_wdata(ss_wdata), .ss_rdata(ss_m68k_rdata)   // words 12-15
+	);
 	// Wait states (HW_ROMS=1 only — every *_ready is 1'b1 in the sim
 	// path): maincpu ROM cache, registered RAM reads, sprite DMA.
 	wire rom_wait     = sel_rom     & cpu_read & ~rom_ready;
@@ -503,18 +560,21 @@ module raphero_core #(
 	// Hiscore view of the same mapping (see the hs_* ports).
 	wire [15:0] hs_byte = hs_addr[15:0];
 	wire [14:0] mainram_addr_hs = {hs_byte[15:12], hs_byte[8], hs_byte[10:9], hs_byte[11], hs_byte[7:1]};
-	wire [14:0] mainram_addr_use = hs_access ? mainram_addr_hs : mainram_addr_cpu;
+	wire [14:0] mainram_addr_use = ss_active ? ss_addr[14:0] : hs_access ? mainram_addr_hs : mainram_addr_cpu;
+	wire        ss_mr_w = ss_w & ss_sel_mainram;
 	reg [15:0] mainram_dout;
 	wire       mainram_ready;
 	generate
 	if (!HW_ROMS) begin : g_mainram_cpu_sim
 		always @(posedge clk_sys) begin
-			if (sel_mainram & cpu_write & ~sprite_dma_busy) begin
+			if (ss_active) begin
+				if (ss_mr_w) begin mainram_hi[mainram_addr_use] <= ss_wdata[15:8]; mainram_lo[mainram_addr_use] <= ss_wdata[7:0]; end
+			end else if (sel_mainram & cpu_write & ~sprite_dma_busy) begin
 				if (~UDSn) mainram_hi[mainram_addr_cpu] <= oEdb[15:8];
 				if (~LDSn) mainram_lo[mainram_addr_cpu] <= oEdb[7:0];
 			end
 		end
-		always @(*) mainram_dout  = {mainram_hi[mainram_addr_cpu], mainram_lo[mainram_addr_cpu]};
+		always @(*) mainram_dout  = {mainram_hi[mainram_addr_use], mainram_lo[mainram_addr_use]};
 		assign mainram_ready = 1'b1;
 	end else begin : g_mainram_cpu_hw
 		// ready is COMBINATIONAL on the registered address: 1 exactly when
@@ -532,12 +592,12 @@ module raphero_core #(
 		reg [14:0] mainram_addr_cpu_r;
 		// hs_access steals this port for a cycle while the CPU is paused;
 		// both write enables stay flattened, as the template requires.
-		wire       we_hi = (sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy & ~hs_access)
-		                 | (hs_access & hs_write & ~hs_addr[0]);
-		wire       we_lo = (sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy & ~hs_access)
-		                 | (hs_access & hs_write &  hs_addr[0]);
-		wire [7:0] din_hi = hs_access ? hs_din : oEdb[15:8];
-		wire [7:0] din_lo = hs_access ? hs_din : oEdb[7:0];
+		wire       we_hi = ss_mr_w | (~ss_active & ((sel_mainram & cpu_write & ~UDSn & ~sprite_dma_busy & ~hs_access)
+		                 | (hs_access & hs_write & ~hs_addr[0])));
+		wire       we_lo = ss_mr_w | (~ss_active & ((sel_mainram & cpu_write & ~LDSn & ~sprite_dma_busy & ~hs_access)
+		                 | (hs_access & hs_write &  hs_addr[0])));
+		wire [7:0] din_hi = ss_active ? ss_wdata[15:8] : hs_access ? hs_din : oEdb[15:8];
+		wire [7:0] din_lo = ss_active ? ss_wdata[7:0]  : hs_access ? hs_din : oEdb[7:0];
 		always @(posedge clk_sys) begin
 			if (we_hi) begin mainram_hi[mainram_addr_use] <= din_hi; mainram_dout[15:8] <= din_hi; end
 			else       mainram_dout[15:8] <= mainram_hi[mainram_addr_use];
@@ -562,24 +622,28 @@ module raphero_core #(
 	// (palette_wait), the bgvram pattern.
 	reg [15:0] palette [0:1023];
 	wire [9:0] palette_addr = byte_addr[10:1];
+	wire [9:0] pal_a = ss_active ? ss_addr[9:0] : palette_addr;
+	wire       ss_pal_w = ss_w & ss_sel_palette;
+	wire       pal_we_hi = ss_pal_w | (~ss_active & sel_palette & cpu_write & ~UDSn);
+	wire       pal_we_lo = ss_pal_w | (~ss_active & sel_palette & cpu_write & ~LDSn);
+	wire [7:0] pal_wd_hi = ss_active ? ss_wdata[15:8] : oEdb[15:8];
+	wire [7:0] pal_wd_lo = ss_active ? ss_wdata[7:0]  : oEdb[7:0];
 	reg [15:0] palette_dout;
 	wire       palette_ready;
 	generate
 	if (!HW_ROMS) begin : g_palette_sim
 		always @(posedge clk_sys) begin
-			if (sel_palette & cpu_write) begin
-				if (~UDSn) palette[palette_addr][15:8] <= oEdb[15:8];
-				if (~LDSn) palette[palette_addr][7:0]  <= oEdb[7:0];
-			end
+			if (pal_we_hi) palette[pal_a][15:8] <= pal_wd_hi;
+			if (pal_we_lo) palette[pal_a][7:0]  <= pal_wd_lo;
 		end
-		always @(*) palette_dout = palette[palette_addr];
+		always @(*) palette_dout = palette[pal_a];
 		assign palette_ready = 1'b1;
 	end else begin : g_palette_hw
 		reg [9:0] palette_addr_r;
 		always @(posedge clk_sys) begin
-			if (sel_palette & cpu_write & ~UDSn) palette[palette_addr][15:8] <= oEdb[15:8];
-			if (sel_palette & cpu_write & ~LDSn) palette[palette_addr][7:0]  <= oEdb[7:0];
-			palette_dout   <= palette[palette_addr];
+			if (pal_we_hi) palette[pal_a][15:8] <= pal_wd_hi;
+			if (pal_we_lo) palette[pal_a][7:0]  <= pal_wd_lo;
+			palette_dout   <= palette[pal_a];
 			palette_addr_r <= palette_addr;
 		end
 		assign palette_ready = (palette_addr_r == palette_addr); // see mainram_ready
@@ -592,14 +656,17 @@ module raphero_core #(
 	// Lane arrays + true-dual-port CPU port, as mainram above (NMK-10).
 	reg [7:0] bgvram_hi [0:32767];
 	reg [7:0] bgvram_lo [0:32767];
-	wire [14:0] bgvram_addr = byte_addr[15:1];
+	wire [14:0] bgvram_addr = ss_active ? ss_addr[14:0] : byte_addr[15:1];
+	wire        ss_bg_w = ss_w & ss_sel_bgvram;
 	wire [15:0] bgvram_dout;
 	reg  [15:0] bgvram_dout_r;
 	wire        bgvram_ready;
 	generate
 	if (!HW_ROMS) begin : g_bgvram_cpu_sim
 		always @(posedge clk_sys) begin
-			if (sel_bgvram & cpu_write) begin
+			if (ss_active) begin
+				if (ss_bg_w) begin bgvram_hi[bgvram_addr] <= ss_wdata[15:8]; bgvram_lo[bgvram_addr] <= ss_wdata[7:0]; end
+			end else if (sel_bgvram & cpu_write) begin
 				if (~UDSn) bgvram_hi[bgvram_addr] <= oEdb[15:8];
 				if (~LDSn) bgvram_lo[bgvram_addr] <= oEdb[7:0];
 			end
@@ -608,16 +675,18 @@ module raphero_core #(
 		assign bgvram_ready = 1'b1;
 	end else begin : g_bgvram_cpu_hw
 		reg [14:0] bgvram_addr_r;
-		wire       we_hi = sel_bgvram & cpu_write & ~UDSn;
-		wire       we_lo = sel_bgvram & cpu_write & ~LDSn;
+		wire       we_hi = ss_bg_w | (~ss_active & sel_bgvram & cpu_write & ~UDSn);
+		wire       we_lo = ss_bg_w | (~ss_active & sel_bgvram & cpu_write & ~LDSn);
+		wire [7:0] wd_hi = ss_active ? ss_wdata[15:8] : oEdb[15:8];
+		wire [7:0] wd_lo = ss_active ? ss_wdata[7:0]  : oEdb[7:0];
 		always @(posedge clk_sys) begin
-			if (we_hi) begin bgvram_hi[bgvram_addr] <= oEdb[15:8]; bgvram_dout_r[15:8] <= oEdb[15:8]; end
+			if (we_hi) begin bgvram_hi[bgvram_addr] <= wd_hi; bgvram_dout_r[15:8] <= wd_hi; end
 			else       bgvram_dout_r[15:8] <= bgvram_hi[bgvram_addr];
-			if (we_lo) begin bgvram_lo[bgvram_addr] <= oEdb[7:0];  bgvram_dout_r[7:0]  <= oEdb[7:0];  end
+			if (we_lo) begin bgvram_lo[bgvram_addr] <= wd_lo;  bgvram_dout_r[7:0]  <= wd_lo;  end
 			else       bgvram_dout_r[7:0]  <= bgvram_lo[bgvram_addr];
 			bgvram_addr_r <= bgvram_addr;
 		end
-		assign bgvram_ready = (bgvram_addr_r == bgvram_addr); // see mainram_ready
+		assign bgvram_ready = (bgvram_addr_r == byte_addr[15:1]); // see mainram_ready
 		assign bgvram_dout = bgvram_dout_r;
 	end
 	endgenerate
@@ -628,14 +697,17 @@ module raphero_core #(
 	// Lane arrays + true-dual-port CPU port, as mainram above (NMK-10).
 	reg [7:0] txvram_hi [0:2047];
 	reg [7:0] txvram_lo [0:2047];
-	wire [10:0] txvram_addr = byte_addr[11:1];
+	wire [10:0] txvram_addr = ss_active ? ss_addr[10:0] : byte_addr[11:1];
+	wire        ss_tx_w = ss_w & ss_sel_txvram;
 	wire [15:0] txvram_dout;
 	reg  [15:0] txvram_dout_r;
 	wire        txvram_ready;
 	generate
 	if (!HW_ROMS) begin : g_txvram_cpu_sim
 		always @(posedge clk_sys) begin
-			if (sel_txvram & cpu_write) begin
+			if (ss_active) begin
+				if (ss_tx_w) begin txvram_hi[txvram_addr] <= ss_wdata[15:8]; txvram_lo[txvram_addr] <= ss_wdata[7:0]; end
+			end else if (sel_txvram & cpu_write) begin
 				if (~UDSn) txvram_hi[txvram_addr] <= oEdb[15:8];
 				if (~LDSn) txvram_lo[txvram_addr] <= oEdb[7:0];
 			end
@@ -644,16 +716,18 @@ module raphero_core #(
 		assign txvram_ready = 1'b1;
 	end else begin : g_txvram_cpu_hw
 		reg [10:0] txvram_addr_r;
-		wire       we_hi = sel_txvram & cpu_write & ~UDSn;
-		wire       we_lo = sel_txvram & cpu_write & ~LDSn;
+		wire       we_hi = ss_tx_w | (~ss_active & sel_txvram & cpu_write & ~UDSn);
+		wire       we_lo = ss_tx_w | (~ss_active & sel_txvram & cpu_write & ~LDSn);
+		wire [7:0] wd_hi = ss_active ? ss_wdata[15:8] : oEdb[15:8];
+		wire [7:0] wd_lo = ss_active ? ss_wdata[7:0]  : oEdb[7:0];
 		always @(posedge clk_sys) begin
-			if (we_hi) begin txvram_hi[txvram_addr] <= oEdb[15:8]; txvram_dout_r[15:8] <= oEdb[15:8]; end
+			if (we_hi) begin txvram_hi[txvram_addr] <= wd_hi; txvram_dout_r[15:8] <= wd_hi; end
 			else       txvram_dout_r[15:8] <= txvram_hi[txvram_addr];
-			if (we_lo) begin txvram_lo[txvram_addr] <= oEdb[7:0];  txvram_dout_r[7:0]  <= oEdb[7:0];  end
+			if (we_lo) begin txvram_lo[txvram_addr] <= wd_lo;  txvram_dout_r[7:0]  <= wd_lo;  end
 			else       txvram_dout_r[7:0]  <= txvram_lo[txvram_addr];
 			txvram_addr_r <= txvram_addr;
 		end
-		assign txvram_ready = (txvram_addr_r == txvram_addr); // see mainram_ready
+		assign txvram_ready = (txvram_addr_r == byte_addr[11:1]); // see mainram_ready
 		assign txvram_dout = txvram_dout_r;
 	end
 	endgenerate
@@ -685,12 +759,25 @@ module raphero_core #(
 	reg [1:0]  tilerambank_reg;
 	wire [15:0] scrollram0_new  = {~UDSn ? oEdb[15:8] : scrollram0_reg[15:8],  ~LDSn ? oEdb[7:0] : scrollram0_reg[7:0]};
 	wire [15:0] scrollramy0_new = {~UDSn ? oEdb[15:8] : scrollramy0_reg[15:8], ~LDSn ? oEdb[7:0] : scrollramy0_reg[7:0]};
+	wire [9:0] scr_a     = ss_active ? ss_addr[9:0] : scroll_addr_cpu;
+	wire       ss_scr_w  = ss_w & ss_sel_scroll;
+	wire       scr_we_hi = ss_scr_w | (~ss_active & sel_scrollmem & cpu_write & ~UDSn);
+	wire       scr_we_lo = ss_scr_w | (~ss_active & sel_scrollmem & cpu_write & ~LDSn);
+	wire [7:0] scr_wd_hi = ss_active ? ss_wdata[15:8] : oEdb[15:8];
+	wire [7:0] scr_wd_lo = ss_active ? ss_wdata[7:0]  : oEdb[7:0];
 	always @(posedge clk_sys) begin
 		if (reset) begin
 			scrollram0_reg  <= 16'h0000;
 			scrollramy0_reg <= 16'h0000;
 			tilerambank_reg <= 2'd0;
-		end else if (cpu_write) begin
+		end else if (ss_misc_w) begin
+			case (ss_mi)
+				7'd1: scrollram0_reg  <= ss_wdata;
+				7'd2: scrollramy0_reg <= ss_wdata;
+				7'd3: tilerambank_reg <= ss_wdata[1:0];
+				default: ;
+			endcase
+		end else if (cpu_write & ~ss_active) begin
 			if (sel_scrollram_off0) begin
 				scrollram0_reg  <= scrollram0_new;
 				tilerambank_reg <= scrollram0_new[13:12]; // newbank = (scrollram[0] >> 12) & 3
@@ -706,12 +793,10 @@ module raphero_core #(
 	generate
 	if (!HW_ROMS) begin : g_scrollmem_sim
 		always @(posedge clk_sys) begin
-			if (sel_scrollmem & cpu_write) begin
-				if (~UDSn) scrollmem[scroll_addr_cpu][15:8] <= oEdb[15:8];
-				if (~LDSn) scrollmem[scroll_addr_cpu][7:0]  <= oEdb[7:0];
-			end
+			if (scr_we_hi) scrollmem[scr_a][15:8] <= scr_wd_hi;
+			if (scr_we_lo) scrollmem[scr_a][7:0]  <= scr_wd_lo;
 		end
-		assign scroll_dout  = scrollmem[scroll_addr_cpu];
+		assign scroll_dout  = scrollmem[scr_a];
 		assign scroll_ready = 1'b1;
 		assign vid_scrollram_row  = scrollmem[{2'd0, vid_scroll_row_addr}];
 		assign vid_scrollramy_row = scrollmem[{2'd1, vid_scroll_row_addr}];
@@ -724,9 +809,9 @@ module raphero_core #(
 		reg [15:0] vid_scroll_q, vid_scrollram_row_r, vid_scrollramy_row_r;
 		reg        vid_scroll_phase_d;
 		always @(posedge clk_sys) begin
-			if (sel_scrollmem & cpu_write & ~UDSn) scrollmem[scroll_addr_cpu][15:8] <= oEdb[15:8];
-			if (sel_scrollmem & cpu_write & ~LDSn) scrollmem[scroll_addr_cpu][7:0]  <= oEdb[7:0];
-			scroll_dout_r     <= scrollmem[scroll_addr_cpu];
+			if (scr_we_hi) scrollmem[scr_a][15:8] <= scr_wd_hi;
+			if (scr_we_lo) scrollmem[scr_a][7:0]  <= scr_wd_lo;
+			scroll_dout_r     <= scrollmem[scr_a];
 			scroll_addr_cpu_r <= scroll_addr_cpu;
 
 			vid_scroll_phase   <= ~vid_scroll_phase;
@@ -818,6 +903,8 @@ module raphero_core #(
 		if (reset) begin
 			flip_screen_reg <= 8'h00;
 			bgbank_reg      <= 8'h00;
+		end else if (ss_misc_w & (ss_mi == 7'd0)) begin
+			{flip_screen_reg, bgbank_reg} <= ss_wdata;
 		end else if (cpu_write) begin
 			if (sel_flip & ~LDSn)     flip_screen_reg <= oEdb[7:0];
 			if (sel_tilebank & ~LDSn) bgbank_reg      <= oEdb[7:0];
@@ -830,6 +917,7 @@ module raphero_core #(
 	reg [7:0] soundlatch2_data;
 	always @(posedge clk_sys) begin
 		if (reset) soundlatch_data <= 8'h00;
+		else if (ss_misc_w & (ss_mi == 7'd4)) soundlatch_data <= ss_wdata[15:8];
 		else if (sel_soundlatch_w & cpu_write & ~LDSn) soundlatch_data <= oEdb[7:0];
 	end
 
@@ -855,7 +943,9 @@ module raphero_core #(
 		.nmi(1'b0), .irq_req(irq_req_to_cpu), .irq_mask(irq_mask),
 		.ix_bank(snd_bx), .iy_bank(snd_by),
 		.dbg_pc(dbg_snd_pc), .dbg_valid(dbg_snd_valid), .dbg_halt(),
-		.dbg_a(), .dbg_f(), .dbg_hl(), .dbg_de(), .dbg_iy()
+		.dbg_a(), .dbg_f(), .dbg_hl(), .dbg_de(), .dbg_iy(),
+		.ss_freeze(mcu_freeze), .ss_frozen(snd_ss_frozen),
+		.ss_sel(ss_addr[4:0]), .ss_wr(ss_w & ss_sel_scpu), .ss_wdata(ss_wdata), .ss_rdata(ss_scpu_rdata)
 	);
 
 	wire snd_bank0 = (snd_addr_bank == 4'h0);
@@ -877,6 +967,7 @@ module raphero_core #(
 	reg [2:0] audiobank_reg;
 	always @(posedge clk_sys) begin
 		if (reset) audiobank_reg <= 3'd0;
+		else if (ss_misc_w & (ss_mi == 7'd5)) audiobank_reg <= ss_wdata[2:0];
 		else if (sel_snd_audiobank & snd_mem_wr & snd_cen) audiobank_reg <= snd_dout[2:0]; // macross2_audiobank_w
 	end
 	wire [16:0] snd_bank_phys = {audiobank_reg, 14'd0} + {3'd0, snd_addr[13:0]};
@@ -942,27 +1033,48 @@ module raphero_core #(
 	// held for the whole cycle). Reads are registered (block-RAM
 	// inference): the CPU captures din on a cen edge, at least 5 clk_sys
 	// after it presented the address.
-	reg [7:0] snd_ext_ram [0:7871];
-	reg [7:0] snd_int_ram [0:255];
-	reg [7:0] snd_ext_q, snd_int_q;
+	// Both as even/odd byte lanes so the savestate engine moves a word per
+	// access; the CPU-side behaviour (one registered read port) is unchanged.
+	reg [7:0] snd_ext_e [0:3935];
+	reg [7:0] snd_ext_o [0:3935];
+	reg [7:0] snd_int_e [0:127];
+	reg [7:0] snd_int_o [0:127];
+	reg [7:0] snd_ext_qe, snd_ext_qo, snd_int_qe, snd_int_qo;
+	reg       snd_lane_r;
 	wire [12:0] snd_ext_addr = snd_addr[12:0]; // E000-FEBF -> 0-1EBF
+	wire [11:0] sext_a = ss_active ? ss_addr[11:0] : snd_ext_addr[12:1];
+	wire [6:0]  sint_a = ss_active ? ss_addr[6:0]  : snd_addr[7:1];
 	always @(posedge clk_sys) begin
-		if (sel_snd_ext_ram & snd_mem_wr & snd_cen) snd_ext_ram[snd_ext_addr] <= snd_dout;
-		snd_ext_q <= snd_ext_ram[snd_ext_addr];
+		if (ss_active) begin
+			if (ss_wr & ss_sel_sext) begin snd_ext_e[sext_a] <= ss_wdata[7:0]; snd_ext_o[sext_a] <= ss_wdata[15:8]; end
+		end else if (sel_snd_ext_ram & snd_mem_wr & snd_cen) begin
+			if (snd_addr[0]) snd_ext_o[sext_a] <= snd_dout; else snd_ext_e[sext_a] <= snd_dout;
+		end
+		snd_ext_qe <= snd_ext_e[sext_a];
+		snd_ext_qo <= snd_ext_o[sext_a];
+		snd_lane_r <= snd_addr[0];
 	end
 	always @(posedge clk_sys) begin
-		if (sel_snd_int_ram & snd_mem_wr & snd_cen) snd_int_ram[snd_addr[7:0]] <= snd_dout;
-		snd_int_q <= snd_int_ram[snd_addr[7:0]];
+		if (ss_active) begin
+			if (ss_wr & ss_sel_sint) begin snd_int_e[sint_a] <= ss_wdata[7:0]; snd_int_o[sint_a] <= ss_wdata[15:8]; end
+		end else if (sel_snd_int_ram & snd_mem_wr & snd_cen) begin
+			if (snd_addr[0]) snd_int_o[sint_a] <= snd_dout; else snd_int_e[sint_a] <= snd_dout;
+		end
+		snd_int_qe <= snd_int_e[sint_a];
+		snd_int_qo <= snd_int_o[sint_a];
 	end
+	wire [7:0] snd_ext_q = snd_lane_r ? snd_ext_qo : snd_ext_qe;
+	wire [7:0] snd_int_q = snd_lane_r ? snd_int_qo : snd_int_qe;
 
 	always @(posedge clk_sys) begin
 		if (reset) soundlatch2_data <= 8'h00;
+		else if (ss_misc_w & (ss_mi == 7'd4)) soundlatch2_data <= ss_wdata[7:0];
 		else if (sel_snd_soundlatch2_w & snd_mem_wr & snd_cen) soundlatch2_data <= snd_dout;
 	end
 
 	wire [7:0] periph_rdata;
 	nmk004_periph periph (
-		.clk(clk_sys), .cen(snd_cen), .reset(reset),
+		.clk(clk_sys), .cen(snd_cen & ~snd_ss_frozen), .reset(reset),   // timers stop while frozen
 		.reg_addr(snd_addr[5:0]),
 		.wdata(snd_dout),
 		.we(sel_snd_periph & snd_mem_wr),
@@ -975,7 +1087,8 @@ module raphero_core #(
 		.p6_we(), .p6_wdata(),
 		.p7_ext_en(1'b0), .p7_ext_val(8'h00),
 		.p3_we(), .p3_wdata(),
-		.p7_we(), .p7_wdata()
+		.p7_we(), .p7_wdata(),
+		.ss_wr(ss_w & ss_sel_sper & snd_ss_frozen), .ss_sel(ss_addr[4:0]), .ss_wdata(ss_wdata), .ss_rdata(ss_sper_rdata)
 	);
 
 	// ------------------------------------------------------------------
@@ -986,12 +1099,14 @@ module raphero_core #(
 	reg       ym_addr_latch;
 	reg [5:0] ym_wr_hold = 6'd0;
 	reg       ym_we_prev = 1'b0;
-	wire      ym_we_raw = sel_snd_ym & snd_mem_wr;
+	wire      ym_we_raw = rep_on ? rep_ym_we : (sel_snd_ym & snd_mem_wr);
+	wire      ym_a0_src = rep_on ? rep_a0 : snd_addr[0];
+	wire [7:0] ym_d_src = rep_on ? rep_data : snd_dout;
 	always @(posedge clk_sys) begin
 		ym_we_prev <= ym_we_raw;
 		if (ym_we_raw && !ym_we_prev) begin
-			ym_din_latch  <= snd_dout;
-			ym_addr_latch <= snd_addr[0];
+			ym_din_latch  <= ym_d_src;
+			ym_addr_latch <= ym_a0_src;
 			ym_wr_hold    <= 6'd40;
 		end else if (ym_wr_hold != 6'd0) begin
 			ym_wr_hold <= ym_wr_hold - 6'd1;
@@ -1031,7 +1146,8 @@ module raphero_core #(
 		.ROM1_BYTES(4194304)  // rhp94099.5+6 (oki2)
 	) nmk112_inst (
 		.clk_sys(clk_sys), .reset(reset),
-		.reg_sel(snd_addr[2:0]), .reg_data(snd_dout), .reg_we(nmk112_we), .hold(nmk112_hold),
+		.reg_sel(snd_addr[2:0]), .reg_data(snd_dout), .reg_we(nmk112_we & ~ss_active), .hold(nmk112_hold),
+		.ss_wr(ss_misc_w & (ss_mi[6:2] == 5'b00010)), .ss_sel(ss_mi[1:0]), .ss_wdata(ss_wdata), .ss_rdata(ss_n112_rdata),   // words 8-11
 		.rom0_addr_in(oki0_rom_addr_raw), .rom0_addr_out(oki0_rom_addr),
 		.rom1_addr_in(oki1_rom_addr_raw), .rom1_addr_out(oki1_rom_addr)
 	);
@@ -1249,11 +1365,108 @@ module raphero_core #(
 	assign snd_din = snd_rdata;
 
 	// ------------------------------------------------------------------
+	// Savestates: YM2203 register shadow and its replay after a load —
+	// gunnail_core.sv's scheme with one chip (key-on 0x28 replaced by a
+	// key-off sweep, the 0x2C-0x2F prescaler selects skipped).
+	// ------------------------------------------------------------------
+	reg  [7:0] fm_sh_e [0:511];
+	reg  [7:0] fm_sh_o [0:511];
+	reg  [7:0] ym_sh_addr = 8'h00;
+	reg [15:0] fm_sh_q;
+	reg  [8:0] rep_addr = 9'd0;
+	wire [8:0] fm_raddr = ss_active ? ss_addr[8:0] : rep_addr;
+	wire       ym_wr_edge = ym_we_raw & ~ym_we_prev;
+	always @(posedge clk_sys) begin
+		if (ss_w & ss_sel_fm) begin
+			fm_sh_e[ss_addr[8:0]] <= ss_wdata[7:0];
+			fm_sh_o[ss_addr[8:0]] <= ss_wdata[15:8];
+		end else if (~rep_on & ym_wr_edge) begin
+			if (~ym_a0_src) ym_sh_addr <= ym_d_src;
+			else if (ym_sh_addr[0]) fm_sh_o[{2'd0, ym_sh_addr[7:1]}] <= ym_d_src;
+			else                    fm_sh_e[{2'd0, ym_sh_addr[7:1]}] <= ym_d_src;
+		end
+		fm_sh_q <= {fm_sh_o[fm_raddr], fm_sh_e[fm_raddr]};
+	end
+	localparam [3:0] R_IDLE = 4'd0, R_FETCH = 4'd1, R_FETCH2 = 4'd2, R_ADDR = 4'd3, R_W1 = 4'd4,
+	                 R_DATA = 4'd5, R_W2 = 4'd6, R_NEXT = 4'd7, R_DONE = 4'd8;
+	reg  [3:0]  rep_st = R_IDLE;
+	reg         rep_odd = 1'b0;
+	reg [15:0]  rep_word;
+	reg  [8:0]  rep_wait;
+	reg         rep_done_r = 1'b0;
+	wire [6:0]  rep_idx = rep_addr[6:0];
+	wire        rep_sweep = (rep_addr[8:7] == 2'd1);
+	wire [7:0]  rep_reg  = rep_sweep ? 8'h28 : {rep_idx, rep_odd};
+	wire [7:0]  rep_val  = rep_sweep ? {5'd0, rep_idx[2:0]} : rep_odd ? rep_word[15:8] : rep_word[7:0];
+	wire        rep_skip = rep_sweep ? rep_odd : ((rep_reg == 8'h28) | (rep_reg[7:2] == 6'b001011));
+	wire        rep_last = rep_sweep & (rep_idx == 7'd3);
+	assign ss_replay_done = rep_done_r;
+	always @(posedge clk_sys) begin
+		rep_ym_we <= 1'b0;
+		case (rep_st)
+			R_IDLE: begin
+				rep_done_r <= 1'b0;
+				if (ss_replay) begin rep_addr <= 9'd0; rep_odd <= 1'b0; rep_st <= R_FETCH; end
+			end
+			R_FETCH:  rep_st <= R_FETCH2;
+			R_FETCH2: begin rep_word <= fm_sh_q; rep_st <= R_ADDR; end
+			R_ADDR: begin
+				if (rep_skip | rep_last) rep_st <= R_NEXT;
+				else begin rep_data <= rep_reg; rep_a0 <= 1'b0; rep_ym_we <= 1'b1; rep_wait <= 9'd0; rep_st <= R_W1; end
+			end
+			R_W1: begin rep_wait <= rep_wait + 1'b1; if (rep_wait == 9'd255) rep_st <= R_DATA; end
+			R_DATA: begin rep_data <= rep_val; rep_a0 <= 1'b1; rep_ym_we <= 1'b1; rep_wait <= 9'd0; rep_st <= R_W2; end
+			R_W2: begin rep_wait <= rep_wait + 1'b1; if (rep_wait == 9'd255) rep_st <= R_NEXT; end
+			R_NEXT: begin
+				if (rep_last) rep_st <= R_DONE;
+				else if (~rep_odd) begin rep_odd <= 1'b1; rep_st <= R_ADDR; end
+				else begin rep_odd <= 1'b0; rep_addr <= rep_addr + 1'b1; rep_st <= R_FETCH; end
+			end
+			R_DONE: begin rep_done_r <= 1'b1; if (~ss_replay) rep_st <= R_IDLE; end
+			default: rep_st <= R_IDLE;
+		endcase
+		if (reset) begin rep_st <= R_IDLE; rep_done_r <= 1'b0; end
+	end
+
+	// savestate register words (0x12400 + n)
+	reg [15:0] ss_misc_rd;
+	always @(*) begin
+		case (ss_mi)
+			7'd0: ss_misc_rd = {flip_screen_reg, bgbank_reg};
+			7'd1: ss_misc_rd = scrollram0_reg;
+			7'd2: ss_misc_rd = scrollramy0_reg;
+			7'd3: ss_misc_rd = {14'd0, tilerambank_reg};
+			7'd4: ss_misc_rd = {soundlatch_data, soundlatch2_data};
+			7'd5: ss_misc_rd = {13'd0, audiobank_reg};
+			7'd8, 7'd9, 7'd10, 7'd11: ss_misc_rd = ss_n112_rdata;
+			7'd12, 7'd13, 7'd14, 7'd15: ss_misc_rd = ss_m68k_rdata;
+			default: ss_misc_rd = 16'h0000;
+		endcase
+	end
+	always @(*) begin
+		if (ss_sel_mainram)      ss_rdata = mainram_dout;
+		else if (ss_sel_bgvram)  ss_rdata = bgvram_dout;
+		else if (ss_sel_txvram)  ss_rdata = txvram_dout;
+		else if (ss_sel_palette) ss_rdata = palette_dout;
+		else if (ss_sel_scroll)  ss_rdata = scroll_dout;
+		else if (ss_sel_sext)    ss_rdata = {snd_ext_qo, snd_ext_qe};
+		else if (ss_sel_sint)    ss_rdata = {snd_int_qo, snd_int_qe};
+		else if (ss_sel_scpu)    ss_rdata = ss_scpu_rdata;
+		else if (ss_sel_sper)    ss_rdata = ss_sper_rdata;
+		else if (ss_sel_fm)      ss_rdata = fm_sh_q;
+		else if (ss_sel_misc)    ss_rdata = ss_misc_rd;
+		else                     ss_rdata = 16'h0000;
+	end
+	assign ss_frozen = m68k_parked & snd_ss_frozen;
+	assign ss_parked = m68k_parked;
+
+	// ------------------------------------------------------------------
 	// 68000 read-data mux
 	// ------------------------------------------------------------------
 	reg [15:0] rdata;
 	always @(*) begin
-		if (sel_rom)          rdata = rom_dout;
+		if (m68k_sel_mon)     rdata = m68k_mon_data;   // savestate monitor overlay / vector 31
+		else if (sel_rom)     rdata = rom_dout;
 		else if (sel_mainram) rdata = mainram_dout;
 		else if (sel_palette) rdata = palette_dout;
 		else if (sel_bgvram)  rdata = bgvram_dout;
@@ -1306,7 +1519,7 @@ module raphero_core #(
 		.vcount(vt_vcount),
 		.iack_cycle(iack_cycle),
 		.iack_level(eab[3:1]),
-		.ipl_level(ipl_level),
+		.ipl_level(ipl_level_prom),
 		.sprite_dma_trigger(sprite_dma_trigger)
 	);
 

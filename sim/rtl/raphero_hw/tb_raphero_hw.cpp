@@ -97,6 +97,17 @@ int main(int argc, char **argv) {
 
 	uint32_t frame_count = 0;
 	bool prev_frame_done = false;
+	// Savestate round trip (2026-09-18): TB_SS_SAVE=N / TB_SS_LOAD=M / TB_SS_CMP=K,
+	// the frames after the load must equal the frames after the save.
+	const long ss_save_frame = std::getenv("TB_SS_SAVE") ? atol(std::getenv("TB_SS_SAVE")) : -1;
+	const long ss_load_frame = std::getenv("TB_SS_LOAD") ? atol(std::getenv("TB_SS_LOAD")) : -1;
+	const int  ss_cmp = std::getenv("TB_SS_CMP") ? atoi(std::getenv("TB_SS_CMP")) : 30;
+	top.ss_slot = std::getenv("TB_SS_SLOT") ? atoi(std::getenv("TB_SS_SLOT")) : 0;
+	top.ss_save = 0; top.ss_load = 0;
+	int ss_phase = 0, ss_rec = 0, ss_result = -1;
+	std::vector<std::vector<uint32_t>> ss_after_save, ss_after_load;
+	uint64_t ss_req_tick = 0;
+	bool ss_pending_clear = false;
 	long last_frame_nonzero_px = -1;
 	bool dump_ppm = std::getenv("TB_DUMP_PPM") != nullptr;
 
@@ -107,6 +118,14 @@ int main(int argc, char **argv) {
 
 	for (; clk_sys_ticks < g_run_cycles; clk_sys_ticks++) {
 		tick();
+		if (ss_pending_clear) { top.ss_save = 0; top.ss_load = 0; ss_pending_clear = false; }
+		if (top.ss_done_ok || top.ss_done_fail) {
+			printf("tb_raphero_hw: savestate %s %s at tick %llu (frame %u, %llu ticks after the request)%s%d\n", ss_phase == 1 ? "save" : "load", top.ss_done_ok ? "OK" : "FAILED",
+			       (unsigned long long)clk_sys_ticks, frame_count, (unsigned long long)(clk_sys_ticks - ss_req_tick),
+			       top.ss_done_fail ? ", code " : "", top.ss_done_fail ? (int)top.ss_fail_code : 0);
+			if (top.ss_done_fail) { ss_result = 1; ss_phase = 0; }
+			else { ss_phase = (ss_phase == 1) ? 2 : 4; ss_rec = 0; }
+		}
 
 		if (audio_f) {
 			audio_phase += 48000;
@@ -148,6 +167,41 @@ int main(int argc, char **argv) {
 				}
 			}
 			if (ppm) std::fclose(ppm);
+			if (ss_phase == 2 || ss_phase == 4) {
+				std::vector<uint32_t> fr((const uint32_t *)framebuf, (const uint32_t *)framebuf + SCREEN_W * SCREEN_H);
+				(ss_phase == 2 ? ss_after_save : ss_after_load).push_back(fr);
+				if (++ss_rec >= ss_cmp) {
+					if (ss_phase == 4) {
+						size_t bad_frames = 0;
+						for (size_t i = 0; i < ss_after_load.size() && i < ss_after_save.size(); i++) {
+							long diff = 0;
+							for (size_t p = 0; p < ss_after_save[i].size(); p++) if (ss_after_save[i][p] != ss_after_load[i][p]) diff++;
+							// Frame 0 after the release is rendered with the sprite table the
+							// video's own double buffer held before the load (the sprite DMA
+							// refills it during that frame; the buffer is not part of the image),
+							// so it is reported but not judged.
+							if (diff) {
+								if (i > 0) bad_frames++;
+								printf("tb_raphero_hw: savestate frame %zu after load differs: %ld pixels%s\n", i, diff, i == 0 ? " (sprite double buffer, expected)" : "");
+								if (std::getenv("TB_SS_DUMP")) {
+									for (int side = 0; side < 2; side++) {
+										char fn[96]; std::snprintf(fn, sizeof(fn), "ss_diff_%02zu_%s.ppm", i, side ? "load" : "save");
+										FILE *pf = std::fopen(fn, "wb"); std::fprintf(pf, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
+										const std::vector<uint32_t> &v = side ? ss_after_load[i] : ss_after_save[i];
+										for (size_t p = 0; p < v.size(); p++) { uint8_t b[3] = {(uint8_t)(v[p] >> 16), (uint8_t)(v[p] >> 8), (uint8_t)v[p]}; std::fwrite(b, 1, 3, pf); }
+										std::fclose(pf);
+									}
+								}
+							}
+						}
+						ss_result = bad_frames ? 1 : 0;
+						printf("tb_raphero_hw: SAVESTATE ROUND TRIP: %zu of %zu frames differ (frame 0 excluded) -> %s\n", bad_frames, ss_after_load.size(), bad_frames ? "FAIL" : "PASS");
+					}
+					ss_phase = 0;
+				}
+			}
+			if ((long)frame_count == ss_save_frame && ss_phase == 0) { top.ss_save = 1; ss_pending_clear = true; ss_phase = 1; ss_req_tick = clk_sys_ticks; printf("tb_raphero_hw: savestate SAVE requested at frame %u\n", frame_count); }
+			if ((long)frame_count == ss_load_frame && ss_phase == 0) { top.ss_load = 1; ss_pending_clear = true; ss_phase = 3; ss_req_tick = clk_sys_ticks; printf("tb_raphero_hw: savestate LOAD requested at frame %u\n", frame_count); }
 			last_frame_nonzero_px = nonzero_px;
 			if (frame_count < 5 || frame_count % 50 == 0)
 				printf("tb_raphero_hw: frame %u: %ld/%d nonzero pixels\n", frame_count, nonzero_px, SCREEN_W * SCREEN_H);
@@ -225,7 +279,8 @@ int main(int argc, char **argv) {
 	printf("tb_raphero_hw: rendered %u video frame(s); last frame had %ld/%d nonzero pixels\n",
 	       frame_count, last_frame_nonzero_px, SCREEN_W * SCREEN_H);
 	if (m68k_trace) fclose(m68k_trace);
+	if (ss_save_frame >= 0) printf("tb_raphero_hw: savestate result: %s\n", ss_result == 0 ? "PASS" : ss_result == 1 ? "FAIL" : "INCOMPLETE (run longer)");
 	top.final();
 
-	return 0;
+	return (ss_save_frame >= 0 && ss_result != 0) ? 1 : 0;
 }

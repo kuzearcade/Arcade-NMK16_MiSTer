@@ -137,7 +137,23 @@ module nmk004_periph (
 	output       p3_we,
 	output [7:0] p3_wdata,
 	output       p7_we,
-	output [7:0] p7_wdata
+	output [7:0] p7_wdata,
+
+	// Savestates (2026-09-18): every register above is readable as one of
+	// 24 16-bit words at any time, and writable one word per clk (ss_wr
+	// is a clk pulse, NOT cen-gated, and takes priority over the normal
+	// cen-gated update on that clk). The wrapper only asserts ss_wr while
+	// the CPU is frozen and this block's cen is withheld, so no normal
+	// update is ever lost. Word map: 0 {p1,p2} 1 {p3,p4} 2 {p6,p7}
+	// 3 {p8,smmod} 4 {p01cr,p2cr} 5 {p4cr,p67cr} 6 {p8cr,t4mod}
+	// 7 {bx_r,by_r} 8 {tmod,tclk} 9 {trun,5'b0,base_div} 10 {treg0,treg1}
+	// 11 {treg2,treg3} 12 {tval0,tval1} 13 {tval2,tval3} 14..17 presc0..3
+	// 18 treg4 19 treg5 20 tval4 21 presc4 22 {5'b0,irq_mask}
+	// 23 {10'b0,fired5,fired4,fired3,fired2,fired1,fired0}.
+	input        ss_wr,
+	input  [4:0] ss_sel,
+	input [15:0] ss_wdata,
+	output reg [15:0] ss_rdata
 );
 
 	// ------------------------------------------------------------------
@@ -163,7 +179,9 @@ module nmk004_periph (
 
 	reg [2:0] base_div;
 	wire base_tick = (base_div == 3'd7);
-	always @(posedge clk) if (cen) base_div <= reset ? 3'd0 : (base_tick ? 3'd0 : base_div + 3'd1);
+	always @(posedge clk)
+		if (ss_wr && ss_sel == 5'd9) base_div <= ss_wdata[2:0];
+		else if (cen) base_div <= reset ? 3'd0 : (base_tick ? 3'd0 : base_div + 3'd1);
 
 	// Pair-level match mode (see header derivation in docs/tier2-tlcs90.md:
 	// the reference's match-time mode lookup uses the *odd* member's own
@@ -233,7 +251,18 @@ module nmk004_periph (
 	wire pair23_16bit = (pair_mode_23 == 2'b01);
 	wire tick3 = tick3_self | (chained3 & fired2);
 
-	always @(posedge clk) if (cen) begin
+	always @(posedge clk) if (ss_wr) begin
+		case (ss_sel)
+			5'd12: {tval[0], tval[1]} <= ss_wdata;
+			5'd13: {tval[2], tval[3]} <= ss_wdata;
+			5'd14: presc0 <= ss_wdata;
+			5'd15: presc1 <= ss_wdata;
+			5'd16: presc2 <= ss_wdata;
+			5'd17: presc3 <= ss_wdata;
+			5'd23: {fired3, fired2, fired1, fired0} <= ss_wdata[3:0];
+			default: ;
+		endcase
+	end else if (cen) begin
 		fired0 <= 1'b0; fired1 <= 1'b0; fired2 <= 1'b0; fired3 <= 1'b0;
 
 		if (reset) begin
@@ -330,7 +359,14 @@ module nmk004_periph (
 	wire [15:0] t4_prescale = (t4clk == 2'b10) ? 16'd16 : 16'd1;
 	wire tick4 = en4 && t4_prescale_valid && base_tick && (presc4 == t4_prescale - 16'd1);
 
-	always @(posedge clk) if (cen) begin
+	always @(posedge clk) if (ss_wr) begin
+		case (ss_sel)
+			5'd20: tval4 <= ss_wdata;
+			5'd21: presc4 <= ss_wdata;
+			5'd23: {fired5, fired4} <= ss_wdata[5:4];
+			default: ;
+		endcase
+	end else if (cen) begin
 		fired4 <= 1'b0; fired5 <= 1'b0;
 		if (reset) begin
 			presc4 <= 16'd0; tval4 <= 16'd0;
@@ -426,9 +462,61 @@ module nmk004_periph (
 `endif
 
 	// ------------------------------------------------------------------
+	// Savestate read mux (see the port comment for the word map)
+	// ------------------------------------------------------------------
+	always @(*) begin
+		case (ss_sel)
+			5'd0:  ss_rdata = {p1, p2};
+			5'd1:  ss_rdata = {p3, p4};
+			5'd2:  ss_rdata = {p6, p7};
+			5'd3:  ss_rdata = {p8, smmod};
+			5'd4:  ss_rdata = {p01cr, p2cr};
+			5'd5:  ss_rdata = {p4cr, p67cr};
+			5'd6:  ss_rdata = {p8cr, t4mod};
+			5'd7:  ss_rdata = {bx_r, by_r};
+			5'd8:  ss_rdata = {tmod, tclk};
+			5'd9:  ss_rdata = {trun, 5'b0, base_div};
+			5'd10: ss_rdata = {treg[0], treg[1]};
+			5'd11: ss_rdata = {treg[2], treg[3]};
+			5'd12: ss_rdata = {tval[0], tval[1]};
+			5'd13: ss_rdata = {tval[2], tval[3]};
+			5'd14: ss_rdata = presc0;
+			5'd15: ss_rdata = presc1;
+			5'd16: ss_rdata = presc2;
+			5'd17: ss_rdata = presc3;
+			5'd18: ss_rdata = treg4;
+			5'd19: ss_rdata = treg5;
+			5'd20: ss_rdata = tval4;
+			5'd21: ss_rdata = presc4;
+			5'd22: ss_rdata = {5'b0, irq_mask_r};
+			5'd23: ss_rdata = {10'b0, fired5, fired4, fired3, fired2, fired1, fired0};
+			default: ss_rdata = 16'h0000;
+		endcase
+	end
+
+	// ------------------------------------------------------------------
 	// Register writes
 	// ------------------------------------------------------------------
-	always @(posedge clk) if (cen) begin
+	always @(posedge clk) if (ss_wr) begin
+		case (ss_sel)
+			5'd0:  {p1, p2} <= ss_wdata;
+			5'd1:  {p3, p4} <= ss_wdata;
+			5'd2:  {p6, p7} <= ss_wdata;
+			5'd3:  {p8, smmod} <= ss_wdata;
+			5'd4:  {p01cr, p2cr} <= ss_wdata;
+			5'd5:  {p4cr, p67cr} <= ss_wdata;
+			5'd6:  {p8cr, t4mod} <= ss_wdata;
+			5'd7:  {bx_r, by_r} <= ss_wdata;
+			5'd8:  {tmod, tclk} <= ss_wdata;
+			5'd9:  trun <= ss_wdata[15:8];
+			5'd10: {treg[0], treg[1]} <= ss_wdata;
+			5'd11: {treg[2], treg[3]} <= ss_wdata;
+			5'd18: treg4 <= ss_wdata;
+			5'd19: treg5 <= ss_wdata;
+			5'd22: irq_mask_r <= ss_wdata[10:0];
+			default: ;
+		endcase
+	end else if (cen) begin
 		if (reset) begin
 			p01cr <= 8'h00; p2cr <= 8'h00; p4cr <= 8'h00; p67cr <= 8'h00; p8cr <= 8'h00;
 			smmod <= 8'h00; tmod <= 8'h00; tclk <= 8'h00; trun <= 8'h00; t4mod <= 8'h00;

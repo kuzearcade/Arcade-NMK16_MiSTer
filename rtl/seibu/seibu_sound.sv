@@ -93,7 +93,15 @@ module seibu_sound (
 	// ------------------------------------------------------------
 	// ROM bank select (bank_w — BIT(data,0), seibusound.cpp:242-243)
 	// ------------------------------------------------------------
-	output reg    bank_sel
+	output reg    bank_sel,
+
+	// Savestates (2026-09-18): 0 {main2sub0, main2sub1} 1 {sub2main0, sub2main1}
+	// 2 {9'b0, rst10_irq, rst10_service, rst18_irq, rst18_service,
+	//    main2sub_pending, sub2main_pending, bank_sel}
+	input         ss_wr,
+	input   [1:0] ss_sel,
+	input  [15:0] ss_wdata,
+	output [15:0] ss_rdata
 );
 
 	// ------------------------------------------------------------
@@ -149,8 +157,18 @@ module seibu_sound (
 	// (but same-effective-cycle, since MAME's scheduler.synchronize with
 	// no delay runs "now") state transitions: RST10/RST18 service flags
 	// only change on the actual IACK cycle, not speculatively.
+	assign ss_rdata = (ss_sel == 2'd0) ? {main2sub0, main2sub1} :
+	                  (ss_sel == 2'd1) ? {sub2main0, sub2main1} :
+	                  (ss_sel == 2'd2) ? {9'd0, rst10_irq, rst10_service, rst18_irq, rst18_service, main2sub_pending, sub2main_pending, bank_sel} : 16'h0000;
 	always @(posedge clk_sys) begin
-		if (reset) begin
+		if (ss_wr) begin
+			case (ss_sel)
+				2'd0: {main2sub0, main2sub1} <= ss_wdata;
+				2'd1: {sub2main0, sub2main1} <= ss_wdata;
+				2'd2: {rst10_irq, rst10_service, rst18_irq, rst18_service, main2sub_pending, sub2main_pending, bank_sel} <= ss_wdata[6:0];
+				default: ;
+			endcase
+		end else if (reset) begin
 			rst10_irq     <= 1'b0;
 			rst10_service <= 1'b0;
 			rst18_irq     <= 1'b0;

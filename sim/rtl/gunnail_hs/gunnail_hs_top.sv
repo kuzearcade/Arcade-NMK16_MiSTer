@@ -106,8 +106,50 @@ module gunnail_hs_top #(
 	output        hs_write_o,
 	output [31:0] dbg_hs_prot_drop,
 	output [31:0] dbg_hs_pause_cycles,
-	output [31:0] dbg_hs_writes
+	output [31:0] dbg_hs_writes,
+
+	// Savestates (2026-09-18): rtl/savestate/savestate.sv against a DDR
+	// model here (4 slots), driven by the tb's TB_SS_* knobs.
+	input         ss_save,
+	input         ss_load,
+	input   [1:0] ss_slot,
+	output        ss_busy,
+	output        ss_done_ok,
+	output        ss_done_fail,
+	output  [1:0] ss_fail_code,
+	output        ss_frozen_o,
+	output        ss_active_o
 );
+
+	wire        ss_freeze, ss_frozen, ss_parked, ss_resume, ss_active, ss_wr, ss_replay, ss_replay_done;
+	wire [19:0] ss_addr;
+	wire [15:0] ss_rdata, ss_wdata;
+	wire        ddr_we, ddr_rd;
+	wire [28:0] ddr_addr;
+	wire [63:0] ddr_din;
+	reg  [63:0] ddr_dout = 64'd0;
+	reg         ddr_ready = 1'b0;
+	reg  [63:0] ddr_mem [0:131071];   // 4 x 0x8000 64-bit words from 0x3E000000
+	integer di;
+	initial for (di = 0; di < 131072; di = di + 1) ddr_mem[di] = 64'd0;
+	wire [16:0] ddr_idx = ddr_addr[16:0];   // DDR_BASE is 0x07C00000: its low 17 bits are 0
+	always @(posedge clk_sys) begin
+		ddr_ready <= 1'b0;
+		if (ddr_we) ddr_mem[ddr_idx] <= ddr_din;
+		if (ddr_rd) begin ddr_dout <= ddr_mem[ddr_idx]; ddr_ready <= 1'b1; end
+	end
+	assign ss_frozen_o = ss_frozen;
+	assign ss_active_o = ss_active;
+	savestate #(.SS_WORDS(65536)) ss (
+		.clk(clk_sys), .reset(reset),
+		.save_req(ss_save), .load_req(ss_load), .slot(ss_slot), .vblank(vblank_o), .allow(1'b1),
+		.ss_freeze(ss_freeze), .ss_frozen(ss_frozen), .ss_parked(ss_parked), .ss_resume(ss_resume), .ss_active(ss_active),
+		.ss_addr(ss_addr), .ss_rdata(ss_rdata), .ss_wr(ss_wr), .ss_wdata(ss_wdata),
+		.ss_replay(ss_replay), .ss_replay_done(ss_replay_done),
+		.busy(ss_busy), .done_ok(ss_done_ok), .done_fail(ss_done_fail), .fail_code(ss_fail_code), .was_load(),
+		.clk_ddr(clk_sys), .ddr_busy(1'b0), .rot_we(1'b0),
+		.ddr_we(ddr_we), .ddr_rd(ddr_rd), .ddr_addr(ddr_addr), .ddr_din(ddr_din), .ddr_dout(ddr_dout), .ddr_dout_ready(ddr_ready)
+	);
 
 	// ------------------------------------------------------------------
 	// The real hiscore module, parameterised as NMK16_Gunnail.sv does.
@@ -252,10 +294,14 @@ module gunnail_hs_top #(
 		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFD), .dsw2_i(16'hFFFF),
 		.extra_por_hold(1'b0),
 
-		.pause(hs_pause_core),
+		.pause(hs_pause_core & ~ss_busy),
 		.hs_addr(hs_addr), .hs_din(hs_din), .hs_dout(hs_dout),
 		.hs_write(hs_write), .hs_access(hs_access),
-		.dbg_hs_prot_drop(dbg_hs_prot_drop)
+		.dbg_hs_prot_drop(dbg_hs_prot_drop),
+
+		.ss_freeze(ss_freeze), .ss_resume(ss_resume), .ss_active(ss_active), .ss_frozen(ss_frozen), .ss_parked(ss_parked),
+		.ss_addr(ss_addr), .ss_rdata(ss_rdata), .ss_wr(ss_wr), .ss_wdata(ss_wdata),
+		.ss_replay(ss_replay), .ss_replay_done(ss_replay_done)
 	);
 
 endmodule

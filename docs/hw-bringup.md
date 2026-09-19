@@ -3889,3 +3889,81 @@ PVM +2 384×224; powerins (the 448-px / 7 MHz line) 320×224, 320×230 /
 bitstream re-confirmed the same way on gunnail and tharrier. The
 superseded 20260917 bitstreams sit in `/media/fat/crt_backup/` on the
 board.
+
+## Savestates (2026-09-18)
+
+Every core has a Savestates OSD page (Slot 1-4, Save state, Load state;
+F1-F4 / Alt+F1-F4 on a keyboard) on the MiSTer savestate framework: the
+CONF_STR carries `SS3E000000:40000`, so the firmware maps four 256 KB
+slots at DDR3 0x3E000000, writes a slot to `savestates/` whenever its
+control word's change counter moves, and presents the files again at the
+next launch. `rtl/savestate/`:
+
+  | file | role |
+  |---|---|
+  | `savestate.sv` | the engine: parks the machine, streams the image to/from the slot (64-bit DDR words, 4 x 16-bit core words each), control word `{size in 32-bit words, counter}` |
+  | `ss_m68k_park.sv` | parks fx68k without touching it: level-7 interrupt, vector 31 substituted on the bus, a 52-byte monitor served from a bus overlay at an unmapped address (0x1E8000 on every board here) pushes D0-D7/A0-A6 on the game's stack, records SSP/USP, spins on RESUME, RTEs |
+  | `ss_z80_park.sv` | parks T80 the same way with NMI and a 93-byte monitor overlaid at 0x0066 (armed only by the NMI entry fetch); IM is tracked by snooping ED 46/56/5E fetches, IFF2 through LD A,I |
+  | `savestate_ui.sv` | OSD/keyboard front end and the info messages |
+
+The TLCS-90 is ours, so it freezes at an instruction boundary on
+`ss_freeze` and exposes its registers on a word bus (`tlcs90.sv`,
+`nmk004_periph.sv`, `nmk004_core.sv`, `nmk_prot_core.sv`); the
+peripheral timers stop while frozen. `nmk112.sv` and
+`seibu/seibu_sound.sv` got the same small bus.
+
+Each core exposes its whole state as a flat array of 16-bit words
+(`ss_addr`/`ss_rdata`/`ss_wr`/`ss_wdata`, the map is in the port comment):
+main RAM, VRAMs, palette, scroll RAMs, the sound RAMs, the MCU images,
+the FM register shadow, and a block of registers. While `ss_active` the
+CPU-side RAM ports belong to the engine (hiscore/cheats and the
+protection MCU are held off), which is why no third RAM port -- and no
+extra M10K copy -- was needed. The FM chips (jt03/jtopl2/jt51) are not
+touched: every register write is mirrored into a 512-word shadow, and a
+load replays it into the chip (key-on registers as key-off). The OKIs
+are not restored (NMK-32).
+
+Sequencing: a request waits for the next VBlank edge, raises
+`ss_freeze` (68000 level-7 + monitor, Z80 NMI + monitor, TLCS-90 hold;
+`ss_frozen` when all report), reads the slot's control word, transfers
+the image, writes the control word (save) or runs the FM replay (load),
+then releases at the next VBlank edge so a save and a load resume at the
+same frame phase (a load waits two further frames first, so the sprite
+DMA has refilled the video's two-stage sprite buffer from the restored
+RAM -- the buffer is not part of the image). Any CPU that will not park within ~100 ms (in reset,
+halted, OSD-paused -- pause is masked during an operation for that
+reason) aborts the operation with "Savestate failed".
+
+Two traps, both found on the board after every simulation had passed:
+
+1. **The overlay must outlive the bus cycle that fetches the RTE / RETN.**
+   The first version switched the 68000 overlay off on the clock that saw
+   the RTE fetch begin. fx68k keeps capturing the data bus on every phi2
+   until the cycle ends, so the CPU latched the unmapped 0xFFFF instead of
+   0x4E73, took a line-F exception at 0x1E8034 and landed in the game's
+   own exception handler (`bra *` at 0x136 on stagger1, error code on the
+   sprite layer). Seen as "the game freezes after any save/load"; the
+   probes that found it were a debug bitstream reporting the 68000's
+   PC / IACK activity through OSD info popups (captured on the analog
+   output), and a savestate of the frozen machine, whose supervisor
+   stack held the exception frame `SR 2700, PC 001E8034`. The overlay
+   enable is now a register that only changes while ASn is high, and
+   `left` is set when the RTE fetch cycle has ended. T80 latches DI late
+   in its M1 cycle, so the Z80 side had the same defect at the RETN and
+   the same fix (overlay off once `mreq_n` is high again).
+2. **Async-read arrays behind a muxed address become flops.** The TLCS-90
+   RAMs (`nmk004_core.sv` 2 KB + 256 B, `nmk_prot_core.sv` 512 B) are
+   read combinationally; Quartus had been absorbing the CPU's address
+   register into an M10K. Adding a second read port for the engine, and
+   then sharing the port through a combinational address mux, both
+   turned them into 16k+ flops (+14k / +8k ALMs, NMK16_Gunnail did not
+   fit). The port is shared AND the address is registered in the
+   hardware build (`USE_CEN=1`), so the arrays infer as M10K again
+   (+0.8k ALMs over the pre-savestate bitstream).
+
+Verification: `sim/rtl/gunnail_hs` with `TB_SS_SAVE=N TB_SS_LOAD=M`
+saves at frame N, loads at frame M and compares the 20 frames rendered
+after each pixel for pixel (the two must be identical: after the load
+the machine replays exactly what it did after the save). Run on
+hachamf (protection MCU + NMK004, hiscore active), tharrier (Z80 +
+YM2203 + the MCU simulation) and mustangb (the Seibu Z80/YM3812 board).

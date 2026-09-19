@@ -326,8 +326,63 @@ module gunnail_core #(
 	input  [15:0] dsw1_i,
 	input  [15:0] dsw2_i,
 
-	input extra_por_hold
+	input extra_por_hold,
+
+	// Savestates (2026-09-18) — rtl/savestate/savestate.sv drives this. The
+	// whole machine state is 65536 16-bit words (SS_WORDS in the top):
+	//   0x00000-0x07FFF main RAM        0x08000-0x09FFF BG VRAM
+	//   0x0A000-0x0BFFF BG VRAM 2       0x0C000-0x0C7FF TX VRAM
+	//   0x0C800-0x0CBFF palette         0x0CC00-0x0CDFF gunnail scroll RAM
+	//   0x0D000-0x0D7FF manybloc scroll RAM
+	//   0x0E000-0x0EFFF Z80 RAM (little-endian pairs)
+	//   0x0F000-0x0F7FF NMK004 (nmk004_core.sv map)
+	//   0x0F800-0x0FBFF protection MCU (nmk_prot_core.sv map)
+	//   0x0FC00-0x0FDFF FM register shadows ({chip[1:0], reg[7:1]}: 0 YM2203,
+	//                   1 YM3812, 2 YM2151; word = {odd reg, even reg})
+	//   0x0FE00-0x0FE7F registers (see ss_misc_rd below)
+	// The bus is only meaningful while ss_frozen (every CPU parked: the
+	// 68000 and Z80 in their monitors, the TLCS-90s at an instruction
+	// boundary, no bioship tilemap DMA in flight); ss_active hands the
+	// RAM ports to the engine. ss_replay (after a load) replays the FM
+	// shadows into the chips. The OKIs are not restored (a sample that was
+	// playing at the save is silent after a load).
+	input         ss_freeze,
+	input         ss_resume,
+	input         ss_active,
+	output        ss_frozen,
+	output        ss_parked,
+	input  [19:0] ss_addr,
+	output reg [15:0] ss_rdata,
+	input         ss_wr,
+	input  [15:0] ss_wdata,
+	input         ss_replay,
+	output        ss_replay_done
 );
+
+	// savestate region decode (see the port comment)
+	wire ss_sel_mainram = (ss_addr[19:15] == 5'd0);
+	wire ss_sel_bgvram  = (ss_addr[19:13] == 7'd4);
+	wire ss_sel_bgvram2 = (ss_addr[19:13] == 7'd5);
+	wire ss_sel_txvram  = (ss_addr[19:11] == 9'h018);
+	wire ss_sel_palette = (ss_addr[19:10] == 10'h032);
+	wire ss_sel_scroll  = (ss_addr[19:9]  == 11'h066);
+	wire ss_sel_mbs     = (ss_addr[19:11] == 9'h01A);
+	wire ss_sel_z80ram  = (ss_addr[19:12] == 8'h0E);
+	wire ss_sel_nmk004  = (ss_addr[19:11] == 9'h01E);
+	wire ss_sel_prot    = (ss_addr[19:10] == 10'h03E);
+	wire ss_sel_fm      = (ss_addr[19:9]  == 11'h07E);
+	wire ss_sel_misc    = (ss_addr[19:7]  == 13'h01FC);
+	wire ss_w = ss_active & ss_wr;
+	wire ss_misc_w = ss_w & ss_sel_misc;
+	wire [6:0] ss_mi = ss_addr[6:0];
+	wire mcu_freeze = ss_freeze & ~ss_resume;   // the TLCS-90s run again the moment the release starts
+	wire m68k_parked, z80_parked, nmk004_ss_frozen, prot_ss_frozen;
+	wire [15:0] ss_nmk004_rdata, ss_prot_rdata, ss_n112_rdata, ss_seibu_rdata, ss_m68k_rdata, ss_z80_rdata;
+	// FM register-shadow replay (after a load): the sequencer below drives
+	// the three chips' write paths through these instead of the CPUs.
+	wire       rep_on = ss_replay;
+	reg        rep_ym_we = 1'b0, rep_opl_we = 1'b0, rep_y51_we = 1'b0, rep_a0 = 1'b0;
+	reg  [7:0] rep_data = 8'h00;
 
 	// ------------------------------------------------------------------
 	// Game table (2026-09-11). Every per-game difference is a function of
@@ -715,6 +770,19 @@ module gunnail_core #(
 
 	wire iack_cycle = FC0 & FC1 & FC2 & ~ASn;
 	wire VPAn = ~iack_cycle;
+	// savestate park controller (rtl/savestate/ss_m68k_park.sv): level-7
+	// interrupt + monitor overlay at 0x1E8000, unmapped on every board here
+	// (the Afega 1 MB mask makes it 0xE8000, firehawk's 4 MB one 0x1E8000).
+	wire [2:0]  m68k_ipl_park;
+	wire        m68k_sel_mon;
+	wire [15:0] m68k_mon_data;
+	ss_m68k_park #(.MON_BASE(15'h0F40)) m68k_park (
+		.clk(clk_sys), .reset(reset), .phi(enPhi2),
+		.park_req(ss_freeze), .parked(m68k_parked), .resume(ss_resume),
+		.eab(eab), .ASn(ASn), .eRWn(eRWn), .FC0(FC0), .FC1(FC1), .FC2(FC2), .oEdb(oEdb),
+		.ipl_park(m68k_ipl_park), .sel_mon(m68k_sel_mon), .mon_data(m68k_mon_data),
+		.ss_sel(ss_addr[1:0]), .ss_wr(ss_misc_w & (ss_mi[6:2] == 5'b01000)), .ss_wdata(ss_wdata), .ss_rdata(ss_m68k_rdata)
+	);
 	wire rom_wait     = sel_rom     & cpu_read & ~rom_ready;
 	wire mainram_wait = sel_mainram & cpu_read & ~mainram_ready;
 	wire sprite_dma_busy;
@@ -1317,6 +1385,7 @@ module gunnail_core #(
 	wire [15:0] hs_byte = hs_addr[15:0];
 	wire [14:0] mainram_addr_hs = hs_byte[15:1];
 	wire [14:0] mainram_addr_use = hs_access ? mainram_addr_hs : mainram_addr_cpu;
+	wire        ss_mr_w = ss_w & ss_sel_mainram;
 	wire        mr_uds = ~UDSn | mainram_strange;
 	wire        mr_lds = ~LDSn | mainram_strange;
 	reg  [15:0] mainram_dout;
@@ -1349,8 +1418,11 @@ module gunnail_core #(
 	wire [15:0] prot_mainram_dout;
 	generate
 	if (!HW_ROMS) begin : g_mainram_sim
+		wire [14:0] mr_a_sim = ss_active ? ss_addr[14:0] : mainram_addr_cpu;
 		always @(posedge clk_sys) begin
-			if (prot_wr & prot_sel_mainram & prot_cen) begin
+			if (ss_active) begin
+				if (ss_mr_w) begin mainram_hi[mr_a_sim] <= ss_wdata[15:8]; mainram_lo[mr_a_sim] <= ss_wdata[7:0]; end
+			end else if (prot_wr & prot_sel_mainram & prot_cen) begin
 				if (~prot_addr[0]) mainram_hi[prot_addr[15:1]] <= prot_wdata;
 				else                mainram_lo[prot_addr[15:1]] <= prot_wdata;
 			end else if (sel_mainram & cpu_write & ~sprite_dma_busy) begin
@@ -1358,7 +1430,7 @@ module gunnail_core #(
 				if (mr_lds) mainram_lo[mainram_addr_cpu] <= oEdb[7:0];
 			end
 		end
-		always @(*) mainram_dout = {mainram_hi[mainram_addr_cpu], mainram_lo[mainram_addr_cpu]};
+		always @(*) mainram_dout = {mainram_hi[mr_a_sim], mainram_lo[mr_a_sim]};
 		assign mainram_ready_raw  = 1'b1;
 		assign prot_mainram_dout  = {mainram_hi[prot_addr[15:1]], mainram_lo[prot_addr[15:1]]};
 		assign prot_mainram_ready = 1'b1;
@@ -1397,15 +1469,16 @@ module gunnail_core #(
 		wire        cpu_wants  = sel_mainram & ~ASn & ~sprite_dma_busy & ~pause;
 		wire        prot_wants = prot_acc & prot_sel_mainram & ~sprite_dma_busy;
 		// Same reasoning for the MCU: a frozen CPU must not hold it off either.
-		wire        grant      = prot_wants & ~cpu_wants;
+		wire        grant      = prot_wants & ~cpu_wants & ~ss_active;
 		// Pending hiscore write, latched from its ram_write pulse.
 		reg         hs_pend;
 		reg  [14:0] hs_pend_addr;
 		reg         hs_pend_lane;   // 1 = low byte (odd address)
 		reg   [7:0] hs_pend_data;
-		wire        hs_serve   = hs_access & ~cpu_wants & ~prot_wants;
+		wire        hs_serve   = hs_access & ~cpu_wants & ~prot_wants & ~ss_active;
 		wire        hs_w       = hs_serve & hs_pend;
-		wire [14:0] port_addr  = grant ? prot_addr[15:1] :
+		wire [14:0] port_addr  = ss_active ? ss_addr[14:0] :
+		                         grant ? prot_addr[15:1] :
 		                         hs_serve ? (hs_pend ? hs_pend_addr : mainram_addr_hs) :
 		                         mainram_addr_cpu;
 		reg  [14:0] port_addr_r;
@@ -1414,14 +1487,14 @@ module gunnail_core #(
 		wire        prot_w = grant & prot_wr & ~prot_wr_done;
 		// hs_serve is false whenever the CPU or MCU want the port, so these
 		// three write sources are mutually exclusive by construction.
-		wire        we_hi = (hs_w & ~hs_pend_lane)
+		wire        we_hi = ss_mr_w | (~ss_active & ((hs_w & ~hs_pend_lane)
 		                  | (prot_w & ~prot_addr[0])
-		                  | (~grant & ~hs_serve & sel_mainram & cpu_write & mr_uds & ~sprite_dma_busy);
-		wire        we_lo = (hs_w &  hs_pend_lane)
+		                  | (~grant & ~hs_serve & sel_mainram & cpu_write & mr_uds & ~sprite_dma_busy)));
+		wire        we_lo = ss_mr_w | (~ss_active & ((hs_w &  hs_pend_lane)
 		                  | (prot_w &  prot_addr[0])
-		                  | (~grant & ~hs_serve & sel_mainram & cpu_write & mr_lds & ~sprite_dma_busy);
-		wire [7:0]  wd_hi = hs_w ? hs_pend_data : prot_w ? prot_wdata : oEdb[15:8];
-		wire [7:0]  wd_lo = hs_w ? hs_pend_data : prot_w ? prot_wdata : oEdb[7:0];
+		                  | (~grant & ~hs_serve & sel_mainram & cpu_write & mr_lds & ~sprite_dma_busy)));
+		wire [7:0]  wd_hi = ss_active ? ss_wdata[15:8] : hs_w ? hs_pend_data : prot_w ? prot_wdata : oEdb[15:8];
+		wire [7:0]  wd_lo = ss_active ? ss_wdata[7:0]  : hs_w ? hs_pend_data : prot_w ? prot_wdata : oEdb[7:0];
 		always @(posedge clk_sys) begin
 			if (we_hi) begin mainram_hi[port_addr] <= wd_hi; mainram_dout[15:8] <= wd_hi; end
 			else       mainram_dout[15:8] <= mainram_hi[port_addr];
@@ -1479,14 +1552,18 @@ module gunnail_core #(
 	// ------------------------------------------------------------------
 	reg [15:0] palette [0:1023];
 	wire [9:0] palette_addr = byte_addr[10:1];
+	wire       ss_pal_w = ss_w & ss_sel_palette;
 	reg  [15:0] palette_dout;
 	wire        palette_ready;
 	wire        prot_palette_ready;
 	wire [15:0] prot_palette_dout;
 	generate
 	if (!HW_ROMS) begin : g_palette_sim
+		wire [9:0] pal_a_sim = ss_active ? ss_addr[9:0] : palette_addr;
 		always @(posedge clk_sys) begin
-			if (prot_wr & prot_sel_palette & prot_cen) begin
+			if (ss_active) begin
+				if (ss_pal_w) palette[pal_a_sim] <= ss_wdata;
+			end else if (prot_wr & prot_sel_palette & prot_cen) begin
 				if (~prot_addr[0]) palette[prot_addr[10:1]][15:8] <= prot_wdata;
 				else                palette[prot_addr[10:1]][7:0]  <= prot_wdata;
 			end else if (sel_palette & cpu_write) begin
@@ -1494,20 +1571,20 @@ module gunnail_core #(
 				if (~LDSn) palette[palette_addr][7:0]  <= oEdb[7:0];
 			end
 		end
-		always @(*) palette_dout = palette[palette_addr];
+		always @(*) palette_dout = palette[pal_a_sim];
 		assign palette_ready      = 1'b1;
 		assign prot_palette_dout  = palette[prot_addr[10:1]];
 		assign prot_palette_ready = 1'b1;
 		assign palette_prot_grant = 1'b1;
 	end else begin : g_palette_hw
-		wire       grant = prot_acc & prot_sel_palette & ~(sel_palette & ~ASn);
-		wire [9:0] port_addr = grant ? prot_addr[10:1] : palette_addr;
+		wire       grant = prot_acc & prot_sel_palette & ~(sel_palette & ~ASn) & ~ss_active;
+		wire [9:0] port_addr = ss_active ? ss_addr[9:0] : grant ? prot_addr[10:1] : palette_addr;
 		reg  [9:0] port_addr_r;
 		reg        port_src_r;
 		wire       prot_w = grant & prot_wr & ~prot_wr_done;
 		always @(posedge clk_sys) begin
-			if ((prot_w & ~prot_addr[0]) | (~grant & sel_palette & cpu_write & ~UDSn)) palette[port_addr][15:8] <= prot_w ? prot_wdata : oEdb[15:8];
-			if ((prot_w &  prot_addr[0]) | (~grant & sel_palette & cpu_write & ~LDSn)) palette[port_addr][7:0]  <= prot_w ? prot_wdata : oEdb[7:0];
+			if (ss_pal_w | (~ss_active & ((prot_w & ~prot_addr[0]) | (~grant & sel_palette & cpu_write & ~UDSn)))) palette[port_addr][15:8] <= ss_active ? ss_wdata[15:8] : prot_w ? prot_wdata : oEdb[15:8];
+			if (ss_pal_w | (~ss_active & ((prot_w &  prot_addr[0]) | (~grant & sel_palette & cpu_write & ~LDSn)))) palette[port_addr][7:0]  <= ss_active ? ss_wdata[7:0]  : prot_w ? prot_wdata : oEdb[7:0];
 			palette_dout <= palette[port_addr];
 			port_addr_r  <= port_addr;
 			port_src_r   <= grant;
@@ -1560,14 +1637,18 @@ module gunnail_core #(
 	end
 `endif
 	wire [12:0] bgvram_addr = byte_addr[13:1];
+	wire        ss_bg_w = ss_w & ss_sel_bgvram;
 	reg  [15:0] bgvram_dout;
 	wire        bgvram_ready;
 	wire        prot_bgvram_ready;
 	wire [15:0] prot_bgvram_dout;
 	generate
 	if (!HW_ROMS) begin : g_bgvram_sim
+		wire [12:0] bg_a_sim = ss_active ? ss_addr[12:0] : bgvram_addr;
 		always @(posedge clk_sys) begin
-			if (prot_wr & prot_sel_bgvram & prot_cen) begin
+			if (ss_active) begin
+				if (ss_bg_w) begin bgvram_hi[bg_a_sim] <= ss_wdata[15:8]; bgvram_lo[bg_a_sim] <= ss_wdata[7:0]; end
+			end else if (prot_wr & prot_sel_bgvram & prot_cen) begin
 				if (~prot_addr[0]) bgvram_hi[prot_addr[13:1]] <= prot_wdata;
 				else                bgvram_lo[prot_addr[13:1]] <= prot_wdata;
 			end else if (sel_bgvram & cpu_write) begin
@@ -1575,21 +1656,21 @@ module gunnail_core #(
 				if (~LDSn) bgvram_lo[bgvram_addr] <= oEdb[7:0];
 			end
 		end
-		always @(*) bgvram_dout = {bgvram_hi[bgvram_addr], bgvram_lo[bgvram_addr]};
+		always @(*) bgvram_dout = {bgvram_hi[bg_a_sim], bgvram_lo[bg_a_sim]};
 		assign bgvram_ready      = 1'b1;
 		assign prot_bgvram_dout  = {bgvram_hi[prot_addr[13:1]], bgvram_lo[prot_addr[13:1]]};
 		assign prot_bgvram_ready = 1'b1;
 		assign bgvram_prot_grant = 1'b1;
 	end else begin : g_bgvram_hw
-		wire        grant = prot_acc & prot_sel_bgvram & ~(sel_bgvram & ~ASn);
-		wire [12:0] port_addr = grant ? prot_addr[13:1] : bgvram_addr;
+		wire        grant = prot_acc & prot_sel_bgvram & ~(sel_bgvram & ~ASn) & ~ss_active;
+		wire [12:0] port_addr = ss_active ? ss_addr[12:0] : grant ? prot_addr[13:1] : bgvram_addr;
 		reg  [12:0] port_addr_r;
 		reg         port_src_r;
 		wire        prot_w = grant & prot_wr & ~prot_wr_done;
-		wire        we_hi = (prot_w & ~prot_addr[0]) | (~grant & sel_bgvram & cpu_write & ~UDSn);
-		wire        we_lo = (prot_w &  prot_addr[0]) | (~grant & sel_bgvram & cpu_write & ~LDSn);
-		wire [7:0]  wd_hi = prot_w ? prot_wdata : oEdb[15:8];
-		wire [7:0]  wd_lo = prot_w ? prot_wdata : oEdb[7:0];
+		wire        we_hi = ss_bg_w | (~ss_active & ((prot_w & ~prot_addr[0]) | (~grant & sel_bgvram & cpu_write & ~UDSn)));
+		wire        we_lo = ss_bg_w | (~ss_active & ((prot_w &  prot_addr[0]) | (~grant & sel_bgvram & cpu_write & ~LDSn)));
+		wire [7:0]  wd_hi = ss_active ? ss_wdata[15:8] : prot_w ? prot_wdata : oEdb[15:8];
+		wire [7:0]  wd_lo = ss_active ? ss_wdata[7:0]  : prot_w ? prot_wdata : oEdb[7:0];
 		always @(posedge clk_sys) begin
 			if (we_hi) begin bgvram_hi[port_addr] <= wd_hi; bgvram_dout[15:8] <= wd_hi; end
 			else       bgvram_dout[15:8] <= bgvram_hi[port_addr];
@@ -1616,6 +1697,7 @@ module gunnail_core #(
 	reg [7:0] bgvram2_hi [0:8191];
 	reg [7:0] bgvram2_lo [0:8191];
 	wire [12:0] bgvram2_addr_cpu = byte_addr[13:1];
+	wire        ss_bg2_w = ss_w & ss_sel_bgvram2;
 	reg  [15:0] bgvram2_dout;
 	wire        bgvram2_ready;
 	wire        dma_active;   // the tilemap DMA owns the CPU-side port
@@ -1624,8 +1706,11 @@ module gunnail_core #(
 	wire [15:0] dma_wdata;
 	generate
 	if (!HW_ROMS) begin : g_bgvram2_sim
+		wire [12:0] bg2_a_sim = ss_active ? ss_addr[12:0] : bgvram2_addr_cpu;
 		always @(posedge clk_sys) begin
-			if (dma_we) begin
+			if (ss_active) begin
+				if (ss_bg2_w) begin bgvram2_hi[bg2_a_sim] <= ss_wdata[15:8]; bgvram2_lo[bg2_a_sim] <= ss_wdata[7:0]; end
+			end else if (dma_we) begin
 				bgvram2_hi[dma_addr] <= dma_wdata[15:8];
 				bgvram2_lo[dma_addr] <= dma_wdata[7:0];
 			end else if (sel_bgvram2 & cpu_write) begin
@@ -1633,16 +1718,16 @@ module gunnail_core #(
 				if (~LDSn) bgvram2_lo[bgvram2_addr_cpu] <= oEdb[7:0];
 			end
 		end
-		always @(*) bgvram2_dout = {bgvram2_hi[bgvram2_addr_cpu], bgvram2_lo[bgvram2_addr_cpu]};
+		always @(*) bgvram2_dout = {bgvram2_hi[bg2_a_sim], bgvram2_lo[bg2_a_sim]};
 		assign bgvram2_ready = 1'b1;
 	end else begin : g_bgvram2_hw
-		wire [12:0] port_addr = dma_active ? dma_addr : bgvram2_addr_cpu;
+		wire [12:0] port_addr = ss_active ? ss_addr[12:0] : dma_active ? dma_addr : bgvram2_addr_cpu;
 		reg  [12:0] port_addr_r;
 		reg         port_src_r;
-		wire        we_hi = dma_we | (~dma_active & sel_bgvram2 & cpu_write & ~UDSn);
-		wire        we_lo = dma_we | (~dma_active & sel_bgvram2 & cpu_write & ~LDSn);
-		wire [7:0]  wd_hi = dma_active ? dma_wdata[15:8] : oEdb[15:8];
-		wire [7:0]  wd_lo = dma_active ? dma_wdata[7:0]  : oEdb[7:0];
+		wire        we_hi = ss_bg2_w | (~ss_active & (dma_we | (~dma_active & sel_bgvram2 & cpu_write & ~UDSn)));
+		wire        we_lo = ss_bg2_w | (~ss_active & (dma_we | (~dma_active & sel_bgvram2 & cpu_write & ~LDSn)));
+		wire [7:0]  wd_hi = ss_active ? ss_wdata[15:8] : dma_active ? dma_wdata[15:8] : oEdb[15:8];
+		wire [7:0]  wd_lo = ss_active ? ss_wdata[7:0]  : dma_active ? dma_wdata[7:0]  : oEdb[7:0];
 		always @(posedge clk_sys) begin
 			if (we_hi) begin bgvram2_hi[port_addr] <= wd_hi; bgvram2_dout[15:8] <= wd_hi; end
 			else       bgvram2_dout[15:8] <= bgvram2_hi[port_addr];
@@ -1672,14 +1757,18 @@ module gunnail_core #(
 	// set), and tomagic maps a real 0x1000 with bit 12 as its mirror, so the
 	// unmasked index stays correct for them.
 	wire [10:0] txvram_addr = g_ssmissin ? {1'b0, byte_addr[10:1]} : byte_addr[11:1];
+	wire        ss_tx_w = ss_w & ss_sel_txvram;
 	reg  [15:0] txvram_dout;
 	wire        txvram_ready;
 	wire        prot_txvram_ready;
 	wire [15:0] prot_txvram_dout;
 	generate
 	if (!HW_ROMS) begin : g_txvram_sim
+		wire [10:0] tx_a_sim = ss_active ? ss_addr[10:0] : txvram_addr;
 		always @(posedge clk_sys) begin
-			if (prot_wr & prot_sel_txvram & prot_cen) begin
+			if (ss_active) begin
+				if (ss_tx_w) begin txvram_hi[tx_a_sim] <= ss_wdata[15:8]; txvram_lo[tx_a_sim] <= ss_wdata[7:0]; end
+			end else if (prot_wr & prot_sel_txvram & prot_cen) begin
 				if (~prot_addr[0]) txvram_hi[prot_addr[11:1]] <= prot_wdata;
 				else                txvram_lo[prot_addr[11:1]] <= prot_wdata;
 			end else if (sel_txvram & cpu_write) begin
@@ -1687,21 +1776,21 @@ module gunnail_core #(
 				if (~LDSn) txvram_lo[txvram_addr] <= oEdb[7:0];
 			end
 		end
-		always @(*) txvram_dout = {txvram_hi[txvram_addr], txvram_lo[txvram_addr]};
+		always @(*) txvram_dout = {txvram_hi[tx_a_sim], txvram_lo[tx_a_sim]};
 		assign txvram_ready      = 1'b1;
 		assign prot_txvram_dout  = {txvram_hi[prot_addr[11:1]], txvram_lo[prot_addr[11:1]]};
 		assign prot_txvram_ready = 1'b1;
 		assign txvram_prot_grant = 1'b1;
 	end else begin : g_txvram_hw
-		wire        grant = prot_acc & prot_sel_txvram & ~(sel_txvram & ~ASn);
-		wire [10:0] port_addr = grant ? prot_addr[11:1] : txvram_addr;
+		wire        grant = prot_acc & prot_sel_txvram & ~(sel_txvram & ~ASn) & ~ss_active;
+		wire [10:0] port_addr = ss_active ? ss_addr[10:0] : grant ? prot_addr[11:1] : txvram_addr;
 		reg  [10:0] port_addr_r;
 		reg         port_src_r;
 		wire        prot_w = grant & prot_wr & ~prot_wr_done;
-		wire        we_hi = (prot_w & ~prot_addr[0]) | (~grant & sel_txvram & cpu_write & ~UDSn);
-		wire        we_lo = (prot_w &  prot_addr[0]) | (~grant & sel_txvram & cpu_write & ~LDSn);
-		wire [7:0]  wd_hi = prot_w ? prot_wdata : oEdb[15:8];
-		wire [7:0]  wd_lo = prot_w ? prot_wdata : oEdb[7:0];
+		wire        we_hi = ss_tx_w | (~ss_active & ((prot_w & ~prot_addr[0]) | (~grant & sel_txvram & cpu_write & ~UDSn)));
+		wire        we_lo = ss_tx_w | (~ss_active & ((prot_w &  prot_addr[0]) | (~grant & sel_txvram & cpu_write & ~LDSn)));
+		wire [7:0]  wd_hi = ss_active ? ss_wdata[15:8] : prot_w ? prot_wdata : oEdb[15:8];
+		wire [7:0]  wd_lo = ss_active ? ss_wdata[7:0]  : prot_w ? prot_wdata : oEdb[7:0];
 		always @(posedge clk_sys) begin
 			if (we_hi) begin txvram_hi[port_addr] <= wd_hi; txvram_dout[15:8] <= wd_hi; end
 			else       txvram_dout[15:8] <= txvram_hi[port_addr];
@@ -1735,13 +1824,16 @@ module gunnail_core #(
 	wire [15:0] vid_scrollram_row, vid_scrollramy_row;
 	// Write port: the protection MCU's byte write wins the cycle (it is
 	// also the rarer one); the 68000 write is byte-enabled.
-	wire        scroll_prot_w = prot_wr & prot_sel_scrollmem & (HW_ROMS ? ~prot_wr_done : prot_cen);
-	wire [8:0]  scroll_waddr  = scroll_prot_w ? scroll_addr_prot : scroll_addr_cpu;
-	wire        scroll_cpu_w  = sel_scrollmem & cpu_write & ~scroll_prot_w;
-	wire        scroll_w_hi   = (scroll_prot_w & ~prot_addr[0]) | (scroll_cpu_w & ~UDSn);
-	wire        scroll_w_lo   = (scroll_prot_w &  prot_addr[0]) | (scroll_cpu_w & ~LDSn);
-	wire [7:0]  scroll_w_hi_d = scroll_prot_w ? prot_wdata : oEdb[15:8];
-	wire [7:0]  scroll_w_lo_d = scroll_prot_w ? prot_wdata : oEdb[7:0];
+	wire        ss_scr_w      = ss_w & ss_sel_scroll;
+	wire        scroll_prot_w = prot_wr & prot_sel_scrollmem & (HW_ROMS ? ~prot_wr_done : prot_cen) & ~ss_active;
+	wire [8:0]  scroll_waddr  = ss_active ? ss_addr[8:0] : scroll_prot_w ? scroll_addr_prot : scroll_addr_cpu;
+	wire        scroll_cpu_w  = sel_scrollmem & cpu_write & ~scroll_prot_w & ~ss_active;
+	wire        scroll_w_hi   = ss_scr_w | (scroll_prot_w & ~prot_addr[0]) | (scroll_cpu_w & ~UDSn);
+	wire        scroll_w_lo   = ss_scr_w | (scroll_prot_w &  prot_addr[0]) | (scroll_cpu_w & ~LDSn);
+	wire [7:0]  scroll_w_hi_d = ss_active ? ss_wdata[15:8] : scroll_prot_w ? prot_wdata : oEdb[15:8];
+	wire [7:0]  scroll_w_lo_d = ss_active ? ss_wdata[7:0]  : scroll_prot_w ? prot_wdata : oEdb[7:0];
+	reg  [15:0] ss_scroll_q;   // the engine's own registered read port
+	always @(posedge clk_sys) ss_scroll_q <= scrollmem[ss_addr[8:0]];
 	always @(posedge clk_sys) begin
 		if (reset) begin
 			scrollram0_reg  <= 16'h0000;
@@ -1809,27 +1901,32 @@ module gunnail_core #(
 		reg [7:0] mbs_lo [0:2047];
 		reg [15:0] mbs_q;
 		reg [10:0] mbs_addr_r;
-		wire       mbs_w   = sel_manybloc_scr & cpu_write;
-		wire       we_hi   = mbs_w & ~UDSn;
-		wire       we_lo   = mbs_w & ~LDSn;
+		wire       ss_mbs_w = ss_w & ss_sel_mbs;
+		wire [10:0] mbs_a  = ss_active ? ss_addr[10:0] : mbs_addr;
+		wire       mbs_w   = sel_manybloc_scr & cpu_write & ~ss_active;
+		wire       we_hi   = ss_mbs_w | (mbs_w & ~UDSn);
+		wire       we_lo   = ss_mbs_w | (mbs_w & ~LDSn);
+		wire [7:0] wd_hi   = ss_active ? ss_wdata[15:8] : oEdb[15:8];
+		wire [7:0] wd_lo   = ss_active ? ss_wdata[7:0]  : oEdb[7:0];
 		always @(posedge clk_sys) begin
-			if (we_hi) begin mbs_hi[mbs_addr] <= oEdb[15:8]; mbs_q[15:8] <= oEdb[15:8]; end
-			else       mbs_q[15:8] <= mbs_hi[mbs_addr];
-			if (we_lo) begin mbs_lo[mbs_addr] <= oEdb[7:0];  mbs_q[7:0]  <= oEdb[7:0];  end
-			else       mbs_q[7:0]  <= mbs_lo[mbs_addr];
+			if (we_hi) begin mbs_hi[mbs_a] <= wd_hi; mbs_q[15:8] <= wd_hi; end
+			else       mbs_q[15:8] <= mbs_hi[mbs_a];
+			if (we_lo) begin mbs_lo[mbs_a] <= wd_lo;  mbs_q[7:0]  <= wd_lo;  end
+			else       mbs_q[7:0]  <= mbs_lo[mbs_a];
 			mbs_addr_r <= mbs_addr;
 			// manybloc_scroll_w's two taps, latched instead of read back
+			// (a savestate restore of those words refreshes them the same way)
 			if (reset) begin
 				manybloc_scrollx <= 16'h0000;
 				manybloc_scrolly <= 16'h0000;
 			end else begin
-				if (mbs_addr == 11'h041) begin
-					if (we_hi) manybloc_scrollx[15:8] <= oEdb[15:8];
-					if (we_lo) manybloc_scrollx[7:0]  <= oEdb[7:0];
+				if (mbs_a == 11'h041) begin
+					if (we_hi) manybloc_scrollx[15:8] <= wd_hi;
+					if (we_lo) manybloc_scrollx[7:0]  <= wd_lo;
 				end
-				if (mbs_addr == 11'h061) begin
-					if (we_hi) manybloc_scrolly[15:8] <= oEdb[15:8];
-					if (we_lo) manybloc_scrolly[7:0]  <= oEdb[7:0];
+				if (mbs_a == 11'h061) begin
+					if (we_hi) manybloc_scrolly[15:8] <= wd_hi;
+					if (we_lo) manybloc_scrolly[7:0]  <= wd_lo;
 				end
 			end
 		end
@@ -1866,6 +1963,19 @@ module gunnail_core #(
 		if (reset) begin
 			for (si = 0; si < 4; si = si + 1) begin scr_a[si] <= 8'h00; scr_b[si] <= 8'h00; vsc[si] <= 16'h0000; end
 			must_x <= 16'h0000;
+		end else if (ss_misc_w) begin
+			case (ss_mi)
+				7'd2: {scr_a[0], scr_a[1]} <= ss_wdata;
+				7'd3: {scr_a[2], scr_a[3]} <= ss_wdata;
+				7'd4: {scr_b[0], scr_b[1]} <= ss_wdata;
+				7'd5: {scr_b[2], scr_b[3]} <= ss_wdata;
+				7'd6: vsc[0] <= ss_wdata;
+				7'd7: vsc[1] <= ss_wdata;
+				7'd8: vsc[2] <= ss_wdata;
+				7'd9: vsc[3] <= ss_wdata;
+				7'd10: must_x <= ss_wdata;
+				default: ;
+			endcase
 		end else begin
 			if (prot_reg_w & prot_sel_scrolla & prot_addr[0] & ~g_vandyke & ~g_mustang & ~g_bioship)
 				scr_a[prot_addr[2:1]] <= prot_wdata;
@@ -1900,6 +2010,7 @@ module gunnail_core #(
 	reg [15:0] th_scroll;
 	always @(posedge clk_sys) begin
 		if (reset) th_scroll <= 16'h0000;
+		else if (ss_misc_w & (ss_mi == 7'd11)) th_scroll <= ss_wdata;
 		else if (sel_mainram & cpu_write & ~sprite_dma_busy & (byte_addr[15:1] == 15'h4F80)) begin
 			if (mr_uds) th_scroll[15:8] <= oEdb[15:8];
 			if (mr_lds) th_scroll[7:0]  <= oEdb[7:0];
@@ -1914,6 +2025,8 @@ module gunnail_core #(
 	always @(posedge clk_sys) begin
 		if (reset) begin
 			for (ai = 0; ai < 4; ai = ai + 1) ascroll[ai] <= 16'h0000;
+		end else if (ss_misc_w & (ss_mi[6:2] == 5'b00011)) begin
+			ascroll[ss_mi[1:0]] <= ss_wdata;   // words 12-15
 		end else if (sel_ascroll & cpu_write) begin
 			if (~UDSn) ascroll[byte_addr[2:1]][15:8] <= oEdb[15:8];
 			if (~LDSn) ascroll[byte_addr[2:1]][7:0]  <= oEdb[7:0];
@@ -2027,6 +2140,13 @@ module gunnail_core #(
 			bg0bank_reg     <= 8'h00;
 			tx_scroll_reg   <= 8'h00;
 			nmi_level       <= 1'b0;
+		end else if (ss_misc_w) begin
+			case (ss_mi)
+				7'd0:  {flip_screen_reg, bgbank_reg} <= ss_wdata;
+				7'd1:  {bg0bank_reg, tx_scroll_reg} <= ss_wdata;
+				7'd21: nmi_level <= ss_wdata[1];
+				default: ;
+			endcase
 		end else begin
 			if (prot_reg_w & prot_sel_flip)           flip_screen_reg <= prot_wdata;
 			else if (sel_flip & cpu_write & ~LDSn)     flip_screen_reg <= oEdb[7:0];
@@ -2072,7 +2192,7 @@ module gunnail_core #(
 			dma_run <= 1'b0; dma_req <= 1'b0; dma_gap <= 1'b0; dma_idx <= 13'd0; dma_bank <= 3'd0;
 			dma_bank_loaded <= 4'hF;
 		end else if (!dma_run) begin
-			if (g_bioship && (dma_bank_loaded != {1'b0, bg0bank_reg[2:0]})) begin
+			if (g_bioship && (dma_bank_loaded != {1'b0, bg0bank_reg[2:0]}) && ~ss_freeze && ~ss_active) begin
 				dma_run  <= 1'b1;
 				dma_idx  <= 13'd0;
 				dma_bank <= bg0bank_reg[2:0];
@@ -2102,13 +2222,17 @@ module gunnail_core #(
 	reg  [7:0] nmk004_host_to_mcu = 8'hFF;
 	wire       host_cmd_we = (prot_reg_w & prot_sel_nmk004_w) | (cpu_write & sel_nmk004_w & ~LDSn);
 	wire [7:0] host_cmd    = (prot_reg_w & prot_sel_nmk004_w) ? prot_wdata : oEdb[7:0];
-	always @(posedge clk_sys) if (host_cmd_we) nmk004_host_to_mcu <= host_cmd;
+	always @(posedge clk_sys) begin
+		if (ss_misc_w & (ss_mi == 7'd20)) nmk004_host_to_mcu <= ss_wdata[15:8];
+		else if (host_cmd_we) nmk004_host_to_mcu <= host_cmd;
+	end
 	assign dbg_host_cmd_we = host_cmd_we;
 	assign dbg_host_cmd    = host_cmd;
 
 	reg [7:0] nmk004_to_host_latch = 8'hFF;
 	always @(posedge clk_sys) begin
-		if (g_z80snd) begin
+		if (ss_misc_w & (ss_mi == 7'd20)) nmk004_to_host_latch <= ss_wdata[7:0];
+		else if (g_z80snd) begin
 			if (~z80_reset_n) nmk004_to_host_latch <= 8'h00;
 			else if ((z80_mem_we & sel_z80_latch) | (z80_io_we & sel_io_latch)) nmk004_to_host_latch <= z80_do; // tharrier: soundlatch2 (Z80 -> 68000); gunnailb: I/O port 6
 		end else if (nmk004_mcu_to_host_we & snd_cen) nmk004_to_host_latch <= nmk004_mcu_to_host;
@@ -2168,9 +2292,13 @@ module gunnail_core #(
 			.dbg_ram_hl(dbg_nmk004_ram_hl),
 			.dbg_de(dbg_nmk004_de), .dbg_bc(dbg_nmk004_bc), .dbg_ix(dbg_nmk004_ix),
 			.dbg_iy(dbg_nmk004_iy), .dbg_sp(dbg_nmk004_sp),
-			.p4(nmk004_p4), .bx(), .by()
+			.p4(nmk004_p4), .bx(), .by(),
+			.ss_freeze(mcu_freeze & has_nmk004), .ss_frozen(nmk004_ss_frozen),
+			.ss_addr({1'b0, ss_addr[10:0]}), .ss_wr(ss_w & ss_sel_nmk004), .ss_wdata(ss_wdata), .ss_rdata(ss_nmk004_rdata)
 		);
 	end else begin : g_nmk004_off
+		assign nmk004_ss_frozen      = 1'b1;
+		assign ss_nmk004_rdata       = 16'h0000;
 		assign nmk004_rom_addr       = 16'd0;
 		assign nmk004_rom_rd         = 1'b0;
 		assign ym_cs                 = 1'b0;
@@ -2291,9 +2419,9 @@ module gunnail_core #(
 	reg [5:0] ym_wr_hold = 6'd0;
 	reg       ym_we_prev = 1'b0;
 	// Write source: the NMK004, or tharrier's Z80 (I/O ports 0/1; gunnailb: ports 2/3).
-	wire       ym_we_src   = g_z80snd ? (z80_io_we & sel_io_ym) : ym_we;
-	wire [7:0] ym_dout_src = g_z80snd ? z80_do : ym_dout;
-	wire       ym_addr_src = g_z80snd ? z80_a[0] : ym_addr_sel;
+	wire       ym_we_src   = rep_on ? rep_ym_we : g_z80snd ? (z80_io_we & sel_io_ym) : ym_we;
+	wire [7:0] ym_dout_src = rep_on ? rep_data  : g_z80snd ? z80_do : ym_dout;
+	wire       ym_addr_src = rep_on ? rep_a0    : g_z80snd ? z80_a[0] : ym_addr_sel;
 	always @(posedge clk_sys) begin
 		ym_we_prev <= ym_we_src;
 		if (ym_we_src && !ym_we_prev) begin
@@ -2339,7 +2467,9 @@ module gunnail_core #(
 	// ------------------------------------------------------------------
 	reg [1:0] oki1_bank_r = 2'd0, oki2_bank_r = 2'd0;
 	always @(posedge clk_sys) begin
-		if (g_tharrier | g_tharrierb | g_manybloc) begin
+		if (ss_misc_w & (ss_mi == 7'd21)) begin
+			oki1_bank_r <= ss_wdata[9:8]; oki2_bank_r <= ss_wdata[7:6];
+		end else if (g_tharrier | g_tharrierb | g_manybloc) begin
 			// tharrier_okibank_w (Z80 0xF600/0xF700): entries 0-3 of the
 			// 0x20000 pages from +0x20000; a write of 3 is ignored
 			if (z80_mem_we & sel_z80_okibank0 & (z80_do[1:0] != 2'd3)) oki1_bank_r <= z80_do[1:0];
@@ -2370,7 +2500,8 @@ module gunnail_core #(
 	wire        nmk112_hold;
 	nmk112 #(.ROM0_BYTES(1048576), .ROM1_BYTES(1048576)) nmk112_inst (
 		.clk_sys(clk_sys), .reset(reset),
-		.reg_sel(byte_addr[3:1]), .reg_data(oEdb[7:0]), .reg_we(g_bjtwin & sel_nmk112 & cpu_write & ~LDSn), .hold(nmk112_hold),
+		.reg_sel(byte_addr[3:1]), .reg_data(oEdb[7:0]), .reg_we(g_bjtwin & sel_nmk112 & cpu_write & ~LDSn & ~ss_active), .hold(nmk112_hold),
+		.ss_wr(ss_misc_w & (ss_mi[6:2] == 5'b00110)), .ss_sel(ss_mi[1:0]), .ss_wdata(ss_wdata), .ss_rdata(ss_n112_rdata),   // words 24-27
 		.rom0_addr_in(oki1_rom_addr), .rom0_addr_out(oki1_n112),
 		.rom1_addr_in(oki2_rom_addr), .rom1_addr_out(oki2_n112)
 	);
@@ -2637,9 +2768,13 @@ module gunnail_core #(
 			.nmk214_cfg_we(nmk214_cfg_we), .nmk214_cfg_data(nmk214_cfg_data),
 			.dbg_pc(prot_dbg_pc), .dbg_valid(prot_dbg_valid),
 			.dbg_hl(dbg_prot_hl), .dbg_a(dbg_prot_a), .dbg_de(dbg_prot_de), .dbg_iy(dbg_prot_iy),
-			.dbg_int_ram_at_hl(dbg_prot_int_ram_at_hl)
+			.dbg_int_ram_at_hl(dbg_prot_int_ram_at_hl),
+			.ss_freeze(mcu_freeze & has_prot), .ss_frozen(prot_ss_frozen),
+			.ss_addr(ss_addr[9:0]), .ss_wr(ss_w & ss_sel_prot), .ss_wdata(ss_wdata), .ss_rdata(ss_prot_rdata)
 		);
 	end else begin : g_prot_mcu_off
+		assign prot_ss_frozen  = 1'b1;
+		assign ss_prot_rdata   = 16'h0000;
 		assign prot_addr       = 20'd0;
 		assign prot_rd         = 1'b0;
 		assign prot_wr         = 1'b0;
@@ -2765,6 +2900,8 @@ module gunnail_core #(
 		if (reset) begin
 			mcu_in_latch <= 8'h00;
 			mcu_irq_n    <= 1'b1;
+		end else if (ss_misc_w & (ss_mi == 7'd31)) begin
+			mcu_in_latch <= ss_wdata[15:8]; mcu_irq_n <= ss_wdata[0];
 		end else begin
 			if (sel_mcu_dataw & cpu_write & ~LDSn) mcu_in_latch <= oEdb[7:0];
 			if (sel_mcu_ctrl  & cpu_write & ~LDSn) mcu_irq_n    <= oEdb[0];
@@ -2857,6 +2994,7 @@ module gunnail_core #(
 	always @(posedge clk_sys) begin
 		th_mcu_rd_d <= th_mcu_rd;
 		if (reset) th_prot_count <= 4'd0;
+		else if (ss_misc_w & (ss_mi == 7'd22)) th_prot_count <= ss_wdata[3:0];
 		else if (th_mcu_rd_d & ~th_mcu_rd & ~th_pc_8aa & ~th_pc_8ce) th_prot_count <= (th_prot_count == 4'd14) ? 4'd0 : th_prot_count + 4'd1;
 	end
 
@@ -2942,29 +3080,54 @@ module gunnail_core #(
 	reg  z80_latch_pending = 1'b0;
 	wire ym51_irq_n, opl_irq_n, seibu_int_n;
 	wire z80_int_n = g_comad ? ~z80_latch_pending : g_afega ? ~(z80_latch_pending | (~g_fh_snd & ~ym51_irq_n)) : g_seibu ? seibu_int_n : g_tomagic ? opl_irq_n : ym_chip_irq_n;
-	wire z80_nmi_n = g_m2snd ? ~z80_latch_pending : 1'b1;
+	wire z80_nmi_park, z80_sel_mon;
+	wire [7:0] z80_mon_data;
+	wire z80_nmi_n = (g_m2snd ? ~z80_latch_pending : 1'b1) & ~z80_nmi_park;
+	ss_z80_park z80_park (
+		.clk(clk_sys), .cen(z80_cen), .reset_n(z80_reset_n),
+		.park_req(ss_freeze), .parked(z80_parked), .resume(ss_resume),
+		.a(z80_a), .m1_n(z80_m1_n), .mreq_n(z80_mreq_n), .iorq_n(z80_iorq_n), .rd_n(z80_rd_n), .wr_n(z80_wr_n), .wait_n(z80_wait_n),
+		.dout(z80_do), .din_bus(z80_di),
+		.nmi_park(z80_nmi_park), .sel_mon(z80_sel_mon), .mon_data(z80_mon_data),
+		.ss_sel(ss_addr[0]), .ss_wr(ss_misc_w & (ss_mi[6:1] == 6'b010010)), .ss_wdata(ss_wdata), .ss_rdata(ss_z80_rdata)
+	);
 	T80s z80_cpu (
 		.RESET_n(z80_reset_n), .CLK(clk_sys), .CEN(z80_cen & ~pause), .WAIT_n(z80_wait_n),
 		.INT_n(z80_int_n), .NMI_n(z80_nmi_n), .BUSRQ_n(1'b1), .OUT0(1'b0),
 		.DI(z80_di), .M1_n(z80_m1_n), .MREQ_n(z80_mreq_n), .IORQ_n(z80_iorq_n), .RD_n(z80_rd_n), .WR_n(z80_wr_n),
 		.RFSH_n(), .HALT_n(), .BUSAK_n(), .A(z80_a), .DO(z80_do)
 	);
-	reg [7:0] z80_ram [0:8191]; // 2 KB (tharrier: C000-C7FF, afega: F000-F7FF, seibu: 2000-27FF), firehawk's 4 KB F000-FFFF or gunnailb/tomagic's 8 KB C000-DFFF
-	reg [7:0] z80_ram_q;
+	// 8 KB as two byte lanes so the savestate engine can move a word per
+	// access (the Z80 side is unchanged: one registered read port).
+	reg [7:0] z80_ram_e [0:4095]; // 2 KB (tharrier: C000-C7FF, afega: F000-F7FF, seibu: 2000-27FF), firehawk's 4 KB F000-FFFF or gunnailb/tomagic's 8 KB C000-DFFF
+	reg [7:0] z80_ram_o [0:4095];
+	reg [7:0] z80_ram_qe, z80_ram_qo;
+	reg       z80_lane_r;
+	wire [11:0] zr_a = ss_active ? ss_addr[11:0] : z80_a[12:1];
 	always @(posedge clk_sys) begin
-		if (z80_mem_we & sel_z80_ram) z80_ram[z80_a[12:0]] <= z80_do;
-		z80_ram_q <= z80_ram[z80_a[12:0]];
+		if (ss_active) begin
+			if (ss_wr & ss_sel_z80ram) begin z80_ram_e[zr_a] <= ss_wdata[7:0]; z80_ram_o[zr_a] <= ss_wdata[15:8]; end
+		end else if (z80_mem_we & sel_z80_ram) begin
+			if (z80_a[0]) z80_ram_o[zr_a] <= z80_do; else z80_ram_e[zr_a] <= z80_do;
+		end
+		z80_ram_qe <= z80_ram_e[zr_a];
+		z80_ram_qo <= z80_ram_o[zr_a];
+		z80_lane_r <= z80_a[0];
 	end
+	wire [7:0] z80_ram_q = z80_lane_r ? z80_ram_qo : z80_ram_qe;
 	reg [7:0] soundlatch_data; // 68000 -> Z80 (tharrier: 0x08001F)
 	wire      soundlatch_we = g_z80snd & ~g_seibu & sel_nmk004_w & cpu_write & ~LDSn;
 	always @(posedge clk_sys) begin
 		if (reset) soundlatch_data <= 8'h00;
+		else if (ss_misc_w & (ss_mi == 7'd22)) soundlatch_data <= ss_wdata[15:8];
 		else if (soundlatch_we) soundlatch_data <= oEdb[7:0];
 		if (~z80_reset_n)                        z80_latch_pending <= 1'b0;
+		else if (ss_misc_w & (ss_mi == 7'd21))   z80_latch_pending <= ss_wdata[0];
 		else if (soundlatch_we)                  z80_latch_pending <= 1'b1;
-		else if (z80_mem_re & sel_z80_latch)     z80_latch_pending <= 1'b0;
-		else if (z80_io_re & sel_io_latch)       z80_latch_pending <= 1'b0;
+		else if (z80_mem_re & sel_z80_latch & ~ss_active)     z80_latch_pending <= 1'b0;
+		else if (z80_io_re & sel_io_latch & ~ss_active)       z80_latch_pending <= 1'b0;
 		if (~z80_reset_n) m2_bank <= 3'd0;
+		else if (ss_misc_w & (ss_mi == 7'd21)) m2_bank <= ss_wdata[4:2];
 		else if (z80_io_we & sel_io_bank) m2_bank <= z80_do[2:0];
 	end
 	// Seibu Sound System glue (main_mustb_w: the 68000's word write at
@@ -2986,7 +3149,8 @@ module gunnail_core #(
 	reg  [15:0] mustb_data_r = 16'h0000;
 	always @(posedge clk_sys) begin
 		mustb_we_d <= mustb_we_level;
-		if (mustb_we_level) begin
+		if (ss_misc_w & (ss_mi == 7'd23)) mustb_data_r <= ss_wdata;
+		else if (mustb_we_level) begin
 			if (~LDSn) mustb_data_r[7:0]  <= oEdb[7:0];
 			if (~UDSn) mustb_data_r[15:8] <= oEdb[15:8];
 		end
@@ -3003,9 +3167,11 @@ module gunnail_core #(
 			.z80_iack_vector(seibu_iack_vector), .z80_iack_active(seibu_iack_active), .z80_int_n(seibu_int_n),
 			.m68k_mustb_we(mustb_we_d & ~mustb_we_level), .m68k_mustb_data(mustb_data_r), .m68k_mustb_lds(1'b1), .m68k_mustb_uds(1'b1),
 			.ym_cs(), .ym_we(seibu_ym_we), .ym_addr_sel(seibu_ym_a0), .ym_wdata(seibu_ym_wdata), .ym_rdata(opl_dout), .ym_irq_n(opl_irq_n),
-			.bank_sel(seibu_bank_sel)
+			.bank_sel(seibu_bank_sel),
+			.ss_wr(ss_misc_w & ((ss_mi == 7'd28) | (ss_mi == 7'd29) | (ss_mi == 7'd30))), .ss_sel(ss_mi[1:0]), .ss_wdata(ss_wdata), .ss_rdata(ss_seibu_rdata)   // words 28-30 (sel 0-2)
 		);
 	end else begin : g_seibu_snd_off
+		assign ss_seibu_rdata     = 16'h0000;
 		assign seibu_z80_din      = 8'hFF;
 		assign seibu_iack_vector  = 8'h00;
 		assign seibu_iack_active  = 1'b0;
@@ -3070,15 +3236,16 @@ module gunnail_core #(
 	// written straight from the Z80's own strobe (the standalone Tier 5
 	// cores did the same: at a shared cen the strobe is at least one cen
 	// wide and a repeated identical register write is harmless).
-	wire opl_we   = g_seibu ? seibu_ym_we : (z80_io_we & sel_io_opl);
-	wire opl_a0   = g_seibu ? seibu_ym_a0 : z80_a[0];
+	wire opl_we   = rep_on ? rep_opl_we : g_seibu ? seibu_ym_we : (z80_io_we & sel_io_opl);
+	wire opl_a0   = rep_on ? rep_a0     : g_seibu ? seibu_ym_a0 : z80_a[0];
+	wire [7:0] opl_din = rep_on ? rep_data : z80_do;
 	wire signed [15:0] opl_snd;
 	// YM3812: Family E / tomagic only (see INCLUDE_NMK).
 	generate
 	if (INCLUDE_NMK) begin : g_opl2
 		jtopl2 opl_chip (
 			.rst(reset | ~g_opl), .clk(clk_sys), .cen(z80_cen),
-			.din(z80_do), .addr(opl_a0), .cs_n(~opl_we), .wr_n(~opl_we),
+			.din(opl_din), .addr(opl_a0), .cs_n(~opl_we), .wr_n(~opl_we),
 			.dout(opl_dout), .irq_n(opl_irq_n), .snd(opl_snd), .sample()
 		);
 	end else begin : g_opl2_off
@@ -3091,6 +3258,7 @@ module gunnail_core #(
 	reg fh_oki2_bank = 1'b0;
 	always @(posedge clk_sys) begin
 		if (~z80_reset_n) fh_oki2_bank <= 1'b0;
+		else if (ss_misc_w & (ss_mi == 7'd21)) fh_oki2_bank <= ss_wdata[5];
 		else if (z80_mem_we & sel_z80_fhbank) begin
 			if (z80_do == 8'hFE) fh_oki2_bank <= 1'b0;
 			else if (z80_do == 8'hFF) fh_oki2_bank <= 1'b1;
@@ -3103,7 +3271,7 @@ module gunnail_core #(
 	always @(posedge clk_sys) ym51_div <= (ym51_div == 5'd19) ? 5'd0 : ym51_div + 5'd1;
 	wire ym51_cen    = (ym51_div[3:0] == 4'd9) || (ym51_div == 5'd19); // 9 and 19
 	wire ym51_cen_p1 = (ym51_div == 5'd19);
-	wire ym51_we_raw = z80_mem_we & sel_z80_ym51;
+	wire ym51_we_raw = rep_on ? rep_y51_we : (z80_mem_we & sel_z80_ym51);
 	reg  ym51_we_d = 1'b0;
 	reg  ym51_wr_pulse = 1'b0;
 	reg  [7:0] ym51_din_r;
@@ -3111,7 +3279,7 @@ module gunnail_core #(
 	always @(posedge clk_sys) begin
 		ym51_we_d <= ym51_we_raw;
 		ym51_wr_pulse <= ym51_we_raw & ~ym51_we_d;
-		if (ym51_we_raw & ~ym51_we_d) begin ym51_din_r <= z80_do; ym51_a0_r <= z80_a[0]; end
+		if (ym51_we_raw & ~ym51_we_d) begin ym51_din_r <= rep_on ? rep_data : z80_do; ym51_a0_r <= rep_on ? rep_a0 : z80_a[0]; end
 	end
 	wire [7:0] ym51_dout;
 	wire signed [15:0] ym51_l, ym51_r;
@@ -3134,7 +3302,8 @@ module gunnail_core #(
 	end
 	endgenerate
 	always @(*) begin
-		if (~z80_iorq_n) begin
+		if (z80_sel_mon)        z80_di = z80_mon_data;   // savestate monitor overlay
+		else if (~z80_iorq_n) begin
 			if (g_seibu)         z80_di = seibu_iack_active ? seibu_iack_vector : 8'hFF; // IM0: the RST vector on the bus during the acknowledge
 			else if (g_m2snd)    z80_di = sel_io_latch ? soundlatch_data : sel_io_opl ? opl_dout : sel_io_ym ? ym_chip_dout : 8'h00; // unmapped ports read 0 (MAME's unmap value): gunnailb's Air Buster driver spins at 0x528 until port 4 (its absent OKI, noprw) reads no busy channel
 			else                 z80_di = ym_chip_dout;
@@ -3189,11 +3358,180 @@ module gunnail_core #(
 	wire [7:0] vid_cfg_data = (g_cactus | g_gunnailb) ? cac_data : nmk214_cfg_data;
 
 	// ------------------------------------------------------------------
+	// Savestates: FM register shadows and their replay (2026-09-18).
+	// Every register write to the YM2203 (chip 0), YM3812 (1) and YM2151
+	// (2) is mirrored into one 512 x 16 shadow ({chip, reg[7:1]}, the odd
+	// register in the high byte); the image carries it and a load replays
+	// it into the chips, which are otherwise untouched (their envelopes /
+	// timers / prescaler carry on from the moment of the load). Key-on
+	// registers are not replayed as captured: YM2203 0x28 and YM2151 0x08
+	// get a key-off per channel at the end, YM3812 0xB0-0xB8 bit 5 and
+	// 0xBD[4:0] are cleared, YM2203 0x2C-0x2F (address-triggered prescaler
+	// selects) are skipped. So the tune resumes at the game's next key-on.
+	// ------------------------------------------------------------------
+	reg  [7:0] fm_sh_e [0:511];
+	reg  [7:0] fm_sh_o [0:511];
+	reg  [7:0] ym_sh_addr = 8'h00, opl_sh_addr = 8'h00, y51_sh_addr = 8'h00;
+	reg        opl_we_d = 1'b0;
+	reg [15:0] fm_sh_q;
+	reg  [8:0] rep_addr = 9'd0;
+	wire [8:0] fm_raddr = ss_active ? ss_addr[8:0] : rep_addr;
+	wire       ym_wr_edge  = ym_we_src & ~ym_we_prev;
+	wire       opl_wr_edge = opl_we & ~opl_we_d;
+	wire       y51_wr_edge = ym51_we_raw & ~ym51_we_d;
+	always @(posedge clk_sys) begin
+		opl_we_d <= opl_we;
+		if (ss_w & ss_sel_fm) begin
+			fm_sh_e[ss_addr[8:0]] <= ss_wdata[7:0];
+			fm_sh_o[ss_addr[8:0]] <= ss_wdata[15:8];
+		end else if (~rep_on) begin
+			if (ym_wr_edge) begin
+				if (~ym_addr_src) ym_sh_addr <= ym_dout_src;
+				else if (ym_sh_addr[0]) fm_sh_o[{2'd0, ym_sh_addr[7:1]}] <= ym_dout_src;
+				else                    fm_sh_e[{2'd0, ym_sh_addr[7:1]}] <= ym_dout_src;
+			end else if (opl_wr_edge) begin
+				if (~opl_a0) opl_sh_addr <= opl_din;
+				else if (opl_sh_addr[0]) fm_sh_o[{2'd1, opl_sh_addr[7:1]}] <= opl_din;
+				else                     fm_sh_e[{2'd1, opl_sh_addr[7:1]}] <= opl_din;
+			end else if (y51_wr_edge) begin
+				if (~z80_a[0]) y51_sh_addr <= z80_do;
+				else if (y51_sh_addr[0]) fm_sh_o[{2'd2, y51_sh_addr[7:1]}] <= z80_do;
+				else                     fm_sh_e[{2'd2, y51_sh_addr[7:1]}] <= z80_do;
+			end
+		end
+		fm_sh_q <= {fm_sh_o[fm_raddr], fm_sh_e[fm_raddr]};
+	end
+
+	// replay sequencer: chips 0..2 register by register (address write,
+	// 256-clock gap, data write, gap), then the key-off sweep (rep_addr
+	// "chip 3": entries 0-2 = YM2203 0x28 <- 0/1/2, 3-10 = YM2151 0x08 <- ch)
+	localparam [3:0] R_IDLE = 4'd0, R_FETCH = 4'd1, R_FETCH2 = 4'd2, R_ADDR = 4'd3, R_W1 = 4'd4,
+	                 R_DATA = 4'd5, R_W2 = 4'd6, R_NEXT = 4'd7, R_DONE = 4'd8;
+	reg  [3:0]  rep_st = R_IDLE;
+	reg         rep_odd = 1'b0;
+	reg [15:0]  rep_word;
+	reg  [8:0]  rep_wait;
+	reg  [4:0]  rep_hold = 5'd0;
+	reg         rep_done_r = 1'b0;
+	wire [1:0]  rep_chip_raw = rep_addr[8:7];
+	wire [6:0]  rep_idx = rep_addr[6:0];
+	wire        rep_sweep = (rep_chip_raw == 2'd3);
+	wire [1:0]  rep_chip = rep_sweep ? ((rep_idx < 7'd3) ? 2'd0 : 2'd2) : rep_chip_raw;
+	wire [7:0]  rep_reg  = rep_sweep ? ((rep_idx < 7'd3) ? 8'h28 : 8'h08) : {rep_idx, rep_odd};
+	wire [7:0]  rep_val  = rep_sweep ? ((rep_idx < 7'd3) ? {5'd0, rep_idx[2:0]} : {5'd0, rep_idx[2:0] - 3'd3}) :
+	                       rep_odd ? rep_word[15:8] : rep_word[7:0];
+	wire        rep_skip = rep_sweep ? (rep_odd | (rep_idx > 7'd10)) :
+	                       ((rep_chip_raw == 2'd0) & ((rep_reg == 8'h28) | (rep_reg[7:2] == 6'b001011))) |
+	                       ((rep_chip_raw == 2'd2) & (rep_reg == 8'h08));
+	wire [7:0]  rep_val_m = ((rep_chip_raw == 2'd1) & (rep_reg[7:4] == 4'hB) & (rep_reg[3:0] <= 4'd8)) ? (rep_val & 8'hDF) :
+	                        ((rep_chip_raw == 2'd1) & (rep_reg == 8'hBD)) ? (rep_val & 8'hE0) : rep_val;
+	wire        rep_last = rep_sweep & (rep_idx == 7'd11);
+	assign ss_replay_done = rep_done_r;
+	always @(posedge clk_sys) begin
+		rep_ym_we <= 1'b0; rep_y51_we <= 1'b0;
+		if (rep_hold != 5'd0) rep_hold <= rep_hold - 5'd1; else rep_opl_we <= 1'b0;
+		case (rep_st)
+			R_IDLE: begin
+				rep_done_r <= 1'b0;
+				if (ss_replay) begin rep_addr <= 9'd0; rep_odd <= 1'b0; rep_st <= R_FETCH; end
+			end
+			R_FETCH:  rep_st <= R_FETCH2;
+			R_FETCH2: begin rep_word <= fm_sh_q; rep_st <= R_ADDR; end
+			R_ADDR: begin
+				if (rep_skip | rep_last) rep_st <= R_NEXT;
+				else begin
+					rep_data <= rep_reg; rep_a0 <= 1'b0;
+					case (rep_chip)
+						2'd0: rep_ym_we <= 1'b1;
+						2'd1: begin rep_opl_we <= 1'b1; rep_hold <= 5'd24; end
+						default: rep_y51_we <= 1'b1;
+					endcase
+					rep_wait <= 9'd0; rep_st <= R_W1;
+				end
+			end
+			R_W1: begin rep_wait <= rep_wait + 1'b1; if (rep_wait == 9'd255) rep_st <= R_DATA; end
+			R_DATA: begin
+				rep_data <= rep_val_m; rep_a0 <= 1'b1;
+				case (rep_chip)
+					2'd0: rep_ym_we <= 1'b1;
+					2'd1: begin rep_opl_we <= 1'b1; rep_hold <= 5'd24; end
+					default: rep_y51_we <= 1'b1;
+				endcase
+				rep_wait <= 9'd0; rep_st <= R_W2;
+			end
+			R_W2: begin rep_wait <= rep_wait + 1'b1; if (rep_wait == 9'd255) rep_st <= R_NEXT; end
+			R_NEXT: begin
+				if (rep_last) rep_st <= R_DONE;
+				else if (~rep_odd) begin rep_odd <= 1'b1; rep_st <= R_ADDR; end
+				else begin rep_odd <= 1'b0; rep_addr <= rep_addr + 1'b1; rep_st <= R_FETCH; end
+			end
+			R_DONE: begin rep_done_r <= 1'b1; if (~ss_replay) rep_st <= R_IDLE; end
+			default: rep_st <= R_IDLE;
+		endcase
+		if (reset) begin rep_st <= R_IDLE; rep_done_r <= 1'b0; rep_hold <= 5'd0; rep_opl_we <= 1'b0; end
+	end
+
+	// savestate register words (0x0FE00 + n) — the write side lives with each register
+	reg [15:0] ss_misc_rd;
+	always @(*) begin
+		case (ss_mi)
+			7'd0:  ss_misc_rd = {flip_screen_reg, bgbank_reg};
+			7'd1:  ss_misc_rd = {bg0bank_reg, tx_scroll_reg};
+			7'd2:  ss_misc_rd = {scr_a[0], scr_a[1]};
+			7'd3:  ss_misc_rd = {scr_a[2], scr_a[3]};
+			7'd4:  ss_misc_rd = {scr_b[0], scr_b[1]};
+			7'd5:  ss_misc_rd = {scr_b[2], scr_b[3]};
+			7'd6:  ss_misc_rd = vsc[0];
+			7'd7:  ss_misc_rd = vsc[1];
+			7'd8:  ss_misc_rd = vsc[2];
+			7'd9:  ss_misc_rd = vsc[3];
+			7'd10: ss_misc_rd = must_x;
+			7'd11: ss_misc_rd = th_scroll;
+			7'd12: ss_misc_rd = ascroll[0];
+			7'd13: ss_misc_rd = ascroll[1];
+			7'd14: ss_misc_rd = ascroll[2];
+			7'd15: ss_misc_rd = ascroll[3];
+			7'd16: ss_misc_rd = manybloc_scrollx;   // read-only: restored through the scroll-RAM words
+			7'd17: ss_misc_rd = manybloc_scrolly;
+			7'd18: ss_misc_rd = scrollram0_reg;     // read-only: restored through scroll RAM word 0
+			7'd19: ss_misc_rd = scrollramy0_reg;
+			7'd20: ss_misc_rd = {nmk004_host_to_mcu, nmk004_to_host_latch};
+			7'd21: ss_misc_rd = {6'd0, oki1_bank_r, oki2_bank_r, fh_oki2_bank, m2_bank, nmi_level, z80_latch_pending};
+			7'd22: ss_misc_rd = {soundlatch_data, 4'd0, th_prot_count};
+			7'd23: ss_misc_rd = mustb_data_r;
+			7'd24, 7'd25, 7'd26, 7'd27: ss_misc_rd = ss_n112_rdata;
+			7'd28, 7'd29, 7'd30: ss_misc_rd = ss_seibu_rdata;
+			7'd31: ss_misc_rd = {mcu_in_latch, 7'd0, mcu_irq_n};
+			7'd32, 7'd33, 7'd34, 7'd35: ss_misc_rd = ss_m68k_rdata;
+			7'd36, 7'd37: ss_misc_rd = ss_z80_rdata;
+			default: ss_misc_rd = 16'h0000;
+		endcase
+	end
+	always @(*) begin
+		if (ss_sel_mainram)      ss_rdata = mainram_dout;
+		else if (ss_sel_bgvram)  ss_rdata = bgvram_dout;
+		else if (ss_sel_bgvram2) ss_rdata = bgvram2_dout;
+		else if (ss_sel_txvram)  ss_rdata = txvram_dout;
+		else if (ss_sel_palette) ss_rdata = palette_dout;
+		else if (ss_sel_scroll)  ss_rdata = ss_scroll_q;
+		else if (ss_sel_mbs)     ss_rdata = manybloc_scr_dout;
+		else if (ss_sel_z80ram)  ss_rdata = {z80_ram_qo, z80_ram_qe};
+		else if (ss_sel_nmk004)  ss_rdata = ss_nmk004_rdata;
+		else if (ss_sel_prot)    ss_rdata = ss_prot_rdata;
+		else if (ss_sel_fm)      ss_rdata = fm_sh_q;
+		else if (ss_sel_misc)    ss_rdata = ss_misc_rd;
+		else                     ss_rdata = 16'h0000;
+	end
+	assign ss_frozen = m68k_parked & z80_parked & (nmk004_ss_frozen | ~has_nmk004) & (prot_ss_frozen | ~has_prot) & ~dma_run;
+	assign ss_parked = m68k_parked | (z80_parked & z80_reset_n);
+
+	// ------------------------------------------------------------------
 	// 68000 read-data mux
 	// ------------------------------------------------------------------
 	reg [15:0] rdata;
 	always @(*) begin
-		if (sel_ambl_patch)   rdata = ambl_patch_val;
+		if (m68k_sel_mon)     rdata = m68k_mon_data;   // savestate monitor overlay / vector 31
+		else if (sel_ambl_patch)   rdata = ambl_patch_val;
 		else if (sel_rom)     rdata = rom_dout_dec;
 		else if (sel_tdb_prot) rdata = g_tdragonb3 ? 16'h0000 : 16'h0003;
 		else if (sel_tdb3_ee) rdata = 16'h00EE;
@@ -3307,7 +3645,7 @@ module gunnail_core #(
 		.ipl_level(ipl_hacky),
 		.sprite_dma_trigger(sprdma_hacky)
 	);
-	assign ipl_level          = irq_hacky ? ipl_hacky    : ipl_prom;
+	assign ipl_level          = (irq_hacky ? ipl_hacky : ipl_prom) | m68k_ipl_park;
 	assign sprite_dma_trigger = irq_hacky ? sprdma_hacky : sprdma_prom;
 
 	// ------------------------------------------------------------------

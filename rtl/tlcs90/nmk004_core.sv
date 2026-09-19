@@ -108,8 +108,33 @@ module nmk004_core #(
 	// also wired internally into the CPU core's ix_bank/iy_bank inputs
 	// (see "Address decode" below).
 	output [7:0] p4,
-	output [3:0] bx, by
+	output [3:0] bx, by,
+
+	// Savestates (2026-09-18). ss_freeze parks the CPU at its next
+	// instruction boundary and stops the peripheral timers; ss_frozen
+	// reports it. While frozen, ss_addr selects one 16-bit word of the
+	// whole device state, readable combinationally and writable with a
+	// one-clk ss_wr pulse:
+	//   0x000-0x3FF  external RAM (0xF000-0xF7FF), little-endian pairs
+	//   0x400-0x47F  internal RAM (0xFEC0-0xFFBF), little-endian pairs
+	//   0x480-0x49F  CPU registers (tlcs90.sv word map)
+	//   0x4A0-0x4BF  peripheral registers (nmk004_periph.sv word map)
+	// Everything else reads 0 and ignores writes. Outside a freeze the
+	// bus is inert (ss_wr is ignored).
+	input         ss_freeze,
+	output        ss_frozen,
+	input  [11:0] ss_addr,
+	input         ss_wr,
+	input  [15:0] ss_wdata,
+	output [15:0] ss_rdata
 );
+
+	wire ss_wr_f = ss_wr & ss_frozen;
+	wire ss_ext  = (ss_addr[11:10] == 2'b00);
+	wire ss_int  = (ss_addr[11:7] == 5'b01000);
+	wire ss_cpu  = (ss_addr[11:5] == 7'b0100100);
+	wire ss_per  = (ss_addr[11:5] == 7'b0100101);
+	wire [15:0] ss_cpu_rdata, ss_per_rdata;
 
 	// ------------------------------------------------------------------
 	// CPU
@@ -134,7 +159,9 @@ module nmk004_core #(
 		.ix_bank(bx), .iy_bank(by),
 		.dbg_pc(dbg_pc), .dbg_valid(dbg_valid), .dbg_halt(),
 		.dbg_a(dbg_a), .dbg_f(dbg_f), .dbg_hl(dbg_hl), .dbg_de(dbg_de), .dbg_iy(dbg_iy),
-		.dbg_bc(dbg_bc), .dbg_ix(dbg_ix), .dbg_sp(dbg_sp)
+		.dbg_bc(dbg_bc), .dbg_ix(dbg_ix), .dbg_sp(dbg_sp),
+		.ss_freeze(ss_freeze), .ss_frozen(ss_frozen),
+		.ss_sel(ss_addr[4:0]), .ss_wr(ss_wr_f & ss_cpu), .ss_wdata(ss_wdata), .ss_rdata(ss_cpu_rdata)
 	);
 
 	// ------------------------------------------------------------------
@@ -200,8 +227,63 @@ module nmk004_core #(
 	// small arrays is not needed).
 	reg [7:0] ext_ram [0:2047];
 	reg [7:0] int_ram [0:255];
-	always @(posedge clk) if (cpu_mem_wr && sel_ext_ram && cen_eff) ext_ram[cpu_addr[10:0]] <= cpu_dout;
-	always @(posedge clk) if (cpu_mem_wr && sel_int_ram && cen_eff) int_ram[cpu_addr[7:0]]  <= cpu_dout;
+	// Both arrays are flops (asynchronous reads), so every extra read or
+	// write port is another 2048:1 mux / decoder -- the savestate engine
+	// therefore SHARES the CPU's one port (the CPU is frozen whenever the
+	// engine uses it): reads alternate even/odd bytes into a holding pair
+	// inside the engine's 3-clock read window, the odd byte of a write is
+	// done one clock after the even one (the engine's writes are >= 4
+	// clocks apart). Adding true second ports cost ~13,000 ALUTs on the
+	// NMK16_Gunnail rbf and the design no longer fit (2026-09-18).
+	reg        ss_ph = 1'b0;
+	reg        ss_wr_d = 1'b0, ss_ext_d = 1'b0, ss_int_d = 1'b0;
+	reg [10:0] ss_addr_d;
+	reg [7:0]  ss_wdata_hi_d;
+	reg [7:0]  ext_qe, ext_qo, int_qe, int_qo;
+	always @(posedge clk) begin
+		ss_ph <= ~ss_ph;
+		ss_wr_d <= ss_wr_f; ss_ext_d <= ss_ext; ss_int_d <= ss_int;
+		ss_addr_d <= ss_addr[10:0]; ss_wdata_hi_d <= ss_wdata[15:8];
+	end
+	wire        ext_we = ss_frozen ? ((ss_wr_f & ss_ext) | (ss_wr_d & ss_ext_d)) : (cpu_mem_wr && sel_ext_ram && cen_eff);
+	wire [10:0] ext_wa = ss_frozen ? (ss_wr_d ? {ss_addr_d[9:0], 1'b1} : {ss_addr[9:0], 1'b0}) : cpu_addr[10:0];
+	wire [7:0]  ext_wd = ss_frozen ? (ss_wr_d ? ss_wdata_hi_d : ss_wdata[7:0]) : cpu_dout;
+	wire [10:0] ext_ra = ss_frozen ? {ss_addr[9:0], ss_ph} : cpu_addr[10:0];
+	// USE_CEN=1 (hardware): the read address is REGISTERED so Quartus keeps
+	// the arrays in M10K (a read through a combinational address mux turned
+	// both into flops, +14k ALMs, and NMK16_Gunnail no longer fit). The CPU
+	// samples din >= 5 clk after presenting the address, so one clock of
+	// address latency is invisible to it; the savestate capture below
+	// tracks the delayed lane bit. USE_CEN=0 (sims): clk is the CPU clock,
+	// the read stays combinational as it always was.
+	wire [10:0] ext_ra_q;
+	wire [7:0]  int_ra_q;
+	wire        ss_ph_q;
+	generate
+	if (USE_CEN) begin : g_ram_ra_reg
+		reg [10:0] ext_ra_r; reg [7:0] int_ra_r; reg ss_ph_r;
+		always @(posedge clk) begin ext_ra_r <= ext_ra; int_ra_r <= int_ra; ss_ph_r <= ss_ph; end
+		assign ext_ra_q = ext_ra_r; assign int_ra_q = int_ra_r; assign ss_ph_q = ss_ph_r;
+	end else begin : g_ram_ra_comb
+		assign ext_ra_q = ext_ra; assign int_ra_q = int_ra; assign ss_ph_q = ss_ph;
+	end
+	endgenerate
+	wire [7:0]  ext_rd = ext_ram[ext_ra_q];
+	wire        int_we = ss_frozen ? ((ss_wr_f & ss_int) | (ss_wr_d & ss_int_d)) : (cpu_mem_wr && sel_int_ram && cen_eff);
+	wire [7:0]  int_wa = ss_frozen ? (ss_wr_d ? {ss_addr_d[6:0], 1'b1} : {ss_addr[6:0], 1'b0}) : cpu_addr[7:0];
+	wire [7:0]  int_wd = ss_frozen ? (ss_wr_d ? ss_wdata_hi_d : ss_wdata[7:0]) : cpu_dout;
+	wire [7:0]  int_ra = ss_frozen ? {ss_addr[6:0], ss_ph} : cpu_addr[7:0];
+	wire [7:0]  int_rd = int_ram[int_ra_q];
+	always @(posedge clk) begin
+		if (ext_we) ext_ram[ext_wa] <= ext_wd;
+		if (int_we) int_ram[int_wa] <= int_wd;
+		if (ss_ph_q) begin ext_qo <= ext_rd; int_qo <= int_rd; end
+		else         begin ext_qe <= ext_rd; int_qe <= int_rd; end
+	end
+	assign ss_rdata = ss_ext ? {ext_qo, ext_qe} :
+	                  ss_int ? {int_qo, int_qe} :
+	                  ss_cpu ? ss_cpu_rdata :
+	                  ss_per ? ss_per_rdata : 16'h0000;
 	assign dbg_ram_hl = int_ram[dbg_hl[7:0]];
 
 	// ------------------------------------------------------------------
@@ -226,7 +308,7 @@ module nmk004_core #(
 	wire [7:0] periph_rdata;
 
 	nmk004_periph periph (
-		.clk(clk), .cen(cen_eff), .reset(reset),
+		.clk(clk), .cen(cen_eff & ~ss_frozen), .reset(reset), // timers stop while frozen
 		.reg_addr(cpu_addr[5:0]),
 		.wdata(cpu_dout),
 		.we(sel_periph & cpu_mem_wr),
@@ -239,7 +321,8 @@ module nmk004_core #(
 		.p6_ext_en(1'b0), .p6_ext_val(8'h00),
 		.p6_we(), .p6_wdata(),
 		.p7_ext_en(1'b0), .p7_ext_val(8'h00),
-		.p3_we(), .p3_wdata(), .p7_we(), .p7_wdata()
+		.p3_we(), .p3_wdata(), .p7_we(), .p7_wdata(),
+		.ss_wr(ss_wr_f & ss_per), .ss_sel(ss_addr[4:0]), .ss_wdata(ss_wdata), .ss_rdata(ss_per_rdata)
 	);
 
 	// ------------------------------------------------------------------
@@ -249,8 +332,8 @@ module nmk004_core #(
 	always @(*) begin
 		if (sel_boot_rom)      rdata = boot_rom_byte;
 		else if (sel_ext_rom)  rdata = ext_rom_byte;
-		else if (sel_ext_ram)  rdata = ext_ram[cpu_addr[10:0]];
-		else if (sel_int_ram)  rdata = int_ram[cpu_addr[7:0]];
+		else if (sel_ext_ram)  rdata = ext_rd;   // the shared port (savestates), = ext_ram[cpu_addr] while the CPU runs
+		else if (sel_int_ram)  rdata = int_rd;
 		else if (sel_periph)   rdata = periph_rdata;
 		else if (sel_ym)       rdata = ym_din;
 		else if (sel_oki0)     rdata = oki0_din;

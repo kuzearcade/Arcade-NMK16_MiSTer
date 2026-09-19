@@ -61,8 +61,46 @@ module raphero_hw_top #(
 	output [9:0]  hcount_o,
 	output [9:0]  vcount_o,
 
-	output        frame_done
+	output        frame_done,
+
+	// Savestates (2026-09-18): rtl/savestate/savestate.sv against a DDR
+	// model here (4 slots), driven by the tb's TB_SS_* knobs.
+	input         ss_save,
+	input         ss_load,
+	input   [1:0] ss_slot,
+	output        ss_busy,
+	output        ss_done_ok,
+	output        ss_done_fail,
+	output  [1:0] ss_fail_code
 );
+
+	wire        ss_freeze, ss_frozen, ss_parked, ss_resume, ss_active, ss_wr, ss_replay, ss_replay_done;
+	wire [19:0] ss_addr;
+	wire [15:0] ss_rdata, ss_wdata;
+	wire        ddr_we, ddr_rd;
+	wire [28:0] ddr_addr;
+	wire [63:0] ddr_din;
+	reg  [63:0] ddr_dout = 64'd0;
+	reg         ddr_ready = 1'b0;
+	reg  [63:0] ddr_mem [0:131071];   // 4 x 0x8000 64-bit words from 0x3E000000
+	integer di;
+	initial for (di = 0; di < 131072; di = di + 1) ddr_mem[di] = 64'd0;
+	wire [16:0] ddr_idx = ddr_addr[16:0];
+	always @(posedge clk_sys) begin
+		ddr_ready <= 1'b0;
+		if (ddr_we) ddr_mem[ddr_idx] <= ddr_din;
+		if (ddr_rd) begin ddr_dout <= ddr_mem[ddr_idx]; ddr_ready <= 1'b1; end
+	end
+	savestate #(.SS_WORDS(75904)) ss (
+		.clk(clk_sys), .reset(reset),
+		.save_req(ss_save), .load_req(ss_load), .slot(ss_slot), .vblank(vblank_o), .allow(1'b1),
+		.ss_freeze(ss_freeze), .ss_frozen(ss_frozen), .ss_parked(ss_parked), .ss_resume(ss_resume), .ss_active(ss_active),
+		.ss_addr(ss_addr), .ss_rdata(ss_rdata), .ss_wr(ss_wr), .ss_wdata(ss_wdata),
+		.ss_replay(ss_replay), .ss_replay_done(ss_replay_done),
+		.busy(ss_busy), .done_ok(ss_done_ok), .done_fail(ss_done_fail), .fail_code(ss_fail_code), .was_load(),
+		.clk_ddr(clk_sys), .ddr_busy(1'b0), .rot_we(1'b0),
+		.ddr_we(ddr_we), .ddr_rd(ddr_rd), .ddr_addr(ddr_addr), .ddr_din(ddr_din), .ddr_dout(ddr_dout), .ddr_dout_ready(ddr_ready)
+	);
 
 	// Same computation as NMK16_Raphero.sv's own rd_x_screen/rd_y_screen.
 	wire [8:0] rd_x_screen = hcount_o[8:0] - 9'd28;
@@ -130,7 +168,11 @@ module raphero_hw_top #(
 		.audio_l(audio_l), .audio_r(),
 		.ce_pix_o(ce_pix_o), .hcount_o(hcount_o), .vcount_o(vcount_o), .hblank_o(hblank_o), .vblank_o(vblank_o),
 		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF),
-		.extra_por_hold(1'b0)
+		.extra_por_hold(1'b0),
+		.ss_freeze(ss_freeze), .ss_resume(ss_resume), .ss_active(ss_active), .ss_frozen(ss_frozen), .ss_parked(ss_parked),
+		.ss_addr(ss_addr), .ss_rdata(ss_rdata), .ss_wr(ss_wr), .ss_wdata(ss_wdata),
+		.ss_replay(ss_replay), .ss_replay_done(ss_replay_done),
+		.pause(1'b0), .hs_addr(24'd0), .hs_din(8'd0), .hs_dout(), .hs_write(1'b0), .hs_access(1'b0)
 	);
 
 endmodule

@@ -62,3 +62,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/third_party/fx68k/uaddrPla.sv
 set_global_assignment -name SDC_FILE Gunnail.sdc
 set_global_assignment -name VERILOG_FILE rtl/third_party/hiscore/hiscore.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/cheats.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/savestate/savestate.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/savestate/savestate_ui.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/savestate/ss_m68k_park.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/savestate/ss_z80_park.sv

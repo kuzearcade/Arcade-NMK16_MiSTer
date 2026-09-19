@@ -181,8 +181,30 @@ module nmk_prot_core #(
 	// outside int_ram's own [RAM_BASE, RAM_BASE+RAM_SIZE) window
 	// (the caller only interprets this when it already knows from
 	// the trace that HL is in range).
-	output  [7:0] dbg_int_ram_at_hl
+	output  [7:0] dbg_int_ram_at_hl,
+
+	// Savestates (2026-09-18), same shape as nmk004_core.sv's bus but
+	// compact (10 bits):
+	//   0x000-0x0FF  internal RAM, little-endian pairs (RAM_SIZE <= 512)
+	//   0x100-0x11F  CPU registers (tlcs90.sv word map)
+	//   0x120-0x13F  peripheral registers (nmk004_periph.sv word map)
+	//   0x140        {bus_status_reg, nmk214_data_reg}
+	//   0x141        {14'b0, p3_clock_prev, halt_r}
+	input         ss_freeze,
+	output        ss_frozen,
+	input   [9:0] ss_addr,
+	input         ss_wr,
+	input  [15:0] ss_wdata,
+	output [15:0] ss_rdata
 );
+
+	wire ss_wr_f = ss_wr & ss_frozen;
+	wire ss_ram  = (ss_addr[9:8] == 2'b00) && ({2'b0, ss_addr[7:0]} < (RAM_SIZE / 2));
+	wire ss_cpu  = (ss_addr[9:5] == 5'b01000);
+	wire ss_per  = (ss_addr[9:5] == 5'b01001);
+	wire ss_w0   = (ss_addr == 10'h140);
+	wire ss_w1   = (ss_addr == 10'h141);
+	wire [15:0] ss_cpu_rdata, ss_per_rdata;
 
 	// ------------------------------------------------------------------
 	// CPU
@@ -213,7 +235,9 @@ module nmk_prot_core #(
 		// at bank 0 regardless of what firmware writes to BX/BY.
 		.ix_bank(cpu_bx), .iy_bank(cpu_by),
 		.dbg_pc(dbg_pc), .dbg_valid(dbg_valid), .dbg_halt(),
-		.dbg_a(dbg_a), .dbg_f(), .dbg_hl(dbg_hl), .dbg_de(dbg_de), .dbg_iy(dbg_iy)
+		.dbg_a(dbg_a), .dbg_f(), .dbg_hl(dbg_hl), .dbg_de(dbg_de), .dbg_iy(dbg_iy),
+		.ss_freeze(ss_freeze), .ss_frozen(ss_frozen),
+		.ss_sel(ss_addr[4:0]), .ss_wr(ss_wr_f & ss_cpu), .ss_wdata(ss_wdata), .ss_rdata(ss_cpu_rdata)
 	);
 
 	// ------------------------------------------------------------------
@@ -243,7 +267,40 @@ module nmk_prot_core #(
 
 	reg [7:0] int_ram [0:RAM_SIZE-1];
 	wire [15:0] int_ram_addr = cpu_addr - RAM_BASE;
-	always @(posedge clk) if (cpu_mem_wr && sel_int_ram && cen_eff) int_ram[int_ram_addr] <= cpu_dout;
+	// The array is flops (asynchronous read): the savestate engine shares
+	// the CPU's one port, as nmk004_core.sv does (see its comment).
+	reg        ss_ph = 1'b0;
+	reg        ss_wr_d = 1'b0, ss_ram_d = 1'b0;
+	reg [7:0]  ss_addr_d;
+	reg [7:0]  ss_wdata_hi_d;
+	reg [7:0]  ram_qe, ram_qo;
+	always @(posedge clk) begin
+		ss_ph <= ~ss_ph;
+		ss_wr_d <= ss_wr_f; ss_ram_d <= ss_ram;
+		ss_addr_d <= ss_addr[7:0]; ss_wdata_hi_d <= ss_wdata[15:8];
+	end
+	wire        ram_we = ss_frozen ? ((ss_wr_f & ss_ram) | (ss_wr_d & ss_ram_d)) : (cpu_mem_wr && sel_int_ram && cen_eff);
+	wire [15:0] ram_wa = ss_frozen ? (ss_wr_d ? {7'd0, ss_addr_d, 1'b1} : {7'd0, ss_addr[7:0], 1'b0}) : int_ram_addr;
+	wire [7:0]  ram_wd = ss_frozen ? (ss_wr_d ? ss_wdata_hi_d : ss_wdata[7:0]) : cpu_dout;
+	wire [15:0] ram_ra = ss_frozen ? {7'd0, ss_addr[7:0], ss_ph} : int_ram_addr;
+	// USE_CEN=1: registered read address so the array stays M10K (see
+	// nmk004_core.sv); USE_CEN=0: combinational, as before.
+	wire [15:0] ram_ra_q;
+	wire        ss_ph_q;
+	generate
+	if (USE_CEN) begin : g_ram_ra_reg
+		reg [15:0] ram_ra_r; reg ss_ph_r;
+		always @(posedge clk) begin ram_ra_r <= ram_ra; ss_ph_r <= ss_ph; end
+		assign ram_ra_q = ram_ra_r; assign ss_ph_q = ss_ph_r;
+	end else begin : g_ram_ra_comb
+		assign ram_ra_q = ram_ra; assign ss_ph_q = ss_ph;
+	end
+	endgenerate
+	wire [7:0]  ram_rd = int_ram[ram_ra_q];
+	always @(posedge clk) begin
+		if (ram_we) int_ram[ram_wa] <= ram_wd;
+		if (ss_ph_q) ram_qo <= ram_rd; else ram_qe <= ram_rd;
+	end
 	assign dbg_int_ram_at_hl = int_ram[dbg_hl - RAM_BASE];
 
 	// ------------------------------------------------------------------
@@ -272,6 +329,7 @@ module nmk_prot_core #(
 	wire [7:0] p6_read_value = p6_re_now ? bus_status_next : bus_status_reg;
 	always @(posedge clk) begin
 		if (reset) bus_status_reg <= 8'h04;
+		else if (ss_wr_f && ss_w0) bus_status_reg <= ss_wdata[15:8];
 		else if (p6_re_now && cen_eff) bus_status_reg <= bus_status_next;
 	end
 
@@ -279,6 +337,7 @@ module nmk_prot_core #(
 	reg halt_r;
 	always @(posedge clk) begin
 		if (reset) halt_r <= 1'b0;
+		else if (ss_wr_f && ss_w1) halt_r <= ss_wdata[0];
 		else if (p6_we && cen_eff) begin
 			if (p6_wdata == 8'h08) halt_r <= 1'b1;
 			else if (p6_wdata == 8'h0b) halt_r <= 1'b0;
@@ -287,7 +346,7 @@ module nmk_prot_core #(
 	assign halt_68k = halt_r;
 
 	nmk004_periph periph (
-		.clk(clk), .cen(cen_eff), .reset(reset),
+		.clk(clk), .cen(cen_eff & ~ss_frozen), .reset(reset), // timers stop while frozen
 		.reg_addr(cpu_addr[5:0]),
 		.wdata(cpu_dout),
 		.we(sel_periph & cpu_mem_wr),
@@ -299,7 +358,8 @@ module nmk_prot_core #(
 		.p6_ext_en(1'b1), .p6_ext_val(p6_read_value),
 		.p6_we(p6_we), .p6_wdata(p6_wdata),
 		.p7_ext_en(P7_EXT_EN | p7_ext_en_i), .p7_ext_val(P7_EXT_EN ? P7_EXT_VAL : p7_ext_val_i),
-		.p3_we(p3_we), .p3_wdata(p3_wdata), .p7_we(p7_we), .p7_wdata(p7_wdata)
+		.p3_we(p3_we), .p3_wdata(p3_wdata), .p7_we(p7_we), .p7_wdata(p7_wdata),
+		.ss_wr(ss_wr_f & ss_per), .ss_sel(ss_addr[4:0]), .ss_wdata(ss_wdata), .ss_rdata(ss_per_rdata)
 	);
 
 	// ------------------------------------------------------------------
@@ -319,7 +379,9 @@ module nmk_prot_core #(
 		if (reset) begin
 			nmk214_data_reg <= 8'h00;
 			p3_clock_prev   <= 1'b0;
-		end else begin
+		end else if (ss_wr_f && ss_w0) nmk214_data_reg <= ss_wdata[7:0];
+		else if (ss_wr_f && ss_w1) p3_clock_prev <= ss_wdata[1];
+		else begin
 			if (p7_we && cen_eff) nmk214_data_reg <= p7_wdata;
 			if (p3_we && cen_eff) p3_clock_prev   <= p3_wdata[2];
 		end
@@ -333,11 +395,18 @@ module nmk_prot_core #(
 	reg [7:0] rdata;
 	always @(*) begin
 		if (sel_boot_rom)     rdata = boot_rom_byte;
-		else if (sel_int_ram) rdata = int_ram[int_ram_addr];
+		else if (sel_int_ram) rdata = ram_rd;   // the shared port (savestates), = int_ram[int_ram_addr] while the CPU runs
 		else if (sel_periph)  rdata = periph_rdata;
 		else if (sel_shared)  rdata = bus_rdata;
 		else                  rdata = 8'h00;
 	end
 	assign cpu_din = rdata;
+
+	// Savestate read mux (see the port comment for the word map)
+	assign ss_rdata = ss_ram ? {ram_qo, ram_qe} :
+	                  ss_cpu ? ss_cpu_rdata :
+	                  ss_per ? ss_per_rdata :
+	                  ss_w0  ? {bus_status_reg, nmk214_data_reg} :
+	                  ss_w1  ? {14'b0, p3_clock_prev, halt_r} : 16'h0000;
 
 endmodule

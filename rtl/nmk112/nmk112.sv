@@ -92,8 +92,17 @@ module nmk112 #(
 	output [21:0] rom0_addr_out,
 	// Chip 1 (rom1/"oki2") address remap.
 	input  [17:0] rom1_addr_in,
-	output [21:0] rom1_addr_out
+	output [21:0] rom1_addr_out,
+
+	// Savestates (2026-09-18): the eight page registers as four words,
+	// ss_sel = {chip, pair}: {bank[chip][2*pair], bank[chip][2*pair+1]}.
+	// ss_wr is a clk pulse that beats the normal write path.
+	input         ss_wr,
+	input   [1:0] ss_sel,
+	input  [15:0] ss_wdata,
+	output [15:0] ss_rdata
 );
+	assign ss_rdata = {bank[ss_sel[1]][{ss_sel[0], 1'b0}], bank[ss_sel[1]][{ss_sel[0], 1'b1}]};
 
 	reg [7:0] bank [0:1][0:3];
 
@@ -127,6 +136,9 @@ module nmk112 #(
 				for (bi = 0; bi < 4; bi = bi + 1)
 					bank[ci][bi] <= 8'd0;
 			pend_we <= 1'b0;
+		end else if (ss_wr) begin
+			bank[ss_sel[1]][{ss_sel[0], 1'b0}] <= ss_wdata[15:8];
+			bank[ss_sel[1]][{ss_sel[0], 1'b1}] <= ss_wdata[7:0];
 		end else begin
 			if (apply_pend || apply_now)
 				bank[w_sel[2]][w_sel[1:0]] <= w_sel[2] ? (w_data & MASK1) : (w_data & MASK0);

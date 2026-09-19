@@ -49,7 +49,7 @@ assign VIDEO_ARY = (!ar) ? (video_rotated ? 12'd4 : 12'd3) : 12'd0;
 
 `include "build_id.v"
 localparam CONF_STR = {
-	"Gunnail;;",
+	"Gunnail;SS3E000000:40000;",   // savestates: 4 x 256 KB slots at 0x3E000000 (rtl/savestate/)
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O[3:1],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
@@ -117,6 +117,14 @@ localparam CONF_STR = {
 	"P1-;",
 	"P1R[30],Save Scores;",
 	"P1R[31],Reset Scores;",
+	// Savestates (2026-09-18): the slot and the two buttons; F1-F4 / Alt+F1-F4
+	// on a keyboard. H2 hides the page on tharrierb (its MC68705R3 is not
+	// parked -- see rtl/savestate/).
+	"H2P4,Savestates;",
+	"H2P4O[41:40],Slot,1,2,3,4;",
+	"H2P4-;",
+	"H2P4R[42],Save state (Alt+F1-F4);",
+	"H2P4R[43],Load state (F1-F4);",
 	"P2,Cheats;",
 	"P2-;",
 	"h3P2O[32],Infinite Credits,Off,On;",
@@ -129,6 +137,22 @@ localparam CONF_STR = {
 	"-;",
 	"R[0],Reset;",
 	"J1,Button 1,Button 2,Button 3,Start,Coin;",
+	"I,",
+	"Slot=F1-F4|Save=Alt+F1-F4,",
+	"Active Slot 1,",
+	"Active Slot 2,",
+	"Active Slot 3,",
+	"Active Slot 4,",
+	"State 1 saved,",
+	"State 2 saved,",
+	"State 3 saved,",
+	"State 4 saved,",
+	"State 1 loaded,",
+	"State 2 loaded,",
+	"State 3 loaded,",
+	"State 4 loaded,",
+	"Savestate failed,",
+	"Slot empty;",
 	"V,v",`BUILD_DATE
 };
 
@@ -177,7 +201,11 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({ch_avail, 1'b0, autofire_unlock, direct_video | ~game_vertical}), // [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation and Flip screen (both H0) for direct video and the horizontal games
+	.status_menumask({ch_avail, ~ss_allowed, autofire_unlock, direct_video | ~game_vertical}), // [2] hides Savestates (H2) where they are not supported; [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation and Flip screen (both H0) for direct video and the horizontal games
+	.status_in({status[127:42], ss_slot, status[39:0]}),
+	.status_set(ss_status_update),
+	.info_req(ss_info_req),
+	.info(ss_info),
 
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -561,9 +589,55 @@ assign hs_write  = hs_pause ? hi_write : ch_write;
 // 4-PC loop (a healthy run visits 367 distinct PCs in the same window).
 assign hs_access = hs_pause ? (hi_intent_rd | hi_intent_wr) : ch_access;
 
+// ---------------------------------------------------------------------------
+// Savestates (2026-09-18) -- rtl/savestate/savestate.sv: parks every CPU
+// (rtl/savestate/ss_m68k_park.sv, ss_z80_park.sv, the TLCS-90s' own
+// freeze), streams the core's 128 KB state image to the slot in DDR3
+// (CONF_STR "SS3E000000:40000", the firmware writes it to disk) and back.
+// The engine's DDR side shares the DDRAM port with screen_rotate (below)
+// and yields to it cycle by cycle, on the video clock. The core's pause is
+// masked while an operation runs, since the CPUs must execute to park.
+// Not on tharrierb (id 55): its MC68705R3 is not parked.
+// ---------------------------------------------------------------------------
+wire        ss_allowed = ~(game_sel == 6'd55);
+wire  [1:0] ss_slot;
+wire  [7:0] ss_info;
+wire        ss_save, ss_load, ss_info_req, ss_status_update;
+wire        ss_busy, ss_done_ok, ss_done_fail, ss_was_load;
+wire  [1:0] ss_fail_code;
+wire        ss_freeze, ss_frozen, ss_parked, ss_resume, ss_active, ss_wr, ss_replay, ss_replay_done;
+wire [19:0] ss_addr;
+wire [15:0] ss_rdata, ss_wdata;
+wire        eng_we, eng_rd;
+wire [28:0] eng_addr;
+wire [63:0] eng_din;
+
+savestate_ui savestate_ui (
+	.clk(clk_sys), .ps2_key(ps2_key), .allow_ss(ss_allowed & ~reset),
+	.status_slot(status[41:40]), .OSD_saveload(status[43:42]),
+	.done_ok(ss_done_ok), .done_fail(ss_done_fail), .fail_code(ss_fail_code), .was_load(ss_was_load),
+	.ss_save(ss_save), .ss_load(ss_load), .ss_info_req(ss_info_req), .ss_info(ss_info),
+	.statusUpdate(ss_status_update), .selected_slot(ss_slot)
+);
+
+savestate #(.SS_WORDS(65536), .DDR_BASE(29'h07C00000), .SLOT_STRIDE(29'h00008000)) savestate (
+	.clk(clk_sys), .reset(reset),
+	.save_req(ss_save), .load_req(ss_load), .slot(ss_slot), .vblank(vblank_core), .allow(ss_allowed & ~ioctl_download),
+	.ss_freeze(ss_freeze), .ss_frozen(ss_frozen), .ss_parked(ss_parked), .ss_resume(ss_resume), .ss_active(ss_active),
+	.ss_addr(ss_addr), .ss_rdata(ss_rdata), .ss_wr(ss_wr), .ss_wdata(ss_wdata),
+	.ss_replay(ss_replay), .ss_replay_done(ss_replay_done),
+	.busy(ss_busy), .done_ok(ss_done_ok), .done_fail(ss_done_fail), .fail_code(ss_fail_code), .was_load(ss_was_load),
+	.clk_ddr(CLK_VIDEO), .ddr_busy(DDRAM_BUSY), .rot_we(rot_we),
+	.ddr_we(eng_we), .ddr_rd(eng_rd), .ddr_addr(eng_addr), .ddr_din(eng_din),
+	.ddr_dout(DDRAM_DOUT), .ddr_dout_ready(DDRAM_DOUT_READY)
+);
+
 gunnail_core #(.HW_ROMS(1), .INCLUDE_AFEGA(0), .INCLUDE_NMK(1)) core
 (
-	.clk_sys(clk_sys), .reset(reset), .pause(status[29] | hs_pause | ch_pause), .hs_addr(hs_addr), .hs_din(hs_din), .hs_dout(hs_dout), .hs_write(hs_write), .hs_access(hs_access), .game_sel(game_sel),
+	.clk_sys(clk_sys), .reset(reset), .pause((status[29] | hs_pause | ch_pause) & ~ss_busy), .hs_addr(hs_addr), .hs_din(hs_din), .hs_dout(hs_dout), .hs_write(hs_write), .hs_access(hs_access), .game_sel(game_sel),
+	.ss_freeze(ss_freeze), .ss_resume(ss_resume), .ss_active(ss_active), .ss_frozen(ss_frozen), .ss_parked(ss_parked),
+	.ss_addr(ss_addr), .ss_rdata(ss_rdata), .ss_wr(ss_wr), .ss_wdata(ss_wdata),
+	.ss_replay(ss_replay), .ss_replay_done(ss_replay_done),
 	.extra_por_hold(~pll_locked),
 
 	.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr),
@@ -721,15 +795,28 @@ wire        video_rotated;
 wire        no_rotate = (orientation == 2'd0) | direct_video | ~game_vertical;
 wire        rotate_ccw = orientation != 2'd2;
 wire        flip = flip_screen & ~direct_video;
+// The DDRAM port is shared with the savestate engine: screen_rotate's write
+// wins any cycle it appears on (it has no backpressure of its own), the
+// engine fills the gaps. Both run on CLK_VIDEO (screen_rotate's DDRAM_CLK).
+wire        rot_we;
+wire [28:0] rot_addr;
+wire [63:0] rot_din;
+wire  [7:0] rot_be;
 screen_rotate screen_rotate (
 	.CLK_VIDEO(CLK_VIDEO), .CE_PIXEL(CE_PIXEL),
 	.VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B), .VGA_HS(VGA_HS), .VGA_VS(VGA_VS), .VGA_DE(VGA_DE),
 	.rotate_ccw(rotate_ccw), .no_rotate(no_rotate), .flip(flip), .video_rotated(video_rotated),
 	.FB_EN(FB_EN), .FB_FORMAT(FB_FORMAT), .FB_WIDTH(FB_WIDTH), .FB_HEIGHT(FB_HEIGHT),
 	.FB_BASE(FB_BASE), .FB_STRIDE(FB_STRIDE), .FB_VBL(FB_VBL), .FB_LL(FB_LL),
-	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
-	.DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD)
+	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(), .DDRAM_ADDR(rot_addr),
+	.DDRAM_DIN(rot_din), .DDRAM_BE(rot_be), .DDRAM_WE(rot_we), .DDRAM_RD()
 );
+assign DDRAM_BURSTCNT = 8'd1;
+assign DDRAM_ADDR     = rot_we ? rot_addr : eng_addr;
+assign DDRAM_DIN      = rot_we ? rot_din  : eng_din;
+assign DDRAM_BE       = rot_we ? rot_be   : 8'hFF;
+assign DDRAM_WE       = rot_we | eng_we;
+assign DDRAM_RD       = eng_rd;
 assign FB_FORCE_BLANK = 1'b0;
 
 reg  [26:0] act_cnt;

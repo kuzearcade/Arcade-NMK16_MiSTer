@@ -204,7 +204,23 @@ module tlcs90 (
 	output      [15:0] dbg_iy,
 	output      [15:0] dbg_bc,
 	output      [15:0] dbg_ix,
-	output      [15:0] dbg_sp
+	output      [15:0] dbg_sp,
+
+	// Savestates (2026-09-18): ss_freeze holds the CPU at its next
+	// instruction boundary (S_FETCH_OP with the cycle padding consumed,
+	// no bus activity); ss_frozen reports it. While frozen the 16-word
+	// register file below is readable at any time and writable at clk
+	// rate (ss_wr is a clk_sys pulse, applied ahead of the cen-gated
+	// body). Word map: 0 {a,f} 1 bc 2 de 3 hl 4 ix 5 iy 6 sp 7 pc
+	// 8 {a2,f2} 9 bc2 10 de2 11 hl2 12 {op[5:0],5'b0,halt_r,after_ei,
+	// nmi_pending,nmi_prev,irq_taking} 13 irq_pending 14 {cyc_elapsed,
+	// target_cyc} 15 cyc_f_reg.
+	input              ss_freeze,
+	output             ss_frozen,
+	input        [4:0] ss_sel,
+	input              ss_wr,
+	input       [15:0] ss_wdata,
+	output reg  [15:0] ss_rdata
 );
 
 	// ------------------------------------------------------------------
@@ -1336,7 +1352,53 @@ module tlcs90 (
 	// NMI is the fixed INTNMI vector (0x10+1*8).
 	wire [15:0] irq_vector = nmi_pending ? 16'h0018 : (16'h0010 + (({12'h0,irq_idx} + 16'd3) << 3));
 
-	always @(posedge clk) if (cen) begin
+	// savestate: at the boundary and asked to hold
+	wire at_boundary = (state == S_FETCH_OP) && !(cyc_elapsed < target_cyc);
+	assign ss_frozen = ss_freeze && at_boundary && !reset;
+	always @(*) begin
+		case (ss_sel)
+			5'd0:  ss_rdata = {a, f};
+			5'd1:  ss_rdata = bc;
+			5'd2:  ss_rdata = de;
+			5'd3:  ss_rdata = hl;
+			5'd4:  ss_rdata = ix;
+			5'd5:  ss_rdata = iy;
+			5'd6:  ss_rdata = sp;
+			5'd7:  ss_rdata = pc;
+			5'd8:  ss_rdata = {a2, f2};
+			5'd9:  ss_rdata = bc2;
+			5'd10: ss_rdata = de2;
+			5'd11: ss_rdata = hl2;
+			5'd12: ss_rdata = {op, 5'b0, halt_r, after_ei, nmi_pending, nmi_prev, irq_taking};
+			5'd13: ss_rdata = {5'd0, irq_pending};
+			5'd14: ss_rdata = {4'd0, cyc_elapsed, target_cyc};
+			5'd15: ss_rdata = {10'd0, cyc_f_reg};
+			default: ss_rdata = 16'h0000;
+		endcase
+	end
+
+	always @(posedge clk) if (ss_frozen && ss_wr) begin
+		// savestate restore, while frozen: one word per clk_sys pulse
+		case (ss_sel)
+			5'd0:  {a, f} <= ss_wdata;
+			5'd1:  bc <= ss_wdata;
+			5'd2:  de <= ss_wdata;
+			5'd3:  hl <= ss_wdata;
+			5'd4:  ix <= ss_wdata;
+			5'd5:  iy <= ss_wdata;
+			5'd6:  sp <= ss_wdata;
+			5'd7:  pc <= ss_wdata;
+			5'd8:  {a2, f2} <= ss_wdata;
+			5'd9:  bc2 <= ss_wdata;
+			5'd10: de2 <= ss_wdata;
+			5'd11: hl2 <= ss_wdata;
+			5'd12: begin op <= ss_wdata[15:10]; halt_r <= ss_wdata[4]; after_ei <= ss_wdata[3]; nmi_pending <= ss_wdata[2]; nmi_prev <= ss_wdata[1]; irq_taking <= ss_wdata[0]; end
+			5'd13: irq_pending <= ss_wdata[10:0];
+			5'd14: begin cyc_elapsed <= ss_wdata[11:6]; target_cyc <= ss_wdata[5:0]; end
+			5'd15: cyc_f_reg <= ss_wdata[5:0];
+			default: ;
+		endcase
+	end else if (cen) begin
 		mem_rd <= 1'b0;
 		mem_wr <= 1'b0;
 		addr_bank <= 4'h0;
@@ -1387,6 +1449,9 @@ module tlcs90 (
 					if (cyc_elapsed < target_cyc) begin
 						// padding — cyc_elapsed's generic increment above
 						// already applies this cycle, nothing else to do.
+					end else if (ss_freeze) begin
+						// savestate hold: stay at the boundary, counters still
+						cyc_elapsed <= cyc_elapsed;
 					end else begin
 					cyc_elapsed <= 6'd1; // this cycle is the new instruction's own cycle 1
 					if (op != OP_EI && after_ei) begin
