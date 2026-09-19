@@ -56,10 +56,10 @@ ring's write path was registered):
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
-| `NMK16_Macross2` | 20,467 (49%) | 534 / 553 | +0.546 ns |
-| `NMK16_Gunnail` | 31,466 (75%) | 525 / 553 | +0.522 ns |
-| `NMK16_Raphero` | 25,286 (60%) | 520 / 553 | +0.323 ns |
-| `NMK16_Afega` | 23,251 (55%) | 468 / 553 | +0.308 ns |
+| `NMK16_Macross2` | 20,450 (49%) | 534 / 553 | +0.184 ns |
+| `NMK16_Gunnail` | 31,326 (75%) | 525 / 553 | +0.491 ns |
+| `NMK16_Raphero` | 25,306 (60%) | 520 / 553 | +0.431 ns |
+| `NMK16_Afega` | 23,293 (56%) | 468 / 553 | +0.532 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
@@ -130,8 +130,9 @@ verification results.
    hiscore.dat tables, but the option is **Off by default**: turn "High
    Scores" On and the scores are restored at boot and saved whenever the
    OSD is opened (Save Scores forces one). Save Scores and Reset Scores
-   are greyed out while the option is Off. `docs/known-issues.md` NMK-24
-   and NMK-33.
+   are greyed out while the option is Off. A saved file that fails the
+   table's own start/end checks is ignored rather than restored.
+   `docs/known-issues.md` NMK-24 and NMK-33.
 6. **Savestates**: every core has a Savestates page in the OSD (Slot
    1-4, Save state, Load state); on a keyboard F1-F4 load slot 1-4 and
    Alt+F1-F4 save. States go to the SD card through the MiSTer

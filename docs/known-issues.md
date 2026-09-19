@@ -603,6 +603,16 @@ sprite-and-scroll evidence for that core is the board captures).
   injected into RAM through a savestate is extracted by the autosave and
   survives a core reload. High Scores must be **On** for any of this -- the
   option is Off by default.
+- **Leftover files.** A `.nvm` written by a pre-fix bitstream while the
+  option was Off is bus noise, and a correct module restores it faithfully:
+  Rapid Hero then sits on its high-score screen full of garbage (reported
+  and reproduced 2026-09-19 with the file the old bitstream had left on the
+  card). `hiscore.v` now validates a dump before touching RAM -- each
+  entry's first and last byte must match the config's start/end values,
+  exactly the check MAME's hiscore.dat carries -- and discards a dump that
+  fails, so the game boots with its own defaults and the next OSD open
+  writes a good file over the bad one. Deleting `config/nvram/<game>.nvm`
+  or using Reset Scores does the same by hand.
 
 ### NMK-30 · redfoxwp2 (Hong Hu Zhanji II, China set 1): noise on screen, never ran (FIXED, data-only)
 

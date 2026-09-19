@@ -114,7 +114,7 @@ int main(int argc, char **argv) {
 	if (const char *vp = std::getenv("TB_VPROM")) push_stream(vp, 1);
 	if (!std::getenv("TB_HS_OFF")) {
 		push_stream(std::getenv("TB_HS_CFG") ? std::getenv("TB_HS_CFG") : "roms/hachamf_hscfg.bin", 3);
-		if (!std::getenv("TB_HS_NODUMP")) push_stream("roms/hachamf_hsdump.bin", 4);
+		if (!std::getenv("TB_HS_NODUMP")) push_stream(std::getenv("TB_HS_DUMP") ? std::getenv("TB_HS_DUMP") : "roms/hachamf_hsdump.bin", 4);   // TB_HS_DUMP: an alternative dump file (e.g. a corrupted one for the validation test)
 	}
 	if (const char *sw = std::getenv("TB_SWITCHES")) {
 		std::vector<uint8_t> b; std::string t(sw), tok; 

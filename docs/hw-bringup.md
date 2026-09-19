@@ -4006,3 +4006,22 @@ read back from a second savestate), is extracted by the autosave on the
 next OSD open, written to the file, and shows as the HUD's HIGH after a
 reload. Trap on the way: `.ss` files are read into DDR only at core start,
 so a patched file must be followed by a core reload before F1 loads it.
+
+Follow-up the same day: Rapid Hero "frozen on the high-score entry screen
+with garbage". Its `.nvm` dated 09-17 was one of the files the old bug had
+written (first byte 0x00 where the hiscore.dat entry demands 0x01, last
+0x74 for 0x70), and the now-correct module restored it into the game's
+table; putting that file back reproduced the frozen garbage screen, a clean
+save on the shipped bitstream matched MAME's default table byte for byte
+(a Lua dump of 0x1FE601..0x1FE65B at frame 900). `hiscore.v` gained a
+validation pass (states SM_VAL*, a documented fork change like `dpram_hs`):
+before the restore it walks the dump and compares each entry's first and
+last byte with the config's start/end values; a mismatch discards the dump
+(`downloaded_dump` cleared) so nothing is written and the next OSD open
+saves the game's own table. `sim/rtl/gunnail_hs` gained `TB_HS_DUMP=<file>`
+to feed an alternative dump, but the harness never reaches the restore
+(hachamf's boot RAM test outlasts the run, the hs_write counter stays 0),
+so the proof is the board: the bad Rapid Hero file boots to a normal attract
+and is rewritten with the default table on the first OSD open; a valid file
+patched to 155080 restores and shows as the HUD's HIGH; Thunder Dragon 2
+with its garbage file boots clean and with the 7770000 file restores.
