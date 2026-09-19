@@ -46,7 +46,8 @@ Every core is named `NMK16_<family>` and its bitstream ships as
 one family on an SD card shared with other arcade cores.
 
 All four fit the DE10-Nano's Cyclone V `5CSEBA6U23I7` (41,910 ALMs,
-553 M10K) with timing met, as built on 2026-09-18 (the CRT Adjust chain
+553 M10K) with timing met, as built for tag `v2026-09-18`
+(`Arcade-NMK16_*_20260918.rbf`; the CRT Adjust chain
 and its 96 / 112 MHz video clocks added about 1,500 ALMs and 40–60 M10K
 per core over the day before; the savestate engine, the two CPU park
 monitors and the FM register shadow another ~800–1,200 ALMs and 2–5 M10K;
@@ -216,13 +217,15 @@ and the comparison tools.
 ## Third-party projects and attribution
 
 This core would not exist without the following projects. Each is
-vendored at the commit recorded in `deps.lock`, unmodified. Committed here
-is the subset the build needs — the HDL the `.qip` files reference, plus
-each project's own `LICENSE` — with two further exceptions, both noted
-under the table:
-`rtl/sdram.sv`, which is a modified fork, and `rtl/third_party_gen/t80/`,
-a mechanical GHDL/Yosys translation of T80's VHDL used only by the
-simulations.
+vendored at the commit recorded in `deps.lock`. Committed here is the
+subset the build needs — the HDL the `.qip` files reference, plus each
+project's own `LICENSE`. Four pieces are modified forks, each documented in
+its file header and in `deps.lock`: `rtl/sdram.sv`; `hiscore.v`'s
+`dpram_hs` (rewritten so Quartus 17 infers block RAM at the table size
+these games need); `crt_vsize.sv` (pipeline registers on the ring RAM's
+read and write paths for the 112 MHz video clock); and
+`rtl/third_party_gen/t80/`, a mechanical GHDL/Yosys translation of T80's
+VHDL used only by the simulations.
 
 | Component | Project | Author | Licence |
 |---|---|---|---|
@@ -235,7 +238,8 @@ simulations.
 | YM2151 (jt51) | [jotego/jt51](https://github.com/jotego/jt51) | Jose Tejada | GPL-3.0-or-later |
 | MC68705R3 / 6805 CPU (jt6805) | [jotego/jtcores](https://github.com/jotego/jtcores), `modules/jt680x/hdl` | Jose Tejada | GPL-3.0-or-later |
 | SDRAM controller (`rtl/sdram.sv`) | copied from [rmonic79/Arcade-Darius_MiSTer](https://github.com/rmonic79/Arcade-Darius_MiSTer) | Sorgelig | GPL-3.0-or-later |
-| CRT Adjust: analog H-Size / H-Position / V-Shift (`crt_adjust.sv`) and V-Size (`crt_vsize.sv`) | [rmonic79/MiSTer-CRT-Adjust](https://github.com/rmonic79/MiSTer-CRT-Adjust) | Umberto Parisi (rmonic79), with Andrea Bogazzi | GPL-3.0-or-later |
+| High score save/load (`hiscore.v`, MAME hiscore.dat tables) | [MiSTer-devel/Hiscores_MiSTer](https://github.com/MiSTer-devel/Hiscores_MiSTer) | Alan Steremberg, Jim Gregory | GPL-3.0-or-later |
+| CRT Adjust: analog picture offset (H-Position, V-Shift) and size (H-Size, V-Size with PVM / Cabinet modes) on the 15 kHz output, `crt_adjust.sv` and `crt_vsize.sv` | [rmonic79/MiSTer-CRT-Adjust](https://github.com/rmonic79/MiSTer-CRT-Adjust) | Umberto Parisi (rmonic79), with Andrea Bogazzi | GPL-3.0-or-later |
 
 There is no standalone `jotego/jt680x` repository — jt6805 is a module of
 the **jtcores** monorepo, so `deps.lock` fetches it with a `subdir` kind:
