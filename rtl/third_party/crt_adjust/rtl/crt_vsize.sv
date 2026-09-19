@@ -64,7 +64,10 @@
 //  4-step stages into four 2-step stages (phases 7..10): its 4 chained
 //  compare-subtracts were 8.25 ns, -0.06 ns at 112 MHz. Cost: the module
 //  now needs clk/pixel >= 11 (upstream: >= 8); every mode in this project
-//  has 12 or more. Nothing else changed; the sim copy
+//  has 12 or more. 2026-09-19: the ring WRITE is registered too (wl_base
+//  once per line, ring_wa/ring_wd/ring_we one clock later) -- the per-pixel
+//  wl*LINE_PX+wpx address arithmetic into twelve M10K address ports was the
+//  next worst path (-0.10 ns at 112 MHz). Nothing else changed; the sim copy
 //  sim/rtl/crt_chain/crt_vsize_sim.sv is regenerated from this file.
 //============================================================================
 
@@ -197,6 +200,18 @@ module crt_vsize #(
     reg [5:0] wl;               // ring slot being written
     reg [5:0] frame0_slot;      // ring slot that holds native frame line 0
     initial begin wl = 0; frame0_slot = 1; end
+    // NMK16 (2026-09-19): the ring write is registered. Writing
+    // ring[wl * LINE_PX + wpx] directly put a 6x9-bit multiply and an add
+    // between the line counter and twelve M10K address ports -- the worst
+    // path of the 112 MHz Macross2 build once the rest had been tuned. The
+    // line base is now computed once per line (wl_base) and the write
+    // itself goes through a register stage; a one-clock write delay is
+    // invisible, reads lag writes by RING_LINES/2 lines.
+    reg [RAW-1:0] wl_base;
+    reg [RAW-1:0] ring_wa;
+    reg [23:0]    ring_wd;
+    reg           ring_we;
+    initial begin wl_base = 0; ring_wa = 0; ring_wd = 0; ring_we = 0; end
 
     wire [5:0] wl_next = (wl == RING_LINES-1) ? 6'd0 : wl + 1'd1;
 
@@ -215,6 +230,7 @@ module crt_vsize #(
             if (line_had_de) px_count_nat <= wpx;
             if (line_had_de) a_cnt <= a_cnt + 1'd1;
             wl           <= wl_next;
+            wl_base      <= line_base(wl_next);
             wpx          <= 0;
             line_had_de  <= 0;
             l_cnt        <= l_cnt + 1'd1;
@@ -233,8 +249,11 @@ module crt_vsize #(
             end
         end
 
+        ring_we <= pxl_cen & de_in;
+        ring_wa <= wl_base + wpx;
+        ring_wd <= {r_in, g_in, b_in};
+        if (ring_we) ring[ring_wa] <= ring_wd;
         if (pxl_cen & de_in) begin
-            ring[line_base(wl) + wpx] <= {r_in, g_in, b_in};
             if (wpx != LINE_PX-1) wpx <= wpx + 1'd1;
         end
 

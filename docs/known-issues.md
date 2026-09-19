@@ -576,6 +576,34 @@ sprite-and-scroll evidence for that core is the board captures).
   its writes, so the rotated picture is unaffected; a save takes a little
   longer there.
 
+### NMK-33 · High scores did not persist: the disabled hiscore module still extracted and uploaded, and the firmware wrote that over the .nvm
+- **Cores:** all four · **Severity:** data loss · **Status:** fixed (2026-09-19)
+- **Ref:** `NMK16_*.sv` hiscore wiring (`hs_active`, `hs_osd`, `ioctl_upload_req`); `docs/hw-bringup.md` "High score save/load"
+- Reported as: set a high score, Save Scores, reset the game or reload the
+  core, and the scores are gone. Reproduced on the board with Thunder
+  Dragon 2: its `config/nvram/….nvm` held a 00/01 byte pattern instead of a
+  score table (a real one starts with the 0x18 marker and nine 12-byte
+  entries), rewritten at the moment another core was loaded.
+- Cause: `hiscore.v` runs its OSD-open extraction and autosave whenever a
+  config has been downloaded, with no regard for its `reset` input. With
+  High Scores **Off** (the default since NMK-24) the top holds the module in
+  reset and never grants it the RAM port, so any OSD open -- the menu, the
+  savestate info popups, or "Save Scores" itself -- made it read bus noise,
+  find it "changed", write it into its own buffer and raise the upload flag.
+  The firmware acts on that flag at the next OSD main-menu entry or core
+  switch (`MENU_SAVE_CHECK` in menu.cpp), so the noise landed in the file
+  later, destroying whatever had been saved while the option was On.
+- Fix: the module's OSD input and its upload request are gated by the
+  option (`hs_active = hs_enable & ~hs_hold`), so an Off module can neither
+  extract nor request a save; Save Scores and Reset Scores are greyed out
+  (`dA`, menumask bit 10) while High Scores is Off.
+- Verified on the board (tdragon2, High Scores On): the autosave on OSD
+  open writes the real table; a distinctive score patched into the file
+  (5550800) shows in the game's table after a core reload; a changed score
+  injected into RAM through a savestate is extracted by the autosave and
+  survives a core reload. High Scores must be **On** for any of this -- the
+  option is Off by default.
+
 ### NMK-30 · redfoxwp2 (Hong Hu Zhanji II, China set 1): noise on screen, never ran (FIXED, data-only)
 
 **Found by the 2026-09-17 97-set hardware sweep** (`tools/mister_sweep3.sh`

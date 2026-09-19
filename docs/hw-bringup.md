@@ -3967,3 +3967,42 @@ after each pixel for pixel (the two must be identical: after the load
 the machine replays exactly what it did after the save). Run on
 hachamf (protection MCU + NMK004, hiscore active), tharrier (Z80 +
 YM2203 + the MCU simulation) and mustangb (the Seibu Z80/YM3812 board).
+
+## High scores did not persist (NMK-33, 2026-09-19)
+
+Reported on Thunder Dragon 2: set a score, Save Scores, reset or reload,
+scores gone. On the board the game's `config/nvram/….nvm` was a 00/01 byte
+pattern (a real table starts with the 0x18 marker: nine 12-byte entries,
+BCD score at +8), and its timestamp matched the moment another core was
+loaded. The chain, from the firmware sources (`menu.cpp` `MENU_SAVE_CHECK`,
+`support/arcade/mra_loader.cpp` `arcade_nvm_save`) and `hiscore.v`:
+
+1. `hiscore.v` reacts to every OSD_STATUS rising edge -- the menu, an info
+   popup, our synthetic Save Scores edge -- by comparing game RAM with its
+   buffer, and if anything differs it copies RAM into the buffer and raises
+   `ioctl_upload_req`. Nothing in that path looks at its `reset` input.
+2. With High Scores Off (the default since NMK-24) the top holds the module
+   in reset and gates its pause and RAM-port access, so the "RAM" it reads
+   is bus noise: always different, always "changed", noise into the buffer.
+3. The upload flag is sticky in `hps_io` until the firmware reads it, which
+   it does only on entering the OSD main menu or on a core switch. Then it
+   pulls the buffer through the upload port and writes the file. So the
+   damage lands later, when the user opens the menu again or loads the next
+   core, over a file that may have been saved correctly while the option
+   was On.
+
+Fix (all four tops): `hs_active = hs_enable & ~hs_hold` gates both the
+module's OSD_STATUS input and its upload request, so an Off module can
+neither extract nor ask for a save; Save Scores and Reset Scores are greyed
+(`dA`, menumask bit 10) while High Scores is Off.
+
+Verified on the board with the option On, on the pre-fix bitstream (the On
+path was never the problem): the first OSD open after a fresh core load
+writes the real default table; a distinctive score patched into the file
+(5550800) shows in the game's table after a reload; and -- the case the
+earlier verification had skipped, defaults compared with defaults -- a
+CHANGED score, injected into RAM by loading a patched savestate (7770000,
+read back from a second savestate), is extracted by the autosave on the
+next OSD open, written to the file, and shows as the HUD's HIGH after a
+reload. Trap on the way: `.ss` files are read into DDR only at core start,
+so a patched file must be followed by a core reload before F1 loads it.

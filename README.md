@@ -49,14 +49,16 @@ All four fit the DE10-Nano's Cyclone V `5CSEBA6U23I7` (41,910 ALMs,
 553 M10K) with timing met, as built on 2026-09-18 (the CRT Adjust chain
 and its 96 / 112 MHz video clocks added about 1,500 ALMs and 40–60 M10K
 per core over the day before; the savestate engine, the two CPU park
-monitors and the FM register shadow another ~800–1,200 ALMs and 2–5 M10K):
+monitors and the FM register shadow another ~800–1,200 ALMs and 2–5 M10K;
+Macross2's 112 MHz clock stopped being a seed lottery once the CRT V-Size
+ring's write path was registered):
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
-| `NMK16_Macross2` | 20,483 (49%) | 534 / 553 | +0.037 ns |
-| `NMK16_Gunnail` | 31,357 (75%) | 525 / 553 | +0.211 ns |
-| `NMK16_Raphero` | 25,248 (60%) | 520 / 553 | +0.730 ns |
-| `NMK16_Afega` | 23,224 (55%) | 468 / 553 | +0.598 ns |
+| `NMK16_Macross2` | 20,467 (49%) | 534 / 553 | +0.546 ns |
+| `NMK16_Gunnail` | 31,466 (75%) | 525 / 553 | +0.522 ns |
+| `NMK16_Raphero` | 25,286 (60%) | 520 / 553 | +0.323 ns |
+| `NMK16_Afega` | 23,251 (55%) | 468 / 553 | +0.308 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
@@ -123,7 +125,13 @@ verification results.
    the native stream unchanged; the page is bypassed while the
    scandoubler/HQ2X or a Vert orientation is active. Limits and sign
    convention in `docs/known-issues.md` NMK-31.
-5. **Savestates**: every core has a Savestates page in the OSD (Slot
+5. **High scores** (Scores page) are saved and restored through MAME's
+   hiscore.dat tables, but the option is **Off by default**: turn "High
+   Scores" On and the scores are restored at boot and saved whenever the
+   OSD is opened (Save Scores forces one). Save Scores and Reset Scores
+   are greyed out while the option is Off. `docs/known-issues.md` NMK-24
+   and NMK-33.
+6. **Savestates**: every core has a Savestates page in the OSD (Slot
    1-4, Save state, Load state); on a keyboard F1-F4 load slot 1-4 and
    Alt+F1-F4 save. States go to the SD card through the MiSTer
    savestate framework (`savestates/<core>/<game>_<slot>.ss`) and are

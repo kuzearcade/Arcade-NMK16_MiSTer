@@ -115,8 +115,8 @@ localparam CONF_STR = {
 	"P1,Scores;",
 	"P1O[39],High Scores,Off,On;",
 	"P1-;",
-	"P1R[30],Save Scores;",
-	"P1R[31],Reset Scores;",
+	"dAP1R[30],Save Scores;",
+	"dAP1R[31],Reset Scores;",
 	// Savestates (2026-09-18): the slot and the two buttons; F1-F4 / Alt+F1-F4
 	// on a keyboard. H2 hides the page on tharrierb (its MC68705R3 is not
 	// parked -- see rtl/savestate/).
@@ -201,7 +201,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({ch_avail, ~ss_allowed, autofire_unlock, direct_video | ~game_vertical}), // [2] hides Savestates (H2) where they are not supported; [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation and Flip screen (both H0) for direct video and the horizontal games
+	.status_menumask({5'd0, hs_enable, ch_avail, ~ss_allowed, autofire_unlock, direct_video | ~game_vertical}), // [10] greys Save/Reset Scores (dA) while High Scores is Off; [2] hides Savestates (H2) where they are not supported; [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation and Flip screen (both H0) for direct video and the horizontal games
 	.status_in({status[127:42], ss_slot, status[39:0]}),
 	.status_set(ss_status_update),
 	.info_req(ss_info_req),
@@ -505,6 +505,7 @@ wire        hi_write;
 wire        hi_intent_rd, hi_intent_wr;
 wire        ioctl_upload;
 wire        ioctl_upload_req;
+wire        hs_upload_req_raw;     // hiscore.v's own request, gated below
 wire  [7:0] ioctl_din;
 wire        ioctl_rd;
 
@@ -514,7 +515,17 @@ always @(posedge clk_sys) begin
 	if (status[30]) hs_save_sr <= 8'hFF;
 end
 wire hs_saving = |hs_save_sr;
-wire hs_osd = OSD_STATUS & ~hs_saving;   // drop low during a Save to force the edge
+// Both gated by the option (and the Reset Scores hold): hiscore.v's OSD-open
+// extraction and its autosave upload run whenever a config has been loaded,
+// with NO regard for its reset input. With High Scores Off the module is held
+// in reset and never owns the RAM port, so an OSD open made it "extract" bus
+// noise, find it "changed" and request an upload -- and the firmware wrote
+// that over the saved .nvm (seen on the board: a tdragon2 .nvm full of
+// 00/01 bytes, rewritten by the savestate info popups). The option must be
+// able to sit Off without destroying scores saved while it was On.
+wire hs_active = hs_enable & ~hs_hold;
+wire hs_osd = OSD_STATUS & ~hs_saving & hs_active;   // drop low during a Save to force the edge
+assign ioctl_upload_req = hs_upload_req_raw & hs_active;
 
 
 hiscore #(
@@ -529,7 +540,7 @@ hiscore #(
 	.autosave(1'b1),
 	.OSD_STATUS(hs_osd),
 	.ioctl_upload(ioctl_upload),
-	.ioctl_upload_req(ioctl_upload_req),
+	.ioctl_upload_req(hs_upload_req_raw),
 	.ioctl_download(ioctl_download),
 	.ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr),
