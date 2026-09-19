@@ -6,6 +6,8 @@ their straightforward clones. Everything below is transcribed from
 mame/src/mame/nmk/nmk16.cpp: GAME() lines, ROM_START blocks and
 INPUT_PORTS_START DIP tables. Run from the repo root:
     python3 tools/gen_gunnail_mra.py
+then refresh the git-ignored autofire mirror of releases/:
+    python3 tools/gen_autofire_mra.py
 
 Conventions (see docs/hw-bringup.md):
   - The <switches> block is DSW1, DSW2, then the GAME ID byte (game_sel):

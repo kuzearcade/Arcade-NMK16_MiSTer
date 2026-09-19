@@ -126,6 +126,16 @@ verification results.
    is the PCB's cocktail-cabinet setting the game program acts on, and
    the two compose. Under direct video the Scandoubler Fx and
    Orientation options are hidden, since neither path exists there.
+   The P1/P2 Autofire options stay hidden unless the loaded `.mra`
+   opts in (its `<switches>` third byte, bit 6); the shipped files do
+   not, and `tools/gen_autofire_mra.py` writes a git-ignored
+   `autofire_releases/` mirror of `releases/` with that bit set for the
+   shoot-'em-up sets, same layout and file names. One MiSTer caveat: a
+   game whose DIP switches were ever changed in the OSD has a
+   `config/dips/<mra name>.dip` file, and the firmware loads that whole
+   value over the `.mra` default, third byte included, so Autofire stays
+   hidden for that game until the file is deleted or the OSD's "Reset
+   settings" restores the defaults.
 4. Analog/CRT users have a **CRT Adjust** page in the OSD (H-Size,
    H-Position, V-Shift, V-Size with PVM and Cabinet modes), on every
    output — the I/O board's VGA carries the same stream the scaler sees,

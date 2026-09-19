@@ -161,3 +161,9 @@ sim/rtl/video_state/dump
 sim/rtl/*/obj_base/
 sim/rtl/*/spr_*/
 sim/rtl/*/rom_access.bin
+
+# Derived local mirror of releases/ with the OSD Autofire menu unlocked
+# (<switches> byte 2 bit 6) for the shoot-'em-up sets, same layout, same
+# file names -- written by tools/gen_autofire_mra.py, never committed or
+# deployed by the release scripts. Regenerate it whenever releases/ changes.
+/autofire_releases/

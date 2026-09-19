@@ -13,6 +13,8 @@ nmk_irq timing PROMs are fixed at synthesis and not downloaded.
 File names follow the MAME description; "/" cannot appear in a file
 name, so it becomes " - ". Run from the repo root:
     python3 tools/gen_family_c_mra.py
+then refresh the git-ignored autofire mirror of releases/:
+    python3 tools/gen_autofire_mra.py
 """
 import os
 

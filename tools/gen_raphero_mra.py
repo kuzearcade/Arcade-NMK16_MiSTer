@@ -5,6 +5,8 @@ nmk16.cpp's GAME()/ROM_START/INPUT_PORTS_START(raphero). Part order is
 rtl/raphero/raphero_core.sv's fixed SDRAM layout (see the header written
 into each file). Run from the repo root:
     python3 tools/gen_raphero_mra.py
+then refresh the git-ignored autofire mirror of releases/:
+    python3 tools/gen_autofire_mra.py
 """
 import os
 
