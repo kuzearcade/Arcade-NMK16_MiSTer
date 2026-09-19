@@ -47,7 +47,9 @@ assign VIDEO_ARY = (!ar) ? (video_rotated ? 12'd4 : 12'd3) : 12'd0;
 localparam CONF_STR = {
 	"Raphero;SS3E000000:40000;",   // savestates: 4 x 256 KB slots at 0x3E000000 (rtl/savestate/)
 	"-;",
-	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	// Aspect ratio is the scaler's business; hidden (HB, menumask bit 11)
+	// under direct video, where the picture goes out at native timing.
+	"HBO[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	// HQ2X / scanlines via sys/video_mixer.sv. This core has no
 	// video_retime -- it drives the raster straight from the core clock and
 	// already carries hblank_core/vblank_core separately, which is exactly
@@ -186,7 +188,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({4'd0, direct_video, hs_enable, ch_avail, 1'b0, autofire_unlock, direct_video}), // [11] hides Scandoubler Fx (HB) under direct video; [10] greys Save/Reset Scores (dA) while High Scores is Off; [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation (H0) for direct video
+	.status_menumask({4'd0, direct_video, hs_enable, ch_avail, 1'b0, autofire_unlock, direct_video}), // [11] hides Aspect ratio and Scandoubler Fx (both HB) under direct video; [10] greys Save/Reset Scores (dA) while High Scores is Off; [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation (H0) for direct video
 	.status_in({status[127:42], ss_slot, status[39:0]}),
 	.status_set(ss_status_update),
 	.info_req(ss_info_req),

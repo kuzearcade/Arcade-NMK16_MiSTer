@@ -4086,3 +4086,7 @@ mirrors 34-39); the OSD lists Aspect ratio, Scandoubler Fx, Orientation,
 Flip screen, CRT Adjust, DIP Switches, Pause, ... All four cores rebuilt
 and pass timing first try (Macross2 +0.152 ns on seed 11, Gunnail +0.552,
 Raphero +0.480, Afega +0.551).
+
+Later the same day: the Aspect ratio entry joined Scandoubler Fx behind
+the direct-video hide (`HB`) on all four tops -- it only steers the scaler's
+VIDEO_ARX/ARY, which direct video never consults.

@@ -56,10 +56,10 @@ seed 11 for this build, where seeds 1, 3, 5 and 7 all missed by 0.05–0.5 ns):
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
-| `NMK16_Macross2` | 20,596 (49%) | 534 / 553 | +0.152 ns |
-| `NMK16_Gunnail` | 31,405 (75%) | 525 / 553 | +0.552 ns |
-| `NMK16_Raphero` | 25,324 (60%) | 520 / 553 | +0.480 ns |
-| `NMK16_Afega` | 23,369 (56%) | 468 / 553 | +0.551 ns |
+| `NMK16_Macross2` | 20,594 (49%) | 534 / 553 | +0.319 ns |
+| `NMK16_Gunnail` | 31,507 (75%) | 525 / 553 | +0.660 ns |
+| `NMK16_Raphero` | 25,330 (60%) | 520 / 553 | +0.525 ns |
+| `NMK16_Afega` | 23,238 (55%) | 468 / 553 | +0.391 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
@@ -124,8 +124,9 @@ verification results.
    DIP takes, so it also works for sets whose board ignores that DIP
    (Task Force Harrier). A game's own Flip Screen DIP stays separate: it
    is the PCB's cocktail-cabinet setting the game program acts on, and
-   the two compose. Under direct video the Scandoubler Fx and
-   Orientation options are hidden, since neither path exists there.
+   the two compose. Under direct video the Aspect ratio, Scandoubler Fx
+   and Orientation options are hidden, since the scaler paths they
+   drive do not exist there.
    The P1/P2 Autofire options stay hidden unless the loaded `.mra`
    opts in (its `<switches>` third byte, bit 6); the shipped files do
    not, and `tools/gen_autofire_mra.py` writes a git-ignored

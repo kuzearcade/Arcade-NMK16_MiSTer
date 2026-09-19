@@ -496,8 +496,9 @@ sprite-and-scroll evidence for that core is the board captures).
   chain stays active with the picture flipped. The page is offered on every
   path -- the analog I/O board's VGA carries the same stream the scaler
   sees and the core cannot tell which monitor is watching -- while the
-  Scandoubler Fx and Orientation options are hidden under direct video
-  (menumask bit 11), where neither path exists.
+  Aspect ratio, Scandoubler Fx and Orientation options are hidden under
+  direct video (menumask bit 11), where the scaler paths they drive do not
+  exist.
 - **H-Size enlarge is limited by the raster's own blanking.** The stretched
   line must finish before the next sync pulse or its right edge is cut.
   Hires lines (gunnail, tdragon2, macross2, raphero, bjtwin…: active 28..411,
