@@ -32,6 +32,9 @@ module tdragon2_hw_top #(
 ) (
 	input  clk_sys,
 	input  reset,
+	// OSD Flip screen as NMK16_Macross2.sv drives it under direct video
+	// (tb: TB_OSD_FLIP=1); the frames must be rot180 of an unflipped run.
+	input         osd_flip,
 
 	input         ioctl_download,
 	input         ioctl_wr,
@@ -257,6 +260,7 @@ module tdragon2_hw_top #(
 		.audio_l(audio_l), .audio_r(),
 		.ce_pix_o(ce_pix_o), .hcount_o(hcount_o), .vcount_o(vcount_o), .hblank_o(hblank_o), .vblank_o(vblank_o),
 		.in0_i(in0_i), .in1_i(in1_i), .dsw1_i({8'hFF, DSW1[7:0]}), .dsw2_i({8'hFF, DSW2[7:0]}),
+		.osd_flip(osd_flip),
 		.ss_freeze(ss_freeze), .ss_resume(ss_resume), .ss_active(ss_active), .ss_frozen(ss_frozen), .ss_parked(ss_parked),
 		.ss_addr(ss_addr), .ss_rdata(ss_rdata), .ss_wr(ss_wr), .ss_wdata(ss_wdata),
 		.ss_replay(ss_replay), .ss_replay_done(ss_replay_done),

@@ -46,20 +46,20 @@ Every core is named `NMK16_<family>` and its bitstream ships as
 one family on an SD card shared with other arcade cores.
 
 All four fit the DE10-Nano's Cyclone V `5CSEBA6U23I7` (41,910 ALMs,
-553 M10K) with timing met, as built for tag `v2026-09-18`
-(`Arcade-NMK16_*_20260918.rbf`; the CRT Adjust chain
+553 M10K) with timing met, as built on 2026-09-19
+(`Arcade-NMK16_*_20260919.rbf`; the CRT Adjust chain
 and its 96 / 112 MHz video clocks added about 1,500 ALMs and 40–60 M10K
 per core over the day before; the savestate engine, the two CPU park
 monitors and the FM register shadow another ~800–1,200 ALMs and 2–5 M10K;
-Macross2's 112 MHz clock stopped being a seed lottery once the CRT V-Size
-ring's write path was registered):
+Macross2's 112 MHz clock still needs a seed pick after any logic change --
+seed 11 for this build, where seeds 1, 3, 5 and 7 all missed by 0.05–0.5 ns):
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
-| `NMK16_Macross2` | 20,450 (49%) | 534 / 553 | +0.184 ns |
-| `NMK16_Gunnail` | 31,326 (75%) | 525 / 553 | +0.491 ns |
-| `NMK16_Raphero` | 25,306 (60%) | 520 / 553 | +0.431 ns |
-| `NMK16_Afega` | 23,293 (56%) | 468 / 553 | +0.532 ns |
+| `NMK16_Macross2` | 20,467 (49%) | 534 / 553 | +0.168 ns |
+| `NMK16_Gunnail` | 31,427 (75%) | 525 / 553 | +0.641 ns |
+| `NMK16_Raphero` | 25,254 (60%) | 520 / 553 | +0.395 ns |
+| `NMK16_Afega` | 23,402 (56%) | 468 / 553 | +0.597 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
@@ -116,16 +116,21 @@ verification results.
    name the exact zips and the checksums they were generated from. ROMs
    are not included in this repository.
 3. DIP switches are exposed in the OSD. Player inputs follow MAME's
-   default key layout. Vertical games have an orientation option. A
-   game's own Flip Screen DIP works too, and is separate from the OSD's
-   Flip screen option: the DIP is the PCB's own cocktail-cabinet
-   setting that the game program acts on, the OSD one rotates the
-   finished picture in the framework's scaler.
+   default key layout. Vertical games have an Orientation option on the
+   HDMI/scaler path. **Flip screen** (a 180-degree turn) is offered for
+   every game on both video paths: over HDMI it turns the finished
+   picture in the framework's scaler; under direct video (`direct_video=1`
+   in MiSTer.ini) the core mirrors its own picture, the same path the
+   games' Flip Screen DIP takes, so it also works for sets whose board
+   ignores that DIP (Task Force Harrier). A game's own Flip Screen DIP
+   stays separate: it is the PCB's cocktail-cabinet setting the game
+   program acts on, and the two compose.
 4. Analog/CRT users have a **CRT Adjust** page in the OSD (H-Size,
-   H-Position, V-Shift, V-Size with PVM and Cabinet modes). Off outputs
-   the native stream unchanged; the page is bypassed while the
-   scandoubler/HQ2X or a Vert orientation is active. Limits and sign
-   convention in `docs/known-issues.md` NMK-31.
+   H-Position, V-Shift, V-Size with PVM and Cabinet modes). It is a
+   direct-video feature: the page only appears with `direct_video=1`,
+   where the Scandoubler Fx and Orientation options are hidden instead.
+   Off outputs the native stream unchanged. Limits and sign convention
+   in `docs/known-issues.md` NMK-31.
 5. **High scores** (Scores page) are saved and restored through MAME's
    hiscore.dat tables, but the option is **Off by default**: turn "High
    Scores" On and the scores are restored at boot and saved whenever the

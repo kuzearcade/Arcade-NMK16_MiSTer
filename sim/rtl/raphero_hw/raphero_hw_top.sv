@@ -167,7 +167,7 @@ module raphero_hw_top #(
 
 		.audio_l(audio_l), .audio_r(),
 		.ce_pix_o(ce_pix_o), .hcount_o(hcount_o), .vcount_o(vcount_o), .hblank_o(hblank_o), .vblank_o(vblank_o),
-		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF),
+		.in0_i(16'hFFFF), .in1_i(16'hFFFF), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF), .osd_flip(1'b0),
 		.extra_por_hold(1'b0),
 		.ss_freeze(ss_freeze), .ss_resume(ss_resume), .ss_active(ss_active), .ss_frozen(ss_frozen), .ss_parked(ss_parked),
 		.ss_addr(ss_addr), .ss_rdata(ss_rdata), .ss_wr(ss_wr), .ss_wdata(ss_wdata),

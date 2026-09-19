@@ -367,6 +367,10 @@ module tdragon2_core #(
 	input  [15:0] in1_i,
 	input  [15:0] dsw1_i,
 	input  [15:0] dsw2_i,
+	// OSD "Flip screen" under direct video (2026-09-19): XORed into the
+	// flipscreen register's bit in the screen-flip block below, so the
+	// composed output is mirrored the way the Flip Screen DIP already is.
+	input         osd_flip,
 
 	// HW_ROMS=1 real hardware top only: hold por_rst's own countdown at
 	// 0 while this is asserted (NMK16_Macross2.sv drives it with ~pll_locked
@@ -2539,7 +2543,10 @@ module tdragon2_core #(
 	// modular way -- for every mode here, W-1-rd_x on an out-of-range rd_x
 	// wraps back into [W, 2^n-1] -- so out-of-range stays out of range.
 	// ------------------------------------------------------------------
-	wire       flip_screen = flip_screen_reg[0];
+	// osd_flip (the OSD's Flip screen, direct video only -- NMK16_Macross2.sv
+	// gates it) composes with the game's own flip as a further 180-degree
+	// turn, so a flipped-monitor cabinet still gets the DIP's effect on top.
+	wire       flip_screen = flip_screen_reg[0] ^ osd_flip;
 	wire [8:0] flip_w_m1   = game_powerins ? 9'd319 : 9'd383;   // screen_w_vis - 1
 	wire [7:0] flip_h_m1   = 8'd223;
 	wire [8:0] rd_x_flip = flip_screen ? (flip_w_m1 - rd_x) : rd_x;

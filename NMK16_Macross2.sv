@@ -74,11 +74,13 @@ localparam CONF_STR = {
 	"Macross2;SS3E000000:40000;",   // savestates: 4 x 256 KB slots at 0x3E000000 (rtl/savestate/)
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-	"O[3:1],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	// HQ2X / scanlines via sys/video_mixer.sv. The mixer sits between
 	// video_retime and VGA_*, so screen_rotate (which measures its
 	// framebuffer from the incoming DE) sees the scaled raster and sizes
 	// itself accordingly. forced_scandoubler from hps_io still forces it on.
+	// Hidden (HB, menumask bit 11) under direct video, where the bits are
+	// also ignored (fx below) -- that path is the native 15 kHz stream.
+	"HBO[3:1],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
 	// tdragon2 is a vertical (MAME ROT270) game drawn on its side by the
 	// board; the two "Vert" choices both present it upright through the
 	// framebuffer, as MAME does — "Vert 270" (the MAME-correct
@@ -91,15 +93,17 @@ localparam CONF_STR = {
 	// through the OSD's own settings save.
 	"H0O[9:8],Orientation,Horz,Vert 270,Vert 90;",
 	// "Flip screen" (upside-down, a 180-degree turn with no
-	// quarter-rotation): only takes visible effect while Orientation is
-	// Horz, since screen_rotate's own flip input is gated by no_rotate
-	// (sys/arcade_video.v) — meaningful for macross2 always (which is
-	// permanently Horz) and for tdragon2 when its own Orientation is left
-	// at Horz. Offered for cabinets whose monitor ended up mounted
-	// inverted: a HORIZONTAL monitor for macross2, or a horizontal
-	// monitor being used to play tdragon2 un-rotated for either. Hidden
-	// (H2) under direct video, same reason as Orientation above.
-	"H2O[17],Flip screen,Off,On;",
+	// quarter-rotation), for a monitor mounted inverted. Over HDMI it is
+	// screen_rotate's flip, a framebuffer pass that only takes visible
+	// effect while Orientation is Horz (screen_rotate gates its flip input
+	// with no_rotate, sys/arcade_video.v) — meaningful for macross2 and
+	// powerins always (permanently Horz) and for tdragon2 when its own
+	// Orientation is left at Horz. Under direct video, where the
+	// framebuffer path is unavailable, the core mirrors its own readback
+	// coordinates instead (osd_flip on the core instance) -- the path the
+	// games' Flip Screen DIP already takes (NMK-21). Shown on both video
+	// paths.
+	"O[17],Flip screen,Off,On;",
 	// CRT Adjust (rtl/crt_chain.sv around rmonic79's MiSTer-CRT-Adjust,
 	// rtl/third_party/crt_adjust): analog-geometry controls for 15 kHz CRT
 	// users on their own page, replacing the former H/V Shift sync trims.
@@ -112,13 +116,15 @@ localparam CONF_STR = {
 	// timing (arcade chassis). Ignored while the scandoubler/HQ2X or the
 	// rotation framebuffer is active -- those paths keep the native
 	// stream (crt_on below). Status bits as in the upstream reference glue.
-	"P3,CRT Adjust;",
-	"P3O[101],CRT Adjust,Off,On;",
-	"P3O[100:96],CRT H-Size,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
-	"P3O[85:79],CRT H-Position,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,+32,+33,+34,+35,+36,+37,+38,+39,+40,+41,+42,+43,+44,+45,+46,+47,+48,-48,-47,-46,-45,-44,-43,-42,-41,-40,-39,-38,-37,-36,-35,-34,-33,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
-	"P3O[78:74],CRT V-Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
-	"P3O[107:104],CRT V-Size,0,+1,+2,+3,+4,-4,-3,-2,-1;",
-	"P3O[108],CRT V-Size Mode,PVM,Cabinet;",
+	// Direct video only (hB, menumask bit 11): the page is hidden and the
+	// bits ignored (crt_on) on the HDMI/scaler path.
+	"hBP3,CRT Adjust;",
+	"hBP3O[101],CRT Adjust,Off,On;",
+	"hBP3O[100:96],CRT H-Size,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"hBP3O[85:79],CRT H-Position,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,+32,+33,+34,+35,+36,+37,+38,+39,+40,+41,+42,+43,+44,+45,+46,+47,+48,-48,-47,-46,-45,-44,-43,-42,-41,-40,-39,-38,-37,-36,-35,-34,-33,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"hBP3O[78:74],CRT V-Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"hBP3O[107:104],CRT V-Size,0,+1,+2,+3,+4,-4,-3,-2,-1;",
+	"hBP3O[108],CRT V-Size Mode,PVM,Cabinet;",
 	// Autofire on button 1: Off, or a frames-on/frames-off pattern
 	// clocked by the game's own vblank (~56 Hz): 10Hz = 3/3, 12Hz = 2/3,
 	// 15Hz = 2/2, 20Hz = 1/2, 30Hz = 1/1. While enabled for a player,
@@ -220,7 +226,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({5'd0, hs_enable, ch_avail, direct_video, autofire_unlock, game_macross2 | game_powerins | direct_video}), // [10] greys Save/Reset Scores (dA) while High Scores is Off; [2] hides Flip screen (direct video only), [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation (macross2/powerins are horizontal; direct video)
+	.status_menumask({4'd0, direct_video, hs_enable, ch_avail, 1'b0, autofire_unlock, game_macross2 | game_powerins | direct_video}), // [11] direct video: hides Scandoubler Fx (HB), shows CRT Adjust (hB); [10] greys Save/Reset Scores (dA) while High Scores is Off; [2] unused; [1] shows P1/P2 Autofire (h1) only when the .mra sets the hidden unlock bit, [0] hides Orientation (macross2/powerins are horizontal; direct video)
 	.status_in({status[127:42], ss_slot, status[39:0]}),
 	.status_set(ss_status_update),
 	.info_req(ss_info_req),
@@ -819,6 +825,9 @@ tdragon2_core #(.HW_ROMS(1),
 	// reference — that comparison now matches, 0x44D8 on both, with the
 	// ioctl_index ROM-write gate in place; see docs/hw-bringup.md).
 	.in0_i(in0_i), .in1_i(in1_i), .dsw1_i(dsw1_i), .dsw2_i(dsw2_i),
+	// OSD Flip screen under direct video: mirrored inside the core (the
+	// DIP's path); over HDMI screen_rotate's flip does it instead (below).
+	.osd_flip(status[17] & direct_video),
 
 	.rom_csum_o(rom_csum), .rom_csum_count_o(rom_csum_count), .rom_csum_done_o(rom_csum_done),
 	.rom_fetch_csum_o(rom_fetch_csum), .rom_fetch_csum_count_o(rom_fetch_csum_count), .rom_fetch_csum_done_o(rom_fetch_csum_done),
@@ -1127,8 +1136,11 @@ wire [23:0] final_rgb    = rd_rgb;   // clk_sys domain — written into video_re
 // there in any case: sys/sys_top.v:364 does `sl_r <= FB_EN ? 2'b00 : scanlines`,
 // i.e. the framework force-disables them in framebuffer mode. So "Scandoubler
 // Fx" has no effect while Orientation is Vert (or Flip screen is on).
+// Under direct video the option is hidden (HB) and its bits ignored here,
+// so a setting made on the HDMI path cannot linger unseen; the
+// framework's own forced_scandoubler still applies.
 wire       fb_rotating = ~((status[9:8] == 2'd0) | game_macross2 | game_powerins | direct_video) | (status[17] & ~direct_video);
-wire [2:0] fx = status[3:1];
+wire [2:0] fx = direct_video ? 3'd0 : status[3:1];
 wire       scandoubler_en = ((fx != 3'd0) || forced_scandoubler) && ~fb_rotating;
 wire [1:0] sl = fx[2:1];
 assign VGA_SL = sl;
@@ -1138,8 +1150,10 @@ assign VGA_SL = sl;
 // V-Shift, on the 15 kHz retimed raster ahead of the mixer. Off -- or
 // while the scandoubler/HQ2X or the rotation framebuffer is in use --
 // it is a registered passthrough with every signal delayed alike.
+// Direct video only: the page is hidden (hB) and the bits ignored on the
+// HDMI/scaler path.
 // ------------------------------------------------------------------
-wire        crt_on = status[101] & ~scandoubler_en & ~fb_rotating;
+wire        crt_on = status[101] & direct_video & ~scandoubler_en & ~fb_rotating;
 crt_chain #(
 	.HTOTAL0(10'd512), .HTOTAL1(10'd448), .DIV0(5'd14), .DIV1(5'd16),
 	.VTOTAL(278), .LINE_PX(400), .VSIZE_MAX(4)
@@ -1185,7 +1199,10 @@ video_mixer #(.LINE_LENGTH(400), .HALF_DEPTH(0), .GAMMA(0)) video_mixer (
 // 180-degree upside-down image with no quarter-turn: meaningful for
 // macross2 always (permanently Horz) and for tdragon2 whenever its own
 // Orientation is left at Horz — offered for cabinets whose monitor
-// ended up mounted inverted.
+// ended up mounted inverted. Under direct video none of this
+// framebuffer path is available, so Flip screen is done inside the core
+// instead (osd_flip on the core instance above: the readback-coordinate
+// mirror the Flip Screen DIP uses, NMK-21).
 // ------------------------------------------------------------------
 wire  [1:0] orientation = status[9:8];
 wire        flip_screen = status[17];

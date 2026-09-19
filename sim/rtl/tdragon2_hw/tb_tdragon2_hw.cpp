@@ -157,6 +157,9 @@ int main(int argc, char **argv) {
 	const int  ss_cmp = std::getenv("TB_SS_CMP") ? atoi(std::getenv("TB_SS_CMP")) : 30;
 	top.ss_slot = std::getenv("TB_SS_SLOT") ? atoi(std::getenv("TB_SS_SLOT")) : 0;
 	top.ss_save = 0; top.ss_load = 0;
+	// TB_OSD_FLIP=1: the OSD Flip screen as the direct-video path drives it
+	// (the core's own readback mirror, independent of the game's DIP).
+	top.osd_flip = std::getenv("TB_OSD_FLIP") ? atoi(std::getenv("TB_OSD_FLIP")) & 1 : 0;
 	int ss_phase = 0, ss_rec = 0, ss_result = -1;
 	std::vector<std::vector<uint32_t>> ss_after_save, ss_after_load;
 	uint64_t ss_req_tick = 0;
@@ -214,7 +217,7 @@ int main(int argc, char **argv) {
 			long nonzero_px = 0;
 			FILE *ppm = nullptr;
 			if (dump_ppm && (frame_count % ppm_step) == 0) {
-				char fname[64];
+				char fname[512];   // was 64: an absolute TB_PREFIX truncated to a nonexistent path and nothing was written
 				std::snprintf(fname, sizeof(fname), "%stdragon2_hw_frame_%02u.ppm",
 				              std::getenv("TB_PREFIX") ? std::getenv("TB_PREFIX") : "", frame_count);
 				ppm = std::fopen(fname, "wb");

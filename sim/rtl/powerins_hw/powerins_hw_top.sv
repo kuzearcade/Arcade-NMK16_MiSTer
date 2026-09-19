@@ -208,7 +208,7 @@ module powerins_hw_top
 
 		.audio_l(audio_l), .audio_r(),
 		.ce_pix_o(ce_pix_o), .hcount_o(hcount_o), .vcount_o(vcount_o), .hblank_o(hblank_o), .vblank_o(vblank_o),
-		.in0_i(in0_i), .in1_i(in1_i), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF),
+		.in0_i(in0_i), .in1_i(in1_i), .dsw1_i(16'hFFFF), .dsw2_i(16'hFFFF), .osd_flip(1'b0),
 
 		.rom_csum_o(rom_csum_o), .rom_csum_count_o(rom_csum_count_o), .rom_csum_done_o(rom_csum_done_o),
 		.rom_fetch_csum_o(rom_fetch_csum_o), .rom_fetch_csum_count_o(rom_fetch_csum_count_o), .rom_fetch_csum_done_o(rom_fetch_csum_done_o),

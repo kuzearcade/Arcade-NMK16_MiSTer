@@ -4025,3 +4025,44 @@ so the proof is the board: the bad Rapid Hero file boots to a normal attract
 and is rewritten with the default table on the first OSD open; a valid file
 patched to 155080 restores and shows as the HUD's HIGH; Thunder Dragon 2
 with its garbage file boots clean and with the 7770000 file restores.
+
+## Direct-video menu split and an in-core Flip screen (2026-09-19)
+
+Three OSD changes, all four rbfs, on top of `9d29afa`:
+
+- **Scandoubler Fx and Orientation are hidden under direct video**, and
+  **CRT Adjust only exists there**: a new menumask bit 11 carries
+  `direct_video`, the Scandoubler line is `HB...`, the CRT Adjust page and
+  its five items `hBP3...` (the firmware parses the H/h prefixes before the
+  `P` page check -- `menu.cpp` -- so a page header hides like any item, and
+  `user_io_status_bits` maps `'B'` to 11). Hidden means inert as well: `fx`
+  is forced to 0 and `crt_on` gated with `direct_video`, so a value saved
+  on the other path cannot act unseen. The framework's own
+  `forced_scandoubler` still applies under direct video.
+- **Flip screen is offered for every game on both paths.** Over HDMI it is
+  still screen_rotate's framebuffer flip. Under direct video, where that
+  path does not exist, each core has a new `osd_flip` input XORed into the
+  board's own flip (`flip_screen_reg` bit 0, or both Afega DIP axes) --
+  the readback-coordinate mirror NMK-21 built for the Flip Screen DIP, so
+  it also steers `video_macross2`'s prefetch lookahead. The top drives it
+  as `status[17] & direct_video`. That covers tharrier, whose `flipscreen_w`
+  is commented out in MAME's map, so its DIP does nothing anywhere.
+
+**Board proof (DE10-Nano, `direct_video=1`).** The native `screenshot`
+command still works under direct video (the scaler samples the stream: 298
+px wide at 15 kHz, a clean line-doubled 384x448 with `forced_scandoubler=1`),
+which is the comparison path; the capture box cannot lock to 15 kHz and
+shears at 31 kHz, but the sheared frames are legible enough to read the
+OSD. With the game paused from the OSD so both shots are the same frame,
+Flip screen on vs off: Thunder Dragon 2 **rot180 = 0.00 mean abs diff**
+(unrotated 61.5, single-axis mirrors 30-61), Task Force Harrier **0.00**
+(unrotated 78.6). Direct-video OSD: Aspect ratio, Flip screen, CRT Adjust,
+DIP Switches, Pause, Scores, Savestates, Cheats, Reset. HDMI OSD
+(`direct_video=0`): Aspect ratio, Scandoubler Fx, Orientation, Flip screen,
+... with no CRT Adjust page. Two harness traps on the way: the OSD cursor
+returns to the top item every time the menu is reopened (a second "toggle"
+landed on Aspect ratio), and `tb_tdragon2_hw.cpp`'s PPM name buffer was 64
+bytes, so an absolute `TB_PREFIX` silently truncated to a path that does not
+exist and no frame was written (now 512). `sim/rtl/tdragon2_hw` gained
+`TB_OSD_FLIP=1` (top-level `osd_flip` port); an unflipped and a flipped run
+compared frame by frame is the sim-side check.
