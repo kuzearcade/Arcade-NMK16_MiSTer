@@ -36,6 +36,32 @@ Conventions (see docs/hw-bringup.md):
     gamepad mapping — a shorter list shifts Start/Coin).
 """
 import os
+from xml.sax.saxutils import escape as _xml_escape
+
+
+# --- XML well-formedness (2026-09-20) ---------------------------------------
+# MiSTer's own .mra reader is lenient and accepts a bare & and a -- inside a
+# comment, so every game here has always run correctly on hardware. The
+# downloader database builder is not lenient: it reads each .mra with a strict
+# XML parser to find out which core the game needs, and on a parse error it
+# silently skips EVERY tag derived from the file's contents -- the per-core
+# tag, the setname term, and the "alternatives" marker. Ten of these files were
+# published to the kuzecores database with only their two path-derived tags,
+# which is what sent them missing from per-core filtering.
+#
+# So everything interpolated into the XML goes through one of these two.
+
+def x(value):
+    """Element text or attribute value: & < > have to be entities."""
+    return _xml_escape(str(value))
+
+
+def xc(text):
+    """XML comment body. The spec forbids -- anywhere inside a comment and
+    forbids a comment ending in -. These are prose notes using the double
+    hyphen as a dash, so it becomes the em dash this file already uses."""
+    s = str(text).replace('--', '\u2014')
+    return s + ' ' if s.endswith('-') else s
 
 # --- nmk_irq V-PROM, streamed as its own <rom index="1"> (2026-09-15) ---
 # Each set that uses the real nmk_irq scanline generator carries its own
@@ -1233,7 +1259,7 @@ def mra(setname, desc, game_line, spec, parent, overrides):
     rbf = rbf_for_id(spec["id"])
     out = []
     out.append(f"""<!--
-  {desc} — NMK16 "{rbf}" rbf (rtl/gunnail/gunnail_core.sv game id {spec['id']}).
+  {xc(desc)} — NMK16 "{rbf}" rbf (rtl/gunnail/gunnail_core.sv game id {spec['id']}).
   {'Clone of ' + parent + '; files it shares with the parent are looked up in the parent zip.' if parent else 'Parent set.'}
 
   Transcribed from mame/src/mame/nmk/nmk16.cpp: GAME(... {setname} ...)
@@ -1244,13 +1270,13 @@ def mra(setname, desc, game_line, spec, parent, overrides):
   tools/gen_gunnail_mra.py.
 -->
 <misterromdescription>
-  <name>{desc}</name>
+  <name>{x(desc)}</name>
   <mratimestamp>202609110000</mratimestamp>
   <mameversion>0270</mameversion>
   <setname>{setname}</setname>
   <year>{spec['year']}</year>
-  <manufacturer>{spec['manufacturer']}</manufacturer>
-  <category>{spec.get("category", "Shooter")}</category>
+  <manufacturer>{x(spec['manufacturer'])}</manufacturer>
+  <category>{x(spec.get("category", "Shooter"))}</category>
   <rbf>{rbf}</rbf>
 """)
     if spec["rot"]:
@@ -1262,12 +1288,12 @@ def mra(setname, desc, game_line, spec, parent, overrides):
   <switches default="{spec['switches']},{spec['id']:02X}">
 """)
     for bits, name, ids in spec["dips"]:
-        out.append(f'    <dip bits="{bits}" name="{name}" ids="{ids}"/>\n')
+        out.append(f'    <dip bits="{bits}" name="{x(name)}" ids="{x(ids)}"/>\n')
     out.append("  </switches>\n\n")
     out.append(f'  <buttons names="{BUTTONS[0]}" default="{BUTTONS[1]}"/>\n\n')
     out.append(f'  <rom index="0" zip="{"|".join(zips)}" md5="none">\n')
     for comment, parts in spec["regions"]:
-        out.append(f"    <!-- {comment} -->\n")
+        out.append(f"    <!-- {xc(comment)} -->\n")
         out.append(part_lines(parts, overrides))
     out.append("  </rom>\n")
     out.append(vprom_rom_block(setname, "|".join(zips)))
