@@ -128,14 +128,16 @@ localparam CONF_STR = {
 	"P1-;",
 	"dAP1R[30],Save Scores;",
 	"dAP1R[31],Reset Scores;",
-	// Savestates (2026-09-18): the slot and the two buttons; F1-F4 / Alt+F1-F4
+	// Savestates (2026-09-18): the slot and the two buttons; F1 F5 F3 F4 / Alt+same
 	// on a keyboard. H2 hides the page on tharrierb (its MC68705R3 is not
 	// parked -- see rtl/savestate/).
 	"H2P4,Savestates;",
 	"H2P4O[41:40],Slot,1,2,3,4;",
 	"H2P4-;",
-	"H2P4R[42],Save state (Alt+F1-F4);",
-	"H2P4R[43],Load state (F1-F4);",
+	// Slot 2 is F5, not F2: F2 is the Service Mode toggle below and the two
+	// collided (fixed 2026-09-20).
+	"H2P4R[42],Save state (Alt+F1 F5 F3 F4);",
+	"H2P4R[43],Load state (F1 F5 F3 F4);",
 	"P2,Cheats;",
 	"P2-;",
 	"h3P2O[32],Infinite Credits,Off,On;",
@@ -149,7 +151,7 @@ localparam CONF_STR = {
 	"R[0],Reset;",
 	"J1,Button 1,Button 2,Button 3,Start,Coin;",
 	"I,",
-	"Slot=F1-F4|Save=Alt+F1-F4,",
+	"Slot=F1 F5 F3 F4|Save=+Alt,",
 	"Active Slot 1,",
 	"Active Slot 2,",
 	"Active Slot 3,",

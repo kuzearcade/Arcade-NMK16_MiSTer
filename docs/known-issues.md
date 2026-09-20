@@ -2076,3 +2076,40 @@ therefore never meant anything. Two specific traps:
   Before the fix the bootleg's Seibu-style driver spun in its YM2203
   busy-wait reading program ROM (9 FM writes in 422 frames); after it,
   the driver runs its normal sequencer loop and programs the chip.
+
+---
+
+### NMK-34 · F2 was bound twice: Service Mode and savestate slot 2 (CLOSED, fixed and verified on hardware)
+
+Every top level here binds **F2** to the Service Mode toggle, which is MAME's
+own binding for it, and `rtl/savestate/savestate_ui.sv` bound the same set-2
+scancode (`8'h06`) to **savestate slot 2**. Both acted on the same press, so a
+Service Mode toggle was also a slot-2 savestate command and the reverse.
+
+Found on the board in the sibling `Arcade-SandScrp_MiSTer`, which shares this
+`savestate_ui.sv` and makes the same Service Mode binding; the collision is
+identical here and had simply never been exercised.
+
+**Slot 2 moved to F5** (`8'h03`). The slot keys are now **F1, F5, F3, F4** for
+slots 1-4, a plain press to load and Alt+press to save, on all four cores. The
+OSD entries and the F-key help string in each top level say so.
+
+Moving the savestate side rather than the Service Mode side keeps MAME's
+binding. The cost is a gap in the F1-F4 convention other MiSTer cores follow;
+moving all four slots clear of F2 would have broken that convention for the
+three keys that never collided.
+
+Verified on a DE10-Nano with the rebuilt `NMK16_Macross2` running Thunder
+Dragon 2:
+
+| | |
+|---|---|
+| Alt+F2, the old slot-2 key | no savestate file appears |
+| Alt+F5 | writes `Thunder Dragon 2 (9th Nov. 1993)_2.ss`, 149,512 bytes |
+
+All four cores rebuilt for the change, 0 errors, timing closed on every one:
+Macross2 +0.567 ns setup, Gunnail +0.268, Raphero +0.362, Afega +0.620.
+
+One thing this does **not** fix, because it is the game's behaviour and not the
+core's: toggling Service Mode mid-game does nothing, since these boards sample
+that switch at boot. The keyboard toggle only bites across a reset.

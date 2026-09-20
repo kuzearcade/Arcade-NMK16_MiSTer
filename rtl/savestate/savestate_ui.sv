@@ -1,7 +1,13 @@
 // Savestate OSD / keyboard front end (2026-09-18), after NES_MiSTer's
 // savestate_ui.sv (keyboard hotkeys and the OSD "Savestate Slot" /
-// "Save state" / "Restore state" entries). F1-F4 load slot 1-4, Alt+F1-F4
-// save; the slot chosen from the keyboard is written back into the OSD
+// "Save state" / "Restore state" entries). The slot keys are F1, F5, F3, F4
+// for slots 1-4: a plain press loads, Alt+press saves. Slot 2 is on F5 and
+// NOT F2 because every top level here already uses F2 for the Service Mode
+// toggle (MAME's binding), and both were acting on the same press -- found on
+// the board in the sibling Sand Scorpion core, 2026-09-20, which shares this
+// file. F5 is the nearest free function key; moving all four slots clear of
+// F2 would have broken the F1-F4 convention for the three that never
+// collided. The slot chosen from the keyboard is written back into the OSD
 // (statusUpdate -> hps_io status_in). Result messages come from the
 // engine's done pulses. Info codes (the top's "I," list):
 //   1 = help, 2-5 = active slot n, 6-9 = state n saved, 10-13 = state n
@@ -41,12 +47,12 @@ module savestate_ui (
 		old_st <= OSD_saveload;
 
 		if (allow_ss) begin
-			// keyboard: F1-F4 = restore, Alt+F1-F4 = save
+			// keyboard: F1/F5/F3/F4 = restore slot 1-4, Alt+the same = save
 			if (old_state != ps2_key[10]) begin
 				case (ps2_key[7:0])
 					8'h11: alt <= pressed;   // left Alt
 					8'h05: begin ss_save <= pressed & alt; ss_load <= pressed & ~alt; if (pressed) begin ss_base <= 2'd0; statusUpdate <= 1'b1; end end // F1
-					8'h06: begin ss_save <= pressed & alt; ss_load <= pressed & ~alt; if (pressed) begin ss_base <= 2'd1; statusUpdate <= 1'b1; end end // F2
+					8'h03: begin ss_save <= pressed & alt; ss_load <= pressed & ~alt; if (pressed) begin ss_base <= 2'd1; statusUpdate <= 1'b1; end end // F5 (slot 2; F2 is Service Mode)
 					8'h04: begin ss_save <= pressed & alt; ss_load <= pressed & ~alt; if (pressed) begin ss_base <= 2'd2; statusUpdate <= 1'b1; end end // F3
 					8'h0C: begin ss_save <= pressed & alt; ss_load <= pressed & ~alt; if (pressed) begin ss_base <= 2'd3; statusUpdate <= 1'b1; end end // F4
 					default: ;
