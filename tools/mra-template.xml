@@ -20,8 +20,11 @@
   <!-- rbf = this family's core name, see docs/PLAN.md families A-I -->
   <rbf>TODO_FAMILY_RBF_NAME</rbf>
 
-  <!-- Rotation/orientation: set per docs/game-inventory.md "Orientation" column -->
-  <rotation>0</rotation>
+  <!-- Rotation/orientation: set per docs/game-inventory.md "Orientation"
+       column. MiSTer matches this as TEXT (strncasecmp "vertical"), so it
+       must be one of: horizontal | vertical (cw) | vertical (ccw).
+       A number here reads as horizontal whatever it says. -->
+  <rotation>horizontal</rotation>
 
   <switches default="TODO">
     <!-- one <dip> per PORT_DIPSWITCH() block in the driver -->

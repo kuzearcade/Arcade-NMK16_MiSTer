@@ -2113,3 +2113,67 @@ Macross2 +0.567 ns setup, Gunnail +0.268, Raphero +0.362, Afega +0.620.
 One thing this does **not** fix, because it is the game's behaviour and not the
 core's: toggling Service Mode mid-game does nothing, since these boards sample
 that switch at boot. The keyboard toggle only bites across a reset.
+
+### NMK-35 · `.mra` rotation was written as a number, so no vertical game was vertical (CLOSED, fixed)
+
+Reported as issue #7 by matijaerceg, with the cause already correct in the
+report. Every vertical game's `.mra` carried
+
+```xml
+  <rotation>1</rotation>
+```
+
+and MiSTer Main matches that tag as **text**, not as a number:
+
+```c
+// Main_MiSTer/support/arcade/mra_loader.cpp
+is_vertical = strncasecmp(text, "vertical", 8) == 0;
+```
+
+`"1"` is not `"vertical"`, so `is_vertical` stayed false, and `is_vertical` is
+what gates the `[arcade_vertical]` section of `MiSTer.ini` (`cfg.cpp`). A tate
+cabinet therefore never picked up its video settings for any of these games.
+Nothing was wrong inside the core: its own Orientation option was unaffected.
+
+**Scope was wider than the report.** The report named 14 games and one
+generator; the tag is emitted by **three** (`gen_gunnail_mra.py`,
+`gen_raphero_mra.py`, `gen_family_c_mra.py`), the scaffold
+`tools/mra-template.xml` had `<rotation>0</rotation>`, and clones get their own
+files, so **45 shipped `.mra` files** carried it.
+
+**Direction.** The report suggested an explicit direction rather than bare
+`vertical`, because MiSTer falls back to CW when none is given. Checked: all 17
+affected sets are `ROT270` in `nmk16.cpp`, and this family's own top level says
+so of itself ("ROT270 in MAME: the board's image is turned counter-clockwise to
+stand upright, which is screen_rotate's rotate_ccw=1 case"). So every one of
+them is **`vertical (ccw)`**, and no per-set direction is needed.
+
+Confirmed against a real MiSTer's arcade collection (1063 `.mra`): 177
+`vertical (ccw)`, 176 `vertical (cw)`, 555 `horizontal` — and 16 files carrying
+`<rotation>1</rotation>`, which were this project's, installed on that board.
+
+### Two traps hit while fixing it, both worth keeping
+
+**The base generators are destructive if run alone.** `gen_gunnail_mra.py` and
+friends rewrite each `.mra` from scratch, which drops the `<rom index="3">`
+hiscore block, `<nvram>` and the cheat block that `gen_hiscore_mra.py` and
+`gen_cheats_mra.py` add as *later* stages — 616 deleted lines across 27 files
+on the first attempt here. They also write clones flat into `releases/`, where
+the committed tree keeps them under `_alternatives/_Parent/`, adding 66
+duplicate files. The regeneration was reverted and the tag fixed textually in
+place instead; the generators are corrected for the next full pipeline run.
+**Run the whole pipeline or none of it.**
+
+**`--` is illegal inside an XML comment.** The first version of the explanatory
+comment above contained `strncasecmp(text, "vertical", 8) --` and broke
+well-formedness in all 45 files at once. That is precisely what commit 08b52ad
+("make every file well-formed XML so the downloader db can tag it") was about:
+the downloader's strict parser silently drops every content-derived tag from a
+file it cannot parse. Caught by parsing all 97 `.mra` with ElementTree before
+committing, which is now also asserted inside the generators.
+
+**Status:** fixed. 45 `.mra` rewritten, 3 generators and the template
+corrected, all 97 files verified well-formed and carrying either
+`vertical (ccw)` (45) or no tag (52, horizontal). Not yet confirmed on a tate
+cabinet — the behavioural claim rests on the `mra_loader.cpp` quote in the
+report.

@@ -28,6 +28,18 @@ import os
 # core compacts it on load, see gunnail_core.sv's vprom_halfpop.
 VPROM = {'vandyke': ('ic100.bpr', '98ed1c97'), 'vandykejal': ('ic100.bpr', '98ed1c97'), 'vandykejal2': ('ic100.bpr', '98ed1c97'), 'tharrier': ('21.bpr', 'fcd5efea'), 'tharrieru': ('21.bpr', 'fcd5efea'), 'tharrierb': ('21.bpr', 'fcd5efea'), 'mustang': ('10.bpr', '633ab1c9'), 'mustangs': ('90058-10', 'de156d99'), 'acrobatm': ('11.ic80', '633ab1c9'), 'macrossbl': ('82s135.bin', '633ab1c9'), 'bioship': ('82s135.ic94', '98ed1c97'), 'sbsgomo': ('82s135.ic94', '98ed1c97'), 'blkheart': ('9.bpr', '98ed1c97'), 'blkheartj': ('9.bpr', '98ed1c97'), 'tdragon': ('91070.10', 'e6ead349'), 'tdragon1': ('91070.10', 'e6ead349'), 'ssmissin': ('ssm-pr1.114', 'ed0bd072'), 'airattck': ('82s147.uh6', 'ed0bd072'), 'airattcka': ('82s147.uh6', 'ed0bd072'), 'hachamf': ('82s135.ic50', '633ab1c9'), 'hachamfa': ('82s135.ic50', '633ab1c9'), 'hachamfb': ('82s135.ic50', '633ab1c9'), 'hachamfp': ('82s135.ic50', '633ab1c9'), 'macross': ('921a09', '633ab1c9'), 'gunnail': ('9_82s135.u72', '633ab1c9'), 'gunnailp': ('9_82s135.u72', '633ab1c9'), 'macross2': ('mcrs2bpr.10', 'e6ead349'), 'macross2k': ('mcrs2bpr.10', 'e6ead349'), 'macross2g': ('mcrs2bpr.10', 'e6ead349'), 'tdragon2': ('10.bpr', 'e6ead349'), 'tdragon3h': ('10.bpr', 'e6ead349'), 'tdragon2a': ('10.bpr', 'e6ead349'), 'bigbang': ('10.bpr', 'e6ead349'), 'bigbanga': ('10.bpr', 'e6ead349'), 'arcadian': ('prom2.u53', 'e6ead349'), 'raphero': ('prom2.u53', 'e6ead349'), 'rapheroa': ('prom2.u53', 'e6ead349'), 'sabotenb': ('8.ic37', '633ab1c9'), 'sabotenba': ('8.ic37', '633ab1c9'), 'bjtwin': ('8.ic37', '633ab1c9'), 'bjtwina': ('8.ic37', '633ab1c9'), 'bjtwinp': ('8.ic37', '633ab1c9'), 'bjtwinpa': ('8.ic37', '633ab1c9'), 'nouryoku': ('8.ic37', '633ab1c9'), 'nouryokup': ('8.ic37', '633ab1c9'), 'powerins': ('21.u71', '182cd81f'), 'powerinsj': ('21.u71', '182cd81f'), 'powerinspu': ('21.u71', '182cd81f'), 'powerinspj': ('21.u71', '182cd81f')}
 
+ROTATION_TEXT = 'vertical (ccw)'
+ROTATION_NOTE = """  <!-- ROT270 in nmk16.cpp. MiSTer matches this tag as TEXT, not as a
+       number: mra_loader.cpp does strncasecmp(text, "vertical", 8), so the
+       numeric form this file used to carry left is_vertical false and a
+       tate cabinet never picked up MiSTer.ini's [arcade_vertical] section.
+       The direction is explicit because MiSTer falls back to CW when none
+       is given, and ROT270 turns counter-clockwise to stand upright (the
+       core's own rotate_ccw=1 case). -->
+"""
+assert "--" not in ROTATION_NOTE.replace("<!--", "").replace("-->", ""), \
+    "XML forbids '--' inside a comment"
+
 def vprom_rom_block(setname, zips):
     e = VPROM.get(setname)
     if not e:
@@ -346,7 +358,7 @@ def mra(setname, parent, desc, game_line, maincpu, overrides, dip_overrides=None
   <rbf>NMK16_Macross2</rbf>
 """)
     if p["rotation"]:
-        out.append(f"\n  <!-- ROT270 in nmk16.cpp -->\n  <rotation>{p['rotation']}</rotation>\n")
+        out.append("\n" + ROTATION_NOTE + f"  <rotation>{ROTATION_TEXT}</rotation>\n")
     out.append(f"""
   <!-- DSW1/DSW2 defaults and the hidden game-select third byte, as the parent. -->
   <switches default="{p['switches']}">

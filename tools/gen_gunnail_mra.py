@@ -93,6 +93,18 @@ COIN16_B = "5C_3C,2C_1C,3C_2C,1C_4C,4C_1C,1C_6C,2C_5C,1C_2C,4C_3C,1C_7C,3C_1C,1C
 COIN16_A = "Free_Play,2C_1C,3C_2C,1C_4C,4C_1C,1C_6C,2C_5C,1C_2C,4C_3C,1C_7C,3C_1C,1C_3C,3C_4C,1C_5C,2C_3C,1C_1C"
 COIN8_FREE = "Free_Play,1C_4C,3C_1C,1C_2C,4C_1C,1C_3C,2C_1C,1C_1C"
 COIN8_5C = "5C_1C,1C_4C,3C_1C,1C_2C,4C_1C,1C_3C,2C_1C,1C_1C"
+ROTATION_TEXT = 'vertical (ccw)'
+ROTATION_NOTE = """  <!-- ROT270 in nmk16.cpp. MiSTer matches this tag as TEXT, not as a
+       number: mra_loader.cpp does strncasecmp(text, "vertical", 8), so the
+       numeric form this file used to carry left is_vertical false and a
+       tate cabinet never picked up MiSTer.ini's [arcade_vertical] section.
+       The direction is explicit because MiSTer falls back to CW when none
+       is given, and ROT270 turns counter-clockwise to stand upright (the
+       core's own rotate_ccw=1 case). -->
+"""
+assert "--" not in ROTATION_NOTE.replace("<!--", "").replace("-->", ""), \
+    "XML forbids '--' inside a comment"
+
 COIN8_TD1 = "Free_Play,4C_1C,1C_3C,2C_1C,1C_4C,3C_1C,1C_2C,1C_1C"       # tdragon_prot (tdragon1)
 COIN8_STRAHL = "5C_1C,4C_1C,3C_1C,2C_1C,1C_4C,1C_3C,1C_2C,1C_1C"
 
@@ -1280,7 +1292,7 @@ def mra(setname, desc, game_line, spec, parent, overrides):
   <rbf>{rbf}</rbf>
 """)
     if spec["rot"]:
-        out.append("\n  <!-- ROT270 in nmk16.cpp -->\n  <rotation>1</rotation>\n")
+        out.append("\n" + ROTATION_NOTE + "  <rotation>%s</rotation>\n" % ROTATION_TEXT)
     out.append(f"""
   <!-- DSW1, DSW2 (defaults from the PORT_DIPNAME default values; ids in
        bit-value order, value 0 first), then the game-id byte the core
