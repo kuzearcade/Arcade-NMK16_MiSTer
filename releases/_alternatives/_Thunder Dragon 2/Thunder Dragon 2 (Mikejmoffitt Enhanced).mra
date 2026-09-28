@@ -6,6 +6,8 @@
     * the ROM checksum test is skipped (the program is modified)
   Credit: "Thunder Dragon 2 Enhancement Hacks" (c) 2018 Mike J Moffitt
   (mikejmoffitt), td2-enhancements: patch.s / td2-enhancement.ips.
+    https://www.arcade-projects.com/threads/thunder-dragon-2-enhancement-hacks.7595/
+    https://github.com/Mikejmoffitt/td2-enhancements
 
   Only MAME's tdragon2.zip is needed: the 4 runs (120 bytes) where
   the patched 6.rom differs from MAME's (crc ca348caf) are <patch>es at the
