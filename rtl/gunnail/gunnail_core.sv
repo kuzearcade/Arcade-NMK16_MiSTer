@@ -1546,7 +1546,12 @@ module gunnail_core #(
 				hs_prot_drop <= hs_prot_drop + 32'd1;
 		end
 		assign dbg_hs_prot_drop = hs_prot_drop;
-		assign hs_dout_word     = hs_word;
+		// The port's word on the cycle after it served hiscore, hs_word after.
+		// hiscore.v samples a read one cycle after the address goes out
+		// (SM_COMPAREREAD/DONE: the dump), as tdragon2/raphero's port gives
+		// it; hs_word alone came a cycle later, so every saved even byte but
+		// an entry's first was the one two addresses before (issue #8).
+		assign hs_dout_word     = port_hs_r ? mainram_dout : hs_word;
 	end
 	endgenerate
 	// 68000 big-endian: even address = high byte. In the HW build this is the

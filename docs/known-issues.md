@@ -2177,3 +2177,56 @@ corrected, all 97 files verified well-formed and carrying either
 `vertical (ccw)` (45) or no tag (52, horizontal). Not yet confirmed on a tate
 cabinet — the behavioural claim rests on the `mra_loader.cpp` quote in the
 report.
+
+### NMK-36 · High scores saved corrupt on NMK16_Gunnail and NMK16_Afega: every even byte after an entry's first was the byte two addresses before (CLOSED, fixed and verified on hardware)
+
+Reported as issue #8 for Bombjack Twin and GunNail: High Scores on, the OSD
+says it saved, and after a reload the scores are not there.
+
+**Cause.** NMK-24 made hiscore the lowest-priority master of
+`gunnail_core`'s work-RAM port and gave it its own read register, `hs_word`,
+loaded only on a cycle the port served hiscore. That costs a clock: the port
+registers the word, then `hs_word` registers it again. `hiscore.v`'s dump read
+(SM_COMPAREREAD/SM_COMPAREDONE) samples one clock after it moves the address,
+which is what `tdragon2_core`'s and `raphero_core`'s ports give and where
+every earlier high-score check (NMK-26, NMK-33) was made. On this core it
+sampled the previous word, with the byte lane of the current address: each
+odd byte was right (same word as the byte before), each even byte after an
+entry's first was the byte two addresses back. The restore path writes, so
+it was never affected. Both rbfs build `gunnail_core`, so all their sets with
+a high-score entry were affected.
+
+What a user sees depends on the entry's last byte:
+- **GunNail** (its third entry ends on an even address): the dump fails the
+  NMK-33 start/end validation on load, is discarded, and the game boots with
+  its default table -- "the scores are not there".
+- **Bombjack Twin** (ends on an odd address): the dump passes validation and
+  the corrupt table is restored.
+
+**Fix.** `hs_dout_word = port_hs_r ? mainram_dout : hs_word`: on the clock
+after the port served hiscore its own read is on the port's register, so it
+is taken from there; `hs_word` holds it afterwards. Another master's word
+still never reaches hiscore (`port_hs_r` is set only by a hiscore cycle).
+A hiscore read delayed by a protection MCU taking the port can still be
+sampled late; this fix does not change that case.
+
+**Verified.**
+- Simulation: `hiscore.v` against a model of each core's port, every table
+  byte a function of its address. On the `gunnail_core` model the save was
+  79/160 (bjtwin) and 2106/4217 (gunnail) bytes wrong, and 0 with the fix;
+  the `tdragon2_core` model was 0 either way.
+- DE10-Nano: High Scores On, no `.nvm`, 30 s of attract, OSD opened, the
+  written `.nvm` compared with MAME's RAM at frame 1200. On the
+  20260920 rbfs bjtwin 35/160, gunnail 1675/4217 and stagger1 (Afega) 9/60
+  bytes differed; on the rebuilt rbfs (`Arcade-NMK16_Gunnail_20261004.rbf`,
+  `Arcade-NMK16_Afega_20261004.rbf`) all three were identical. Restore: each
+  saved file patched to a top score of 7777 and the core reloaded; Bombjack
+  Twin's ranking showed `1st 7777 PPP` and GunNail's `1 STAGE1 7777 SMK`.
+
+**Leftover files.** A `.nvm` these games wrote before the fix is corrupt.
+Where it fails validation (GunNail) it is discarded and rewritten on the next
+OSD open; where it passes (Bombjack Twin) delete
+`config/nvram/<game>.nvm` or use Reset Scores. High Scores is still Off by
+default and needs System -> Save settings to survive a reload (NMK-26).
+
+**Status:** fixed (2026-10-04, release v2026-10-04).

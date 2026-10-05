@@ -52,14 +52,16 @@ and its 96 / 112 MHz video clocks added about 1,500 ALMs and 40–60 M10K
 per core over the day before; the savestate engine, the two CPU park
 monitors and the FM register shadow another ~800–1,200 ALMs and 2–5 M10K;
 Macross2's 112 MHz clock still needs a seed pick after any logic change --
-seed 11 for this build, where seeds 1, 3, 5 and 7 all missed by 0.05–0.5 ns):
+seed 11 for this build, where seeds 1, 3, 5 and 7 all missed by 0.05–0.5 ns;
+`NMK16_Gunnail` and `NMK16_Afega` rebuilt on 2026-10-04 for NMK-36, worst
+slack of setup and hold):
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
 | `NMK16_Macross2` | 20,594 (49%) | 534 / 553 | +0.319 ns |
-| `NMK16_Gunnail` | 31,507 (75%) | 525 / 553 | +0.660 ns |
+| `NMK16_Gunnail` | 31,408 (75%) | 525 / 553 | +0.201 ns |
 | `NMK16_Raphero` | 25,330 (60%) | 520 / 553 | +0.525 ns |
-| `NMK16_Afega` | 23,238 (55%) | 468 / 553 | +0.391 ns |
+| `NMK16_Afega` | 23,410 (56%) | 468 / 553 | +0.248 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
