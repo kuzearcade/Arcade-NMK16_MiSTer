@@ -631,6 +631,10 @@ sprite-and-scroll evidence for that core is the board captures).
   fails, so the game boots with its own defaults and the next OSD open
   writes a good file over the bad one. Deleting `config/nvram/<game>.nvm`
   or using Reset Scores does the same by hand.
+- **2026-10-05:** the dump validation is removed again (NMK-37): its
+  start/end comparison also rejected real saves once a new score changed
+  the table's first or last byte. Old noise files are restored again;
+  Reset Scores or deleting the `.nvm` clears one.
 
 ### NMK-30 · redfoxwp2 (Hong Hu Zhanji II, China set 1): noise on screen, never ran (FIXED, data-only)
 
@@ -2223,10 +2227,68 @@ sampled late; this fix does not change that case.
   saved file patched to a top score of 7777 and the core reloaded; Bombjack
   Twin's ranking showed `1st 7777 PPP` and GunNail's `1 STAGE1 7777 SMK`.
 
-**Leftover files.** A `.nvm` these games wrote before the fix is corrupt.
-Where it fails validation (GunNail) it is discarded and rewritten on the next
-OSD open; where it passes (Bombjack Twin) delete
-`config/nvram/<game>.nvm` or use Reset Scores. High Scores is still Off by
+**Leftover files.** A `.nvm` these games wrote before the fix is corrupt:
+delete `config/nvram/<game>.nvm` or use Reset Scores. (Until NMK-37 removed
+the file check, GunNail's was discarded automatically; it no longer is.) High Scores is still Off by
 default and needs System -> Save settings to survive a reload (NMK-26).
 
 **Status:** fixed (2026-10-04, release v2026-10-04).
+
+### NMK-37 · High scores that never restored: the NMK-33 file check discarded real saves, and six hiscore.dat records never matched their games (CLOSED, fixed and verified on hardware)
+
+Found by a board sweep of all 83 `.mra` with a high-score table (2026-10-04,
+the v2026-10-04 bitstreams): High Scores On, no `.nvm`, 30 s of attract, OSD
+opened, the written file compared with MAME's RAM at frame 1200; then one
+score byte of that file changed, the core reloaded and the OSD opened again
+(a restore that did not land leaves RAM unlike the file, and the autosave
+writes the game's own table over it). 76 sets saved and restored. Seven did
+not, for two reasons, and the second turned out to reach every set.
+
+**1. The NMK-33 file check.** `hiscore.v` compared each entry's first and
+last byte in the downloaded file with the config's start/end values and
+discarded the file on a mismatch. Those values are hiscore.dat's checks of
+the game's RAM at boot, against its default table; nothing says the saved
+table keeps them. In most games they are part of the table -- bjtwin's end
+byte is the 10th name's last initial, raphero's the low byte of the 3rd
+score -- so once a player's score entered the table and shifted it, the next
+load threw the file away. Shown on the board with the v2026-10-04 Gunnail
+rbf: bjtwin's saved table with only its last byte changed (`4C` -> `41`) was
+discarded. Acrobat Mission hit it with no play at all: its third record is a
+single flag byte at 0x80021 that must read 0x48 at boot and that the game
+rewrites continually afterwards (0xDB, 0xBC, 0xDD in different runs), so
+its saved file never passed. MAME's plugin does not inspect the file and
+restores both.
+
+Fix: the check is gone (`hiscore.v` back to upstream's restore path, the
+RAM-side start/end check unchanged). The cost is NMK-33's protection: a
+`.nvm` of bus noise written by a pre-2026-09-19 bitstream is restored again
+instead of being ignored. Reset Scores, or deleting
+`config/nvram/<game>.nvm`, clears one.
+
+**2. Six records that never match.** In MAME 0.289's own plugin too (it
+never reports "scores read OK" for them), the range does not end or start
+where the game's table does, so the check byte is a 00 outside it:
+
+| Sets | hiscore.dat | Now |
+|---|---|---|
+| hachamf, hachamfb | fc000, 0x3f0, 01/4e | fc000, 0x3e0, 01/4e (62 records of 16 bytes end on the 'N' at fc3df) |
+| hachamfa, hachamfp | fc000, 0x3df, 01/4e | fc000, 0x3e0, 01/4e |
+| strahl | f30d9, 0x18f, 55/88 | f30d9, 0x103, 55/88 (the World set's names are 8 bytes, strahlj's longer) |
+| rapheroa | 1fe600, 0x60, 00/01 | 1fe601, 0x5b, 01/42 (raphero's layout; its default last byte is 0x42) |
+
+`tools/gen_hiscore_mra.py` carries them as `HS_RECORD_OVERRIDE`; the six
+`.mra` were rewritten in place (re-running the generator's record code over
+all 83 changes only these six). With a hiscore.dat carrying the new records,
+MAME's plugin restores a patched table byte for byte on all six.
+
+**Verified** on a DE10-Nano with the rebuilt rbfs (all four: `hiscore.v` is
+in each): the seven sets save (byte for byte as MAME, Acrobat Mission apart
+from its flag byte) and restore; with the saved table's last byte changed,
+the file is kept and restored on hachamf, hachamfa, hachamfb, hachamfp,
+strahl, rapheroa, bjtwin, gunnail, raphero, tdragon2, stagger1 and grdnstrm.
+(Acrobat Mission's last table byte is padding the game clears after boot, so
+that change cannot survive there; its restore is shown by the score-byte
+test.) Afega needed a new seed: 17 missed `pll_hdmi` setup by 0.118 ns,
+seed 9 meets it.
+
+**Status:** fixed (2026-10-05, release v2026-10-05).

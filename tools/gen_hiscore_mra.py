@@ -71,6 +71,30 @@ HS_CHECK_OVERRIDE = {
     'macross2k': {0x1fd600: (0x01, 0x63)},
 }
 
+# NMK-37, 2026-10-04: hiscore.dat records whose start/end checks never pass,
+# in MAME 0.289's own plugin as on the board: the range does not end (or
+# start) where the game's table does, so the check byte is a 00 outside it.
+# Measured from MAME's work RAM at frame 1200 and the boards' saved dumps.
+#   hachamf/hachamfb: 62 records of 16 bytes end at fc3df ('N', 0x4e); the
+#     dat's 0x3f0 runs 16 zero bytes past it.
+#   hachamfa/hachamfp: the same table; the dat's 0x3df stops one byte short,
+#     on the 0x00 before that 'N'.
+#   strahl: the World set keeps ten 8-byte names at f30d9 and ten 4-byte
+#     scores ending at f31db (0x88); the dat block is strahlj's, whose names
+#     are longer and whose table runs to f3267.
+#   rapheroa: the table is raphero's (1fe601, 0x5b bytes, first byte 01); the
+#     dat's 1fe600 starts a byte early, and the default last byte is 0x42
+#     where raphero has 0x70.
+HS_RECORD_OVERRIDE = {
+    # setname: {record address in the dat: (address, length, start, end)}
+    'hachamf':  {0xfc000: (0xfc000, 0x3e0, 0x01, 0x4e)},
+    'hachamfb': {0xfc000: (0xfc000, 0x3e0, 0x01, 0x4e)},
+    'hachamfa': {0xfc000: (0xfc000, 0x3e0, 0x01, 0x4e)},
+    'hachamfp': {0xfc000: (0xfc000, 0x3e0, 0x01, 0x4e)},
+    'strahl':   {0xf30d9: (0xf30d9, 0x103, 0x55, 0x88)},
+    'rapheroa': {0x1fe600: (0x1fe601, 0x5b, 0x01, 0x42)},
+}
+
 def records(lines,setname=None):
     recs=[]; total=0
     for ln in lines:
@@ -80,6 +104,8 @@ def records(lines,setname=None):
         start=int(f[4],16); end=int(f[5],16)
         ov=HS_CHECK_OVERRIDE.get(setname,{}).get(addr)
         if ov: start,end=ov
+        ov=HS_RECORD_OVERRIDE.get(setname,{}).get(addr)
+        if ov: addr,length,start,end=ov
         recs.append([(addr>>24)&0xFF,(addr>>16)&0xFF,(addr>>8)&0xFF,addr&0xFF,
                      (length>>8)&0xFF,length&0xFF,start,end])
         total+=length

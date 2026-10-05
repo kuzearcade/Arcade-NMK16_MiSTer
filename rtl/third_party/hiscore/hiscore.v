@@ -117,18 +117,14 @@ localparam SM_EXTRACTSAVE	 = 24;
 localparam SM_EXTRACTCOMPLETE	 = 25;
 
 localparam SM_STOPPED		 = 30;
-// MODIFIED (Arcade-NMK16_MiSTer, 2026-09-19): dump validation before the
-// restore. A .nvm written by an earlier bitstream while the module was held
-// in reset (NMK-33) is bus noise; restoring it put garbage into the game's
-// table and Rapid Hero hung on its high-score screen. Each entry's first and
-// last byte in the downloaded dump are now compared with the config's
-// start/end values before anything is written to RAM; a dump that fails is
-// discarded (downloaded_dump cleared), so the module behaves as if no file
-// existed and the next OSD open saves the game's own table over it.
-localparam SM_VALINIT		 = 26;
-localparam SM_VALSTART		 = 27;
-localparam SM_VALEND		 = 28;
-localparam SM_VALDONE		 = 29;
+// MODIFIED (Arcade-NMK16_MiSTer, 2026-09-19, removed 2026-10-04): a dump
+// validation pass (SM_VAL*) compared each entry's first and last byte in the
+// downloaded file with the config's start/end values and discarded the file
+// on a mismatch. Those values are hiscore.dat's checks of the game's RAM at
+// boot, against its default table; in most games they are part of the table
+// (a score digit, the last name's initial), so a real new score changed them
+// and the next load threw the scores away (NMK-37). Restored to upstream: the
+// file is not inspected, only the RAM is checked before the restore.
 
 /*
 Hiscore config data structure (version 1)
@@ -243,7 +239,6 @@ reg										compare_nonzero = 1'b1;	// High after extract and compare if any by
 reg										compare_changed = 1'b1;	// High after extract and compare if any byte is different to current hiscore data
 wire										check_mask = change_mask[compare_length]/* synthesis keep */;
 reg										dump_dirty = 1'b0;		// High if dump has changed since last save (or first load if no save has occurred)
-reg										dump_invalid = 1'b0;	// MODIFIED: set by the validation pass when an entry's start/end byte in the dump does not match the config
 
 wire [23:0]								address_data_in;
 wire [(CFG_LENGTHWIDTH*8)-1:0]	length_data_in;
@@ -586,56 +581,8 @@ begin
 							writing_scores <= 1'b0;
 							checking_scores <= 1'b0;
 							pause_cpu <= 1'b0;
-							dump_invalid <= 1'b0;
-							state <= SM_VALINIT;	// MODIFIED: validate the dump first (was SM_CHECKPREP)
+							state <= SM_CHECKPREP;
 						end
-					// MODIFIED: dump validation pass (no RAM access, CPU not paused)
-					// ------------------------------------------------------------
-					SM_VALINIT: // point the dump buffer at this entry's first byte, let the table/RAM outputs settle
-						begin
-							data_addr <= base_io_addr[HS_SCOREWIDTH-1:0];
-							state <= SM_TIMER;
-							next_state <= SM_VALSTART;
-							wait_timer <= 32'd2;
-						end
-					SM_VALSTART: // first byte must equal the entry's start value; move to its last byte
-						begin
-							if (hiscore_data_out != start_val) dump_invalid <= 1'b1;
-							data_addr <= base_io_addr[HS_SCOREWIDTH-1:0] + length - 1'b1;
-							state <= SM_TIMER;
-							next_state <= SM_VALEND;
-							wait_timer <= 32'd2;
-						end
-					SM_VALEND: // last byte must equal the entry's end value; next entry or done
-						begin
-							if (hiscore_data_out != end_val) dump_invalid <= 1'b1;
-							base_io_addr <= base_io_addr + length;
-							if (counter == total_entries)
-								state <= SM_VALDONE;
-							else
-							begin
-								counter <= counter + 1'b1;
-								state <= SM_TIMER;
-								next_state <= SM_VALINIT;
-								wait_timer <= 32'd2;
-							end
-						end
-					SM_VALDONE:
-						begin
-							counter <= 0;
-							base_io_addr <= 25'b0;
-							data_addr <= 0;
-							if (dump_invalid)
-							begin
-								// discard the dump: no restore now or after later resets; OSD saves proceed normally
-								downloaded_dump <= 1'b0;
-								restoring_dump <= 1'b0;
-								state <= SM_STOPPED;
-							end
-							else
-								state <= SM_CHECKPREP;
-						end
-
 					// Start/end check states
 					// ----------------------
 					SM_CHECKPREP: // Prepare start/end check run - pause CPU in readiness for RAM access

@@ -46,22 +46,22 @@ Every core is named `NMK16_<family>` and its bitstream ships as
 one family on an SD card shared with other arcade cores.
 
 All four fit the DE10-Nano's Cyclone V `5CSEBA6U23I7` (41,910 ALMs,
-553 M10K) with timing met, as built on 2026-09-19
-(`Arcade-NMK16_*_20260919.rbf`; the CRT Adjust chain
+553 M10K) with timing met, as built on 2026-10-05
+(`Arcade-NMK16_*_20261005.rbf`; the CRT Adjust chain
 and its 96 / 112 MHz video clocks added about 1,500 ALMs and 40–60 M10K
 per core over the day before; the savestate engine, the two CPU park
 monitors and the FM register shadow another ~800–1,200 ALMs and 2–5 M10K;
 Macross2's 112 MHz clock still needs a seed pick after any logic change --
-seed 11 for this build, where seeds 1, 3, 5 and 7 all missed by 0.05–0.5 ns;
-`NMK16_Gunnail` and `NMK16_Afega` rebuilt on 2026-10-04 for NMK-36, worst
-slack of setup and hold):
+seed 11, where seeds 1, 3, 5 and 7 all missed by 0.05–0.5 ns on the
+2026-09-19 build; Afega moved to seed 9 on 2026-10-05, where 17 missed by
+0.12 ns; worst slack of setup and hold):
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
-| `NMK16_Macross2` | 20,594 (49%) | 534 / 553 | +0.319 ns |
-| `NMK16_Gunnail` | 31,408 (75%) | 525 / 553 | +0.201 ns |
-| `NMK16_Raphero` | 25,330 (60%) | 520 / 553 | +0.525 ns |
-| `NMK16_Afega` | 23,410 (56%) | 468 / 553 | +0.248 ns |
+| `NMK16_Macross2` | 20,598 (49%) | 534 / 553 | +0.254 ns |
+| `NMK16_Gunnail` | 31,390 (75%) | 525 / 553 | +0.251 ns |
+| `NMK16_Raphero` | 25,327 (60%) | 520 / 553 | +0.046 ns |
+| `NMK16_Afega` | 23,290 (56%) | 468 / 553 | +0.248 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
@@ -149,9 +149,9 @@ verification results.
    hiscore.dat tables, but the option is **Off by default**: turn "High
    Scores" On and the scores are restored at boot and saved whenever the
    OSD is opened (Save Scores forces one). Save Scores and Reset Scores
-   are greyed out while the option is Off. A saved file that fails the
-   table's own start/end checks is ignored rather than restored.
-   `docs/known-issues.md` NMK-24 and NMK-33.
+   are greyed out while the option is Off. Reset Scores (or deleting
+   `config/nvram/<game>.nvm`) clears a bad saved file.
+   `docs/known-issues.md` NMK-24, NMK-33 and NMK-37.
 6. **Savestates**: every core has a Savestates page in the OSD (Slot
    1-4, Save state, Load state); on a keyboard F1-F4 load slot 1-4 and
    Alt+F1-F4 save. States go to the SD card through the MiSTer
