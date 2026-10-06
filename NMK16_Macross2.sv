@@ -218,6 +218,12 @@ wire [26:0] ioctl_addr_full;
 wire  [7:0] ioctl_dout;
 wire        ioctl_wait;
 
+// hps_io's own download signals; ioctl_* are ddr_rom_load's (NMK-39)
+wire        hio_download, hio_wr, hio_wait;
+wire [26:0] hio_addr;
+wire [7:0] hio_dout;
+wire [15:0] hio_index;
+
 hps_io #(.CONF_STR(CONF_STR)) hps_io
 (
 	.clk_sys(clk_sys),
@@ -239,17 +245,17 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
 
-	.ioctl_download(ioctl_download),
-	.ioctl_wr(ioctl_wr),
+	.ioctl_download(hio_download),
+	.ioctl_wr(hio_wr),
 	.ioctl_upload(ioctl_upload),
 	.ioctl_upload_req(ioctl_upload_req),
 	.ioctl_upload_index(8'd4),
 	.ioctl_din(ioctl_din),
 	.ioctl_rd(ioctl_rd),
-	.ioctl_addr(ioctl_addr_full),
-	.ioctl_dout(ioctl_dout),
-	.ioctl_wait(ioctl_wait),
-	.ioctl_index(ioctl_index),
+	.ioctl_addr(hio_addr),
+	.ioctl_dout(hio_dout),
+	.ioctl_wait(hio_wait),
+	.ioctl_index(hio_index),
 
 	.ps2_key(ps2_key)
 );
@@ -1226,12 +1232,28 @@ screen_rotate screen_rotate (
 	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(), .DDRAM_ADDR(rot_addr),
 	.DDRAM_DIN(rot_din), .DDRAM_BE(rot_be), .DDRAM_WE(rot_we), .DDRAM_RD()
 );
+// DDR3 ROM loading (NMK-39): with `address="0x30000000"` on the .mra's
+// <rom index="0">, Main_MiSTer writes the image into DDR3 and only frames it
+// with a download; ddr_rom_load reads it back and replays it to the loaders
+// above as that download (rtl/ddr_rom_load.sv). Its reads take the savestate
+// engine's place on the DDRAM port (that engine is idle during a download)
+// and give way to screen_rotate's writes. A streamed download passes through.
+wire        ld_active, ld_rd;
+wire [28:0] ld_addr;
+ddr_rom_load #(.DW(8)) ddr_rom_load (
+	.clk(clk_sys),
+	.h_download(hio_download), .h_index(hio_index), .h_wr(hio_wr), .h_addr(hio_addr), .h_dout(hio_dout), .h_wait(hio_wait),
+	.c_download(ioctl_download), .c_index(ioctl_index), .c_wr(ioctl_wr), .c_addr(ioctl_addr_full), .c_dout(ioctl_dout),
+	.c_wait(ioctl_wait), .active(ld_active),
+	.clk_ddr(CLK_VIDEO), .ddr_busy(DDRAM_BUSY), .hold(rot_we), .ddr_rd(ld_rd), .ddr_addr(ld_addr),
+	.ddr_dout(DDRAM_DOUT), .ddr_dout_ready(DDRAM_DOUT_READY)
+);
 assign DDRAM_BURSTCNT = 8'd1;
-assign DDRAM_ADDR     = rot_we ? rot_addr : eng_addr;
+assign DDRAM_ADDR     = rot_we ? rot_addr : ld_rd ? ld_addr : eng_addr;
 assign DDRAM_DIN      = rot_we ? rot_din  : eng_din;
 assign DDRAM_BE       = rot_we ? rot_be   : 8'hFF;
 assign DDRAM_WE       = rot_we | eng_we;
-assign DDRAM_RD       = eng_rd;
+assign DDRAM_RD       = eng_rd | ld_rd;
 assign FB_FORCE_BLANK = 1'b0;
 
 reg  [26:0] act_cnt;

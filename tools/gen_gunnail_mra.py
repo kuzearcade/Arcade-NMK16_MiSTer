@@ -1303,7 +1303,7 @@ def mra(setname, desc, game_line, spec, parent, overrides):
         out.append(f'    <dip bits="{bits}" name="{x(name)}" ids="{x(ids)}"/>\n')
     out.append("  </switches>\n\n")
     out.append(f'  <buttons names="{BUTTONS[0]}" default="{BUTTONS[1]}"/>\n\n')
-    out.append(f'  <rom index="0" zip="{"|".join(zips)}" md5="none">\n')
+    out.append(f'  <rom index="0" zip="{"|".join(zips)}" md5="none" address="0x30000000">\n')
     for comment, parts in spec["regions"]:
         out.append(f"    <!-- {xc(comment)} -->\n")
         out.append(part_lines(parts, overrides))

@@ -58,10 +58,10 @@ seed 11, where seeds 1, 3, 5 and 7 all missed by 0.05–0.5 ns on the
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
-| `NMK16_Macross2` | 20,596 (49%) | 534 / 553 | +0.253 ns |
-| `NMK16_Gunnail` | 31,504 (75%) | 525 / 553 | +0.160 ns |
-| `NMK16_Raphero` | 25,264 (60%) | 520 / 553 | +0.246 ns |
-| `NMK16_Afega` | 23,309 (56%) | 468 / 553 | +0.245 ns |
+| `NMK16_Macross2` | 20,813 (50%) | 534 / 553 | +0.252 ns |
+| `NMK16_Gunnail` | 31,550 (75%) | 525 / 553 | +0.247 ns |
+| `NMK16_Raphero` | 25,381 (61%) | 520 / 553 | +0.246 ns |
+| `NMK16_Afega` | 23,435 (56%) | 468 / 553 | +0.245 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|

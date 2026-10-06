@@ -37,7 +37,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="sabotenb.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="sabotenb.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x080000 -->
     <interleave output="16">
       <part crc="367e87b7" name="ic75.sb2" map="01"/>

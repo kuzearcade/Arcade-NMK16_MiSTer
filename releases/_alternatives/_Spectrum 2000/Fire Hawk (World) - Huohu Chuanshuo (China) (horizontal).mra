@@ -37,7 +37,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="firehawk.zip|spec2k.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="firehawk.zip|spec2k.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x100000 (firehawk_map; u60 = even MAME offsets) -->
     <interleave output="16">
       <part crc="d6d71a50" name="fhawk_p1.u59" map="01"/>

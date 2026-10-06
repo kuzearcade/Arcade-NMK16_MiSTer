@@ -46,7 +46,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="tdragonb.zip|tdragon.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="tdragonb.zip|tdragon.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x040000 (bitswapped words: decode_tdragonb, applied by the core per fetch) -->
     <interleave output="16">
       <part crc="2fa1aa04" name="td_03.bin" map="01"/>

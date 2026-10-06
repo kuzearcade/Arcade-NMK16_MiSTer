@@ -48,7 +48,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="airattcka.zip|airattck.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="airattcka.zip|airattck.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x040000 -->
     <interleave output="16">
       <part crc="6589c005" name="5.ue10" map="01"/>

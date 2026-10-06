@@ -34,7 +34,7 @@
 
   <buttons names="LP,LK,HP,HK,Start,Coin" default="Y,B,A,X,Start,R"/>
 
-  <rom index="0" zip="powerinspj.zip|powerins.zip" md5="none">
+  <rom index="0" zip="powerinspj.zip|powerins.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x100000 @ 0x000000 (2 files, ROM_LOAD16_WORD_SWAP) -->
     <part crc="4ea18490" name="3.p000.pc_j_12-1_155e.u116"/>
     <part crc="9c0f23cf" name="4.p000.f_p4.u117"/>

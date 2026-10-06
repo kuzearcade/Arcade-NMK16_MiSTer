@@ -38,7 +38,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="redhawkg.zip|stagger1.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="redhawkg.zip|stagger1.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x040000 (init_redhawkg scramble) -->
     <interleave output="16">
       <part crc="483802fd" name="3.bin" map="01"/>

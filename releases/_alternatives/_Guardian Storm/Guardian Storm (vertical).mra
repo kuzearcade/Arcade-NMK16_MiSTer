@@ -48,7 +48,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="grdnstrmv.zip|grdnstrm.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="grdnstrmv.zip|grdnstrm.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x080000 (init_grdnstrm scramble) -->
     <interleave output="16">
       <part crc="05920a99" name="afega3.u107" map="01"/>

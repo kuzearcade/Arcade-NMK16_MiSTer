@@ -37,7 +37,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="mustangb.zip|mustang.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="mustangb.zip|mustang.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x040000 -->
     <interleave output="16">
       <part crc="d8ccce31" name="mustang.13" map="01"/>

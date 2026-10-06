@@ -96,7 +96,7 @@
   <!-- One <rom> per ROM_REGION in ROM_START(macross2), same order as
        ROM_START's own regions (see this file's own header note on the
        oki2-size gap vs. tdragon2.mra's shared offset scheme). -->
-  <rom index="0" zip="macross2.zip" md5="none">
+  <rom index="0" zip="macross2.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x080000 @ 0x000000 -->
     <part crc="36a618fe" name="mcrs2j.3"/>
     <!-- audiocpu, 0x020000 @ 0x080000 -->

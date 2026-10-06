@@ -40,7 +40,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Button 4,Start,Coin" default="Y,B,A,X,Start,R"/>
 
-  <rom index="0" zip="tdragon3h.zip|tdragon2.zip" md5="none">
+  <rom index="0" zip="tdragon3h.zip|tdragon2.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x080000 @ 0x000000 (ROM_LOAD16_BYTE pair: l = odd MAME offsets on even stream addresses) -->
     <interleave output="16">
       <part crc="4699c313" name="l.27c020" map="01"/>

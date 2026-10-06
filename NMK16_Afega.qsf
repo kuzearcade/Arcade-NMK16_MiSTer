@@ -310,6 +310,7 @@ set_global_assignment -name SEARCH_PATH rtl/third_party/jt51/hdl
 set_global_assignment -name SEARCH_PATH rtl/third_party/jtopl/hdl
 set_global_assignment -name VERILOG_FILE rtl/pll_video96.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video_retime.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddr_rom_load.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/seibu/seibu_sound.sv
 set_global_assignment -name VERILOG_FILE rtl/third_party_gen/t80/T80s.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/bjtwin/nmk_irq_hacky.sv

@@ -44,7 +44,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="macross.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="macross.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x080000 (ROM_LOAD16_WORD_SWAP) -->
     <part crc="33318d55" name="921a03"/>
     <!-- NMK004 external program, 0x010000 -->

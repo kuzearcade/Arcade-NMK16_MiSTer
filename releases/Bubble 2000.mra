@@ -37,7 +37,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="bubl2000.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="bubl2000.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x040000 (init_bubl2000 scramble) -->
     <interleave output="16">
       <part crc="b386041a" name="rom11.107" map="01"/>

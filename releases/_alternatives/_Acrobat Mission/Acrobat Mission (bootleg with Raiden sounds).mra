@@ -45,7 +45,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="acrobatmbl.zip|acrobatm.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="acrobatmbl.zip|acrobatm.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x040000 (the PIC patch of init_acrobatmbl is applied by the core) -->
     <interleave output="16">
       <part crc="ae6d2349" name="3.10f" map="01"/>

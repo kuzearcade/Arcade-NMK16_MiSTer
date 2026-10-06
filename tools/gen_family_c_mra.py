@@ -370,7 +370,7 @@ def mra(setname, parent, desc, game_line, maincpu, overrides, dip_overrides=None
     out.append("  </switches>\n\n")
     names, default = p["buttons"]
     out.append(f'  <buttons names="{names}" default="{default}"/>\n\n')
-    out.append(f'  <rom index="0" zip="{setname}.zip|{p.get("zip_parent", parent)}.zip" md5="none">\n')
+    out.append(f'  <rom index="0" zip="{setname}.zip|{p.get("zip_parent", parent)}.zip" md5="none" address="0x30000000">\n')
     out.append(f"    <!-- {p.get('maincpu_comment', 'maincpu, 0x080000 @ 0x000000')} -->\n")
     if maincpu[0] == "interleave":
         out.append('    <interleave output="16">\n')

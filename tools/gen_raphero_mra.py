@@ -98,7 +98,7 @@ BODY = '''<misterromdescription>
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="{zip}" md5="none">
+  <rom index="0" zip="{zip}" md5="none" address="0x30000000">
     <!-- maincpu, 0x080000 @ 0x000000 (ROM_LOAD16_WORD_SWAP) -->
     <part crc="{main_crc}" name="{main_name}"/>
     <!-- audiocpu (TMP90841), 0x020000 @ 0x080000 -->

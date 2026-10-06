@@ -40,7 +40,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Button 4,Start,Coin" default="Y,B,A,X,Start,R"/>
 
-  <rom index="0" zip="bigbang.zip|tdragon2.zip" md5="none">
+  <rom index="0" zip="bigbang.zip|tdragon2.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x080000 @ 0x000000 -->
     <part crc="28e5957a" name="eprom.3"/>
     <!-- audiocpu, 0x020000 @ 0x080000 -->

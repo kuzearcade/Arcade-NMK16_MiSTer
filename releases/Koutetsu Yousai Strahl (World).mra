@@ -36,7 +36,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="strahl.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="strahl.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x040000 -->
     <interleave output="16">
       <part crc="bfd021cf" name="strahl-01.ic83" map="01"/>

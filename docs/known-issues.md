@@ -2337,3 +2337,48 @@ stopped core was putting out.
 Timing met at each bitstream's seed: Afega +0.729 / +0.245 ns, Gunnail
 +0.515 / +0.160, Macross2 +0.386 / +0.253, Raphero +0.437 / +0.246 (setup /
 hold).
+
+### NMK-39 — DDR3 ROM loading (closed, measured)
+
+With `address="0x30000000"` on an `.mra`'s `<rom index="0">`, Main_MiSTer
+assembles the ROM image straight into DDR3 and only frames it with a
+download (ioctl_addr carrying the length, no writes); streamed, the image
+crosses the HPS bridge at about 1 MB/s (one byte per HPS transfer).
+`rtl/ddr_rom_load.sv` sits between hps_io and the core:
+
+- a streamed download passes straight through (an `.mra` without `address=`
+  still loads, checked on the board);
+- a download on index 0 that ends with no write is a DDR3 load: the image
+  is read back from DDR3 (one 64-bit read at a time, one word prefetched)
+  and replayed to the core's loaders as the download it replaces, one write
+  at a time, at least 8 clocks apart and never while the core holds
+  ioctl_wait. The core sees one download from the first rise to the last
+  replayed byte, so its reset and settling span the replay;
+- hps_io's later downloads (the `<switches>`, the hiscore config, the
+  `.nvm`) wait on ioctl_wait until the replay is done.
+
+The reads take the savestate engine's place on the DDRAM port (that engine
+is idle during a download) and give way to screen_rotate's writes. The
+`.mra` generators write `address=`, and every `.mra` in `releases/` has it.
+A unit test (both widths, unrelated clocks, a random DDR3 latency, busy and
+rotation cycles, a random ioctl_wait) checks every byte and address, the
+`<switches>` download started during a replay, and a streamed download after
+it.
+
+On the board, the largest set loaded through its `.mra`, how much earlier
+the game runs than on the release (the two HDMI recordings aligned on the
+game's own frames):
+
+| Bitstream (set) | Image | Earlier |
+|---|---|---|
+| Macross2 (Power Instinct) | 16.5 MB | 11.8 s |
+| Raphero (Rapid Hero) | 15.5 MB | 11.3 s |
+| Afega (Fire Hawk) | 8.0 MB | 6.0 s |
+| Gunnail (Nouryoku Koujou Iinkai) | 6.9 MB | 5.1 s |
+
+Power Instinct's own ROM check passes after a DDR3 load (PROGRAM, SPRITE and
+SOUND ROM CHECK OK); the old `.mra` (no `address=`) loads the same as on the
+release on all four. The replay runs at about 3.5 MB/s, the loaders'
+ioctl_wait the limit. Timing met at each bitstream's seed: Afega +0.568 /
++0.245 ns, Gunnail +0.552 / +0.247, Macross2 +0.373 / +0.252, Raphero +0.421
+/ +0.246 (setup / hold).

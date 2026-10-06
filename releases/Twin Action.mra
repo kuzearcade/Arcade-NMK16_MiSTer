@@ -37,7 +37,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="twinactn.zip|nmk004.zip" md5="none">
+  <rom index="0" zip="twinactn.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x040000 -->
     <interleave output="16">
       <part crc="fe8cff9c" name="afega.uj12" map="01"/>

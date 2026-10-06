@@ -61,7 +61,7 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
-  <rom index="0" zip="rapheroa.zip|arcadian.zip" md5="none">
+  <rom index="0" zip="rapheroa.zip|arcadian.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x080000 @ 0x000000 (ROM_LOAD16_WORD_SWAP) -->
     <part crc="ec9b4f05" name="rhp94099.3"/>
     <!-- audiocpu (TMP90841), 0x020000 @ 0x080000 -->
