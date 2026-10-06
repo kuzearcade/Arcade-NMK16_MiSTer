@@ -134,11 +134,17 @@ module video_retime #(
 	wire [9:0] hs_width  = m7 ? R_HW_7 : R_HW_8;
 	wire [9:0] vs_rel    = 10'd24;
 
-	reg        running = 1'b0;
-	reg [12:0] hclk;              // clk_r within the line (13 bits: LINE_CLKS may be 6144)
-	reg [4:0]  pix_div;           // clk_r within the pixel (5 bits: DIV may be 16)
-	reg [9:0]  hcount_r;          // pixel within the line
-	reg [9:0]  vcount_r;          // line, 0..277 (one behind the write side)
+	// MODIFIED (Arcade-NMK16_MiSTer, NMK-38; Arcade-GingaNin_MiSTer's GN-14): the read
+	// side runs from configuration, not from the first write-side frame. The
+	// core's raster is held in reset through the whole ROM download, so the
+	// first frame edge came only after it: until then there was no sync, and
+	// analog and direct video lost the picture (the menu's loading screen
+	// included). The first real frame edge re-places the read side (once).
+	reg        running = 1'b1;
+	reg [12:0] hclk = 13'd0;      // clk_r within the line (13 bits: LINE_CLKS may be 6144)
+	reg [4:0]  pix_div = 5'd0;    // clk_r within the pixel (5 bits: DIV may be 16)
+	reg [9:0]  hcount_r = 10'd0;  // pixel within the line
+	reg [9:0]  vcount_r = 10'd0;  // line, 0..277 (one behind the write side)
 
 	wire       pix_tick = (pix_div == r_div - 5'd1);
 	/* verilator lint_off WIDTHTRUNC */
@@ -165,6 +171,17 @@ module video_retime #(
 	reg  [23:0] rgb_q;
 	always @(posedge clk_r) rgb_q <= buf_mem[{vcount_r[0], r_x[8:0]}];
 
+	// MODIFIED (NMK-38): black while the core's raster is stopped (its reset,
+	// the download): read-side frames since the last write-side frame start,
+	// saturating; two without one and the two-line buffer holds stale lines
+	reg  [1:0] stale = 2'd3;
+	always @(posedge clk_r) begin
+		if (frame_edge) stale <= 2'd0;
+		else if (running && pix_tick && hcount_r == r_ht - 10'd1 && vcount_r == VTOTAL - 10'd1 && stale != 2'd3)
+			stale <= stale + 2'd1;
+	end
+	wire       blank_r = stale[1];
+
 	wire [9:0] vrel = (vcount_r >= v_end_r) ? (vcount_r - v_end_r) : (vcount_r + v_blank_r);
 	wire       hs_now = (hcount_r >= hs_start) && (hcount_r < hs_start + hs_width);
 	wire       vs_now = (vrel >= vs_rel) && (vrel < vs_rel + 10'd3);
@@ -189,7 +206,7 @@ module video_retime #(
 			if (pix_tick) begin
 				pix_div  <= 5'd0;
 				ce_r     <= 1'b1;
-				rgb_r    <= r_act ? rgb_q : 24'd0;
+				rgb_r    <= (r_act && !blank_r) ? rgb_q : 24'd0;
 				de_r     <= r_act;
 				hb_r     <= ~r_hact;
 				vb_r     <= ~r_vact;

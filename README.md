@@ -46,8 +46,8 @@ Every core is named `NMK16_<family>` and its bitstream ships as
 one family on an SD card shared with other arcade cores.
 
 All four fit the DE10-Nano's Cyclone V `5CSEBA6U23I7` (41,910 ALMs,
-553 M10K) with timing met, as built on 2026-10-05
-(`Arcade-NMK16_*_20261005.rbf`; the CRT Adjust chain
+553 M10K) with timing met, as built on 2026-10-06
+(`Arcade-NMK16_*_20261006.rbf`; the CRT Adjust chain
 and its 96 / 112 MHz video clocks added about 1,500 ALMs and 40–60 M10K
 per core over the day before; the savestate engine, the two CPU park
 monitors and the FM register shadow another ~800–1,200 ALMs and 2–5 M10K;
@@ -58,10 +58,10 @@ seed 11, where seeds 1, 3, 5 and 7 all missed by 0.05–0.5 ns on the
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
-| `NMK16_Macross2` | 20,598 (49%) | 534 / 553 | +0.254 ns |
-| `NMK16_Gunnail` | 31,390 (75%) | 525 / 553 | +0.251 ns |
-| `NMK16_Raphero` | 25,327 (60%) | 520 / 553 | +0.046 ns |
-| `NMK16_Afega` | 23,290 (56%) | 468 / 553 | +0.248 ns |
+| `NMK16_Macross2` | 20,596 (49%) | 534 / 553 | +0.253 ns |
+| `NMK16_Gunnail` | 31,504 (75%) | 525 / 553 | +0.160 ns |
+| `NMK16_Raphero` | 25,264 (60%) | 520 / 553 | +0.246 ns |
+| `NMK16_Afega` | 23,309 (56%) | 468 / 553 | +0.245 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|

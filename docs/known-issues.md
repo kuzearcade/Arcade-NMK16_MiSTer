@@ -2292,3 +2292,48 @@ test.) Afega needed a new seed: 17 missed `pll_hdmi` setup by 0.118 ns,
 seed 9 meets it.
 
 **Status:** fixed (2026-10-05, release v2026-10-05).
+
+### NMK-38 — No sync on analog or direct video while the ROM loads (closed, measured)
+
+The core's raster is held at 0 by the game reset, which covers the ROM
+download. `video_retime`'s read side, which makes the sync for analog and
+direct video, only started at the first frame edge from that raster, so on a
+fresh load there was no sync until the game ran: a CRT or a direct-video
+converter lost the picture, the menu's loading screen with it. HDMI was
+unaffected (the scaler makes its own timing). Arcade-GingaNin_MiSTer's GN-14
+found it; the same fix here.
+
+- `video_retime` (marked MODIFIED): the read side runs from configuration
+  (its counters initialised, `running` set), so sync is there from the
+  moment the FPGA is loaded. The first frame edge from the core's raster
+  re-places it once, as it always did at the first frame: that is the one
+  timing jump left, at the game's start.
+- The picture is black while the raster is stopped: the read side counts
+  its own frames since the last write-side frame start, and two without one
+  blank it (the two-line buffer then holds stale lines). No reset wiring, so
+  the file is the same in every core that has it.
+- Not done: running the raster through the reset, which would remove the
+  jump; it changes the frame phase the CPUs start in.
+
+On the board, direct video on (the capture card cannot decode the 15 kHz
+picture, but shows one only when there is a signal), the largest set loaded
+through its `.mra`, seconds from the load to the first signal:
+
+| Bitstream (set) | release (20261005) | this change |
+|---|---|---|
+| Afega (Fire Hawk, 8.0 MB) | 11 s | 4.5 s |
+| Gunnail (Nouryoku Koujou Iinkai, 6.9 MB) | 15 s | 5.0 s |
+| Macross2 (Power Instinct) | not measured | not measured |
+| Raphero (Rapid Hero) | not measured | not measured |
+
+The capture card hangs on the Macross2 and Raphero direct-video modes
+(release and change alike), so those two were checked over HDMI only: both
+load and play as before.
+
+With direct video off, HDMI is as before (the game boots the same way); the
+menu's "Sending" screen is now on black, where it showed whatever the
+stopped core was putting out.
+
+Timing met at each bitstream's seed: Afega +0.729 / +0.245 ns, Gunnail
++0.515 / +0.160, Macross2 +0.386 / +0.253, Raphero +0.437 / +0.246 (setup /
+hold).
