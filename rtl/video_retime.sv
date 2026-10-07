@@ -74,7 +74,14 @@ module video_retime #(
 	// pulse stays out of the picture). Where the pulse precedes the active
 	// area on the same row (lowres: sync at 20, active from 92) that is
 	// the same as vb_r at the pulse. Off-path consumers keep vb_r.
-	output reg    vb_hs_r
+	output reg    vb_hs_r,
+	// (NMK-40) flips once a frame, a quarter of a line after where the read side
+	// expects the core's frame to start: the top ends the core's reset on it
+	output reg    rel_tog = 1'b0,
+	// lines from the end of the core's reset to its first frame start (its
+	// raster's reset line to the frame's end; static, from clk_w): rel_tog
+	// comes that many lines earlier
+	input  [9:0]  rel_lead
 );
 
 	// Geometry per mode (bitmap coordinates in the board's own pixel
@@ -150,7 +157,6 @@ module video_retime #(
 	/* verilator lint_off WIDTHTRUNC */
 	// LINE_CLKS is an integer parameter (<= 6144), so both fit 13 bits.
 	localparam [12:0] LINE_END_C  = LINE_CLKS - 1;
-	localparam [12:0] LINE_TAIL_C = LINE_CLKS - 32;
 	/* verilator lint_on WIDTHTRUNC */
 	wire       line_end = (hclk == LINE_END_C);
 
@@ -180,22 +186,79 @@ module video_retime #(
 		else if (running && pix_tick && hcount_r == r_ht - 10'd1 && vcount_r == VTOTAL - 10'd1 && stale != 2'd3)
 			stale <= stale + 2'd1;
 	end
-	wire       blank_r = stale[1];
+	// (NMK-40) and from the clock the core's reset (reset_w) is seen: a reset
+	// shorter than two frames showed the buffer's stale lines
+	reg  [1:0] rst_sync = 2'b11;
+	always @(posedge clk_r) rst_sync <= {rst_sync[0], reset_w};
+	// ... and on until the core's first frame start after it (the rest of
+	// that frame is its vertical blank, the buffer's lines older than the reset)
+	reg        rst_seen = 1'b1;
+	always @(posedge clk_r) if (rst_sync[1]) rst_seen <= 1'b1; else if (frame_edge) rst_seen <= 1'b0;
+	wire       blank_r = stale[1] | rst_sync[1] | rst_seen;
 
 	wire [9:0] vrel = (vcount_r >= v_end_r) ? (vcount_r - v_end_r) : (vcount_r + v_blank_r);
 	wire       hs_now = (hcount_r >= hs_start) && (hcount_r < hs_start + hs_width);
 	wire       vs_now = (vrel >= vs_rel) && (vrel < vs_rel + 10'd3);
 
-	// Expected read position at a write frame start: the placement below
-	// puts the read side at (line 277, hclk 0) one clock AFTER the frame
-	// edge, so exactly one frame later the edge finds it on the last clock
-	// of line 276 (hclk 3583); accept a window either side of that wrap.
-	wire in_phase = running && (((vcount_r == VTOTAL - 10'd1) && (hclk < 13'd32)) ||
-	                            ((vcount_r == VTOTAL - 10'd2) && (hclk >= LINE_TAIL_C)));
-
+	// MODIFIED (Arcade-NMK16_MiSTer, NMK-40; Arcade-GingaNin_MiSTer's GN-16): the read side's position in its frame (fpos, clk_r),
+	// and where it expects the core's frame to start (ref). The placement
+	// below puts the read side at (line VTOTAL-1, hclk 0) one clock after the
+	// frame edge, so the nominal edge is the clock before that (FR_NOM); a
+	// later edge within 32 clocks of ref is in phase.
+	//   After the core's raster has been stopped (the reset: `stale`, two
+	// frames without an edge) its first edge need not be: the top ends the
+	// reset on rel_tog, a quarter of a line after FR_NOM, so the edge comes a
+	// little after it, and anything from LINE/8 before FR_NOM to 3/4 of a line
+	// after it is taken as the new ref with no move of the read side -- the
+	// two-line buffer has room for a write side up to a line ahead of the
+	// read and an eighth of a line (less than any core's blanking) behind
+	// it. The sync carries on through the reset and the restart, so a CRT
+	// never re-locks. Any other edge places the read side as before.
+	localparam integer VT_INT   = {22'd0, VTOTAL};
+	localparam integer FR_LEN   = VT_INT * LINE_CLKS;
+	localparam integer FR_NOM_I = (VT_INT - 1) * LINE_CLKS - 1;
+	localparam [20:0]  FR_LAST  = 21'(FR_LEN - 1);
+	localparam [20:0]  FR_NOM   = 21'(FR_NOM_I);
+	localparam [20:0]  FR_REL   = 21'(FR_NOM_I + LINE_CLKS / 4);
+	// the restart window, LINE/8 before FR_NOM to 3/4 of a line after it
+	// (inside the frame: FR_NOM is a line before its end)
+	localparam [20:0]  WIN_A    = 21'(FR_NOM_I - LINE_CLKS / 8);
+	localparam [20:0]  WIN_B    = 21'(FR_NOM_I + (LINE_CLKS * 3) / 4);
+	reg  [20:0] fpos = 21'd0;           // (line, hclk) = (0, 0) at configuration, as the counters
+	// rpos: clocks since the position the core's frame is expected at (ref),
+	// so an edge is in phase when rpos is within 32 of 0 (either side)
+	reg  [20:0] rpos = 21'(FR_LEN - FR_NOM_I);
+	// the two tests, a clock ahead (registered; the window moves by a clock)
+	reg         near_ref = 1'b0, in_win = 1'b0;
+	// `stale` (above) counts read-side frames since the core's last edge
+	wire stalled = stale[1];
+	// FR_REL less rel_lead lines, in the frame; rel_lead is static (two
+	// registers in, then the product, then the fold)
+	reg  [9:0]  lead_r1 = 10'd0, lead_r2 = 10'd0;
+	reg  [22:0] lead_clks = 23'd0;
+	reg  [20:0] rel_pos = FR_REL;
+	always @(posedge clk_r) begin
+		lead_r1   <= rel_lead;
+		lead_r2   <= lead_r1;
+		lead_clks <= lead_r2 * 13'(LINE_CLKS);
+		rel_pos   <= ({2'b00, FR_REL} >= lead_clks) ? 21'({2'b00, FR_REL} - lead_clks) : 21'({2'b00, FR_REL} + 23'(FR_LEN) - lead_clks);
+	end
+	wire in_phase   = running && near_ref;
+	wire restart_ok = stalled && in_win;
+	always @(posedge clk_r) begin
+		fpos <= (fpos == FR_LAST) ? 21'd0 : fpos + 21'd1;
+		rpos <= (rpos == FR_LAST) ? 21'd0 : rpos + 21'd1;
+		near_ref <= (rpos < 21'd31) || (rpos >= 21'(FR_LEN - 33));
+		in_win   <= (fpos >= WIN_A - 21'd1) && (fpos < WIN_B);
+		if (fpos == rel_pos) rel_tog <= ~rel_tog;
+		if (frame_edge && !in_phase) begin
+			if (restart_ok) rpos <= 21'd1;                      // this edge's position is the new ref
+			else begin fpos <= FR_NOM + 21'd1; rpos <= 21'd1; end
+		end
+	end
 	always @(posedge clk_r) begin
 		ce_r <= 1'b0;
-		if (frame_edge && !in_phase) begin
+		if (frame_edge && !in_phase && !restart_ok) begin
 			running  <= 1'b1;
 			hclk     <= 13'd0;
 			pix_div  <= 5'd0;
