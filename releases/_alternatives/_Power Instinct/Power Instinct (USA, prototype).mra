@@ -34,6 +34,12 @@
 
   <buttons names="LP,LK,HP,HK,Start,Coin" default="Y,B,A,X,Start,R"/>
 
+  <!-- Game id (NMK-41): the <switches> third byte, sent ahead of the ROM
+       so the core starts the load in this game's video timing. -->
+  <rom index="2" md5="none">
+    <part>02</part>
+  </rom>
+
   <rom index="0" zip="powerinspu.zip|powerins.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x100000 @ 0x000000 (2 files, ROM_LOAD16_WORD_SWAP) -->
     <part crc="d1dd5a3f" name="3.p000.v4.0a.u116.27c240"/>

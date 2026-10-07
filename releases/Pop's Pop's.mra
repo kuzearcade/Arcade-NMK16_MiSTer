@@ -40,6 +40,12 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
+  <!-- Game id (NMK-41): the <switches> third byte, sent ahead of the ROM
+       so the core starts the load in this game's video timing. -->
+  <rom index="2" md5="none">
+    <part>25</part>
+  </rom>
+
   <rom index="0" zip="popspops.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x080000 (init_grdnstrm scramble) -->
     <interleave output="16">

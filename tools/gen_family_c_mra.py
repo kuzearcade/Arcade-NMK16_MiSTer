@@ -13,7 +13,9 @@ nmk_irq timing PROMs are fixed at synthesis and not downloaded.
 File names follow the MAME description; "/" cannot appear in a file
 name, so it becomes " - ". Run from the repo root:
     python3 tools/gen_family_c_mra.py
-then refresh the git-ignored autofire mirror of releases/:
+then (after gen_hiscore_mra.py and gen_cheats_mra.py) add the early game
+id ahead of the ROM (NMK-41) and refresh the git-ignored autofire mirror:
+    python3 tools/gen_gameid_mra.py
     python3 tools/gen_autofire_mra.py
 """
 import os

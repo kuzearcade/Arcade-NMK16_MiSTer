@@ -34,6 +34,12 @@
 
   <buttons names="LP,LK,HP,HK,Start,Coin" default="Y,B,A,X,Start,R"/>
 
+  <!-- Game id (NMK-41): the <switches> third byte, sent ahead of the ROM
+       so the core starts the load in this game's video timing. -->
+  <rom index="2" md5="none">
+    <part>0A</part>
+  </rom>
+
   <rom index="0" zip="powerinsb.zip|powerins.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x100000 @ 0x000000 (ROM_LOAD16_BYTE pair: 2r = odd MAME offsets on even stream addresses) -->
     <interleave output="16">

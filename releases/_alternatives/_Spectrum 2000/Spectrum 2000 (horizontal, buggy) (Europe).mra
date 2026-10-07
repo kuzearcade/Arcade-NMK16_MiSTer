@@ -39,6 +39,12 @@
 
   <buttons names="Button 1,Button 2,Button 3,Start,Coin" default="Y,B,A,Start,R"/>
 
+  <!-- Game id (NMK-41): the <switches> third byte, sent ahead of the ROM
+       so the core starts the load in this game's video timing. -->
+  <rom index="2" md5="none">
+    <part>2A</part>
+  </rom>
+
   <rom index="0" zip="spec2kh.zip|spec2k.zip|nmk004.zip" md5="none" address="0x30000000">
     <!-- maincpu, 0x080000 (init_spec2k scramble) -->
     <interleave output="16">

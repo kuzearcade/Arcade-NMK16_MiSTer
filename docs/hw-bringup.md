@@ -2403,7 +2403,7 @@ all share GunNail's sound and protection hardware (NMK004, YM2203, two
 OKIM6295, a TLCS-90 protection MCU on some) and differ from it in
 memory map, 68000 clock, screen geometry and a few video details. They
 now run as runtime game modes of `rtl/gunnail/gunnail_core.sv` —
-`game_sel`, from the `.mra` `<switches>` third byte — the same way
+`game_sel`, from the `.mra` `<switches>` third byte (sent ahead of the ROM as `<rom index="2">` since NMK-41) — the same way
 Power Instinct joined the NMK16_Macross2 rbf, rather than as nine more RBFs.
 Their earlier single-game sims under `rtl/<game>/` (hi-res geometry,
 never built for hardware) stay as register references.

@@ -95,6 +95,12 @@
        "Service" button beyond the DSW1 Service Mode toggle above. -->
   <buttons names="Button 1,Button 2,Button 3,Button 4,Start,Coin" default="Y,B,A,X,Start,R"/>
 
+  <!-- Game id (NMK-41): the <switches> third byte, sent ahead of the ROM
+       so the core starts the load in this game's video timing. -->
+  <rom index="2" md5="none">
+    <part>00</part>
+  </rom>
+
   <!-- One <rom> per ROM_REGION in ROM_START(tdragon2), same order as
        docs/hw-bringup.md's own offset table. -->
   <rom index="0" zip="tdragon2.zip" md5="none" address="0x30000000">

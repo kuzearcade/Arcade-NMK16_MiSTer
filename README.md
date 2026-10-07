@@ -58,10 +58,10 @@ seed 11, where seeds 1, 3, 5 and 7 all missed by 0.05–0.5 ns on the
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
-| `NMK16_Macross2` | 20,996 (50%) | 534 / 553 | +0.248 ns |
-| `NMK16_Gunnail` | 31,556 (75%) | 525 / 553 | +0.253 ns |
+| `NMK16_Macross2` | 20,972 (50%) | 534 / 553 | +0.252 ns |
+| `NMK16_Gunnail` | 31,780 (76%) | 525 / 553 | +0.250 ns |
 | `NMK16_Raphero` | 25,419 (61%) | 520 / 553 | +0.196 ns |
-| `NMK16_Afega` | 23,473 (56%) | 468 / 553 | +0.245 ns |
+| `NMK16_Afega` | 23,564 (56%) | 468 / 553 | +0.190 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |
 |---|---|---|
@@ -181,6 +181,15 @@ content in the shipped `.rbf` and made the build depend on locally generated
 `roms/*_vtiming.hex`. Since 2026-09-15 each `.mra` streams it as its own
 `<rom index="1">` region and `nmk_irq.sv` takes it over `ioctl_download`
 like every other ROM, so nothing copyrighted is compiled in.
+
+On the Gunnail, Afega and Macross2 RBFs each `.mra` also sends its game
+id — the `<switches>` third byte's game bits — as a one-byte
+`<rom index="2">` ahead of the ROM (`tools/gen_gameid_mra.py`). The
+switches themselves only arrive after the ROM; with the id up front the
+core runs the whole load in the game's own video timing, so analog and
+direct video keep one sync from the loading screen into the game
+(NMK-41). An `.mra` without it still loads, selecting the game from the
+switches as before.
 
 `tools/bootstrap.sh` is only needed to change a pinned commit, or to pull
 a dependency's full upstream tree (datasheets, testbenches, other-toolchain

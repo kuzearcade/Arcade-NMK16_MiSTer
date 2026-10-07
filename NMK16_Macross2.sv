@@ -575,18 +575,33 @@ assign dsw2_i = {8'hFF, dip_sw[1]};
 // OR'd with status[16] so game select still works if a MiSTer build ever
 // does mirror <switches> into status[] as well; either path alone selects
 // macross2 only for macross2.mra (tdragon2.mra's byte 2 is 00).
-assign game_macross2 = dip_sw[2][0] | status[16];
+// MODIFIED (NMK-41): the game id also arrives as its own one-byte download,
+// <rom index="2">, ahead of the ROM in every .mra (tools/gen_gameid_mra.py),
+// with the <switches> third byte's value. The switches come only after the
+// ROM, so until NMK-41 the core ran the load as the idle-0xFF game and
+// changed its video timing when they arrived: the hsync moved in the line
+// (or the vsync, on manybloc), and a CRT re-locked at the end of every load.
+// An .mra without the early byte still selects from the switches.
+reg  [7:0] game_id_early = 8'hFF;
+reg        game_id_seen  = 1'b0;
+always @(posedge clk_sys)
+	if (ioctl_download && ioctl_wr && (ioctl_index == 16'd2) && ioctl_addr[24:0] == 25'd0) begin
+		game_id_early <= ioctl_dout;
+		game_id_seen  <= 1'b1;
+	end
+wire [7:0] game_byte = game_id_seen ? game_id_early : dip_sw[2];
+assign game_macross2 = game_byte[0] | status[16];
 // Byte 2 bit 1 (or hidden status[28]) selects Power Instinct — its .mra
 // carries <switches default="FF,FB,02">. See tdragon2_core.sv's
 // game_powerins port for everything the mode changes.
-assign game_powerins = dip_sw[2][1] | status[28];
+assign game_powerins = game_byte[1] | status[28];
 // Byte 2 bits 2-5 (2026-09-12): the clone modes, see tdragon2_core.sv's
 // game_tdragon3h/game_pi_* ports. tdragon3h = 04; powerinsb = 0A,
 // powerinsa = 1A, powerinsc = 2A (all three with the powerins bit).
-wire game_tdragon3h  = dip_sw[2][2];
-wire game_pi_bootleg = dip_sw[2][3];
-wire game_pi_nosnd   = dip_sw[2][4];
-wire game_pi_gfxlsb  = dip_sw[2][5];
+wire game_tdragon3h  = game_byte[2];
+wire game_pi_bootleg = game_byte[3];
+wire game_pi_nosnd   = game_byte[4];
+wire game_pi_gfxlsb  = game_byte[5];
 // Byte 2 bit 6: hidden "unlock P1/P2 Autofire menu" flag — see the
 // status_menumask/CONF_STR h1 wiring above. Off (hidden) for every
 // current .mra, since none of them set it.

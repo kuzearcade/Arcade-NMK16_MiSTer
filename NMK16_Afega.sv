@@ -441,7 +441,22 @@ wire [15:0] dsw2_i = {8'hFF, dip_sw[1]};
 // same seed to +0.568 ns. Registering costs nothing here — a static value
 // reaching the core one cycle after load — so it is kept as headroom for
 // future ids even though this tree currently closes at +0.382 ns.
-wire [5:0] game_sel_comb = (dip_sw[2] == 8'hFF) ? 6'd0 : dip_sw[2][5:0];
+// MODIFIED (NMK-41): the game id also arrives as its own one-byte download,
+// <rom index="2">, ahead of the ROM in every .mra (tools/gen_gameid_mra.py),
+// with the <switches> third byte's value. The switches come only after the
+// ROM, so until NMK-41 the core ran the load as the idle-0xFF game and
+// changed its video timing when they arrived: the hsync moved in the line
+// (or the vsync, on manybloc), and a CRT re-locked at the end of every load.
+// An .mra without the early byte still selects from the switches.
+reg  [7:0] game_id_early = 8'hFF;
+reg        game_id_seen  = 1'b0;
+always @(posedge clk_sys)
+	if (ioctl_download && ioctl_wr && (ioctl_index == 16'd2) && ioctl_addr[24:0] == 25'd0) begin
+		game_id_early <= ioctl_dout;
+		game_id_seen  <= 1'b1;
+	end
+wire [7:0] game_byte = game_id_seen ? game_id_early : dip_sw[2];
+wire [5:0] game_sel_comb = (game_byte == 8'hFF) ? 6'd0 : game_byte[5:0];
 reg  [5:0] game_sel_r = 6'd0;
 always @(posedge clk_sys) game_sel_r <= game_sel_comb;
 assign game_sel = game_sel_r;

@@ -13,7 +13,7 @@ ROM parts, DIPs, buttons, hiscore and cheat tables byte for byte.
 
 autofire_releases/ is git-ignored: it is a derived local tree. Re-run this
 whenever anything in releases/ changes (the three gen_*_mra.py generators,
-gen_hiscore_mra.py, gen_cheats_mra.py, or a hand edit):
+gen_hiscore_mra.py, gen_cheats_mra.py, gen_gameid_mra.py, or a hand edit):
 
     python3 tools/gen_autofire_mra.py          # rebuilds autofire_releases/
     python3 tools/gen_autofire_mra.py --check  # only reports what is stale

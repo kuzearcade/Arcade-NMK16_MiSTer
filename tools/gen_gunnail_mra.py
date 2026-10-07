@@ -6,7 +6,9 @@ their straightforward clones. Everything below is transcribed from
 mame/src/mame/nmk/nmk16.cpp: GAME() lines, ROM_START blocks and
 INPUT_PORTS_START DIP tables. Run from the repo root:
     python3 tools/gen_gunnail_mra.py
-then refresh the git-ignored autofire mirror of releases/:
+then (after gen_hiscore_mra.py and gen_cheats_mra.py) add the early game
+id ahead of the ROM (NMK-41) and refresh the git-ignored autofire mirror:
+    python3 tools/gen_gameid_mra.py
     python3 tools/gen_autofire_mra.py
 
 Conventions (see docs/hw-bringup.md):

@@ -2428,3 +2428,46 @@ load and play as before, as do the other two.
 Timing met at each bitstream's seed: Afega +0.663 / +0.245 ns, Gunnail
 +0.448 / +0.253, Macross2 +0.633 / +0.248, Raphero +0.523 / +0.196 (setup /
 hold).
+
+### NMK-41 — The video timing changed at the end of every load (closed, measured)
+
+NMK-40 kept the sync through the core's reset, but a load of most sets
+still moved it once. The Gunnail, Afega and Macross2 cores take the game —
+and with it the video timing — from the `.mra` `<switches>` third byte,
+and Main_MiSTer sends the switches only after every `<rom>`. Until they
+came the core ran as the idle-0xFF game: GunNail's 384-px line on Gunnail
+and Afega, Power Instinct's 320-px one on Macross2. The low-res boards'
+line has the same length but its hsync at clock 320 of 6144 instead of
+5280, so the hsync jumped when the switches arrived; on Many Block the
+vsync moved 8 lines as well. A CRT re-locked; the capture card lost
+Spectrum 2000 (vertical) for 2–3 s on every load, and on HDMI the picture
+slid sideways and the scaler showed its new-mode banner as the game started.
+
+- Each `.mra` on those three RBFs now sends the game id first, as a
+  one-byte `<rom index="2">` (the switches' third byte, bits 5:0) placed
+  ahead of `<rom index="0">`: Main_MiSTer sends each `<rom>` as its parser
+  closes it, in file order. `tools/gen_gameid_mra.py` writes it (97 files;
+  it runs after the hiscore and cheat stages, before the autofire mirror).
+- The tops latch that byte and select the game from it once it has come,
+  from the switches otherwise, so an `.mra` without it still loads. The
+  Autofire unlock (bit 6) stays a switches-only flag.
+- The one timing change left is at the id's download, a moment after the
+  core is configured, before the ROM; from then on the load, the reset and
+  the game run in one timing.
+- Raphero has one timing for every set and reads no id; its three `.mra`
+  files are unchanged.
+
+On the board, direct video on, every Gunnail and Afega `.mra` loaded from
+the menu with the capture started 2 s after the load command: 79 of 82
+held one signal from the loading screen into the game, Spectrum 2000
+(vertical) included (5 of 5 lost it on the release). The other three
+(GunNail, its trap15 hack, Task Force Harrier) have CRT Adjust on in the
+test board's saved settings, a mode the card does not capture at all. All
+97 also loaded over HDMI to the game's picture (Macross2's, whose modes
+the card cannot take in direct video, with the same timeline as the
+release), and the release's Spectrum 2000 `.mra`, without the id, still
+loads and plays.
+
+Timing met at each bitstream's seed: Afega +0.524 / +0.190 ns, Gunnail
++0.454 / +0.250, Macross2 +0.653 / +0.252 (setup / hold). Raphero is not
+rebuilt.

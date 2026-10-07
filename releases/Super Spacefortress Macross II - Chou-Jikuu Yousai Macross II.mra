@@ -93,6 +93,12 @@
        on macross2 specifically (not tdragon2/gunnail/raphero)". -->
   <buttons names="Button 1,Button 2,Button 3,Button 4,Start,Coin" default="Y,B,A,X,Start,R"/>
 
+  <!-- Game id (NMK-41): the <switches> third byte, sent ahead of the ROM
+       so the core starts the load in this game's video timing. -->
+  <rom index="2" md5="none">
+    <part>01</part>
+  </rom>
+
   <!-- One <rom> per ROM_REGION in ROM_START(macross2), same order as
        ROM_START's own regions (see this file's own header note on the
        oki2-size gap vs. tdragon2.mra's shared offset scheme). -->
