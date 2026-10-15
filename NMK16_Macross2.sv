@@ -753,8 +753,13 @@ hiscore #(
 wire [23:0] ch_addr;
 wire  [7:0] ch_din;
 wire        ch_write, ch_access, ch_pause;
+wire        ss_busy;
 wire  [6:0] ch_avail;
 
+// No poke walk starts while a savestate runs (NMK-42): the engine masks pause so
+// the CPUs can reach their park monitors, and the back door takes main RAM's
+// port from a running CPU. A walk already under way when a save starts keeps
+// the CPU held (ch_pause is outside the ss_busy mask) until it ends.
 cheats ch (
 	.clk(clk_sys),
 	.reset(reset),
@@ -762,7 +767,7 @@ cheats ch (
 	.ioctl_addr(ioctl_addr), .ioctl_index(ioctl_index), .ioctl_dout(ioctl_dout),
 	.enable(status[38:32]),
 	.available(ch_avail),
-	.vblank(vblank_core),
+	.vblank(vblank_core & ~ss_busy),
 	.ram_addr(ch_addr), .ram_din(ch_din), .ram_write(ch_write),
 	.ram_access(ch_access), .pause_cpu(ch_pause)
 );
@@ -785,7 +790,7 @@ assign hs_access = hs_pause ? 1'b1     : ch_access;
 wire  [1:0] ss_slot;
 wire  [7:0] ss_info;
 wire        ss_save, ss_load, ss_info_req, ss_status_update;
-wire        ss_busy, ss_done_ok, ss_done_fail, ss_was_load;
+wire        ss_done_ok, ss_done_fail, ss_was_load;
 wire  [1:0] ss_fail_code;
 wire        ss_freeze, ss_frozen, ss_parked, ss_resume, ss_active, ss_wr, ss_replay, ss_replay_done;
 wire [19:0] ss_addr;
@@ -823,7 +828,7 @@ tdragon2_core #(.HW_ROMS(1),
 	.ROM_FETCH_WORD_REF_FILE("rtl/tdragon2/tdragon2_fetch_word_ref.hex"),
 	.ROM_FETCH_WORD_TOUCHED_FILE("rtl/tdragon2/tdragon2_fetch_word_touched.hex")) core
 (
-	.clk_sys(clk_sys), .reset(reset), .pause((status[29] | hs_pause | ch_pause) & ~ss_busy), .hs_addr(hs_addr), .hs_din(hs_din), .hs_dout(hs_dout), .hs_write(hs_write), .hs_access(hs_access), .game_macross2(game_macross2), .game_powerins(game_powerins),
+	.clk_sys(clk_sys), .reset(reset), .pause(((status[29] | hs_pause) & ~ss_busy) | ch_pause), .hs_addr(hs_addr), .hs_din(hs_din), .hs_dout(hs_dout), .hs_write(hs_write), .hs_access(hs_access), .game_macross2(game_macross2), .game_powerins(game_powerins),
 	.ss_freeze(ss_freeze), .ss_resume(ss_resume), .ss_active(ss_active), .ss_frozen(ss_frozen), .ss_parked(ss_parked),
 	.ss_addr(ss_addr), .ss_rdata(ss_rdata), .ss_wr(ss_wr), .ss_wdata(ss_wdata),
 	.ss_replay(ss_replay), .ss_replay_done(ss_replay_done),
