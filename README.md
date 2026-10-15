@@ -47,8 +47,8 @@ one family on an SD card shared with other arcade cores.
 
 All four fit the DE10-Nano's Cyclone V `5CSEBA6U23I7` (41,910 ALMs,
 553 M10K) with timing met, as built on 2026-10-07
-(`Arcade-NMK16_*_20261007.rbf`; Macross2 and Raphero rebuilt on
-2026-10-15 as `*_20261015.rbf`, NMK-42; the CRT Adjust chain
+(`Arcade-NMK16_*_20261007.rbf`; Macross2, Raphero and Gunnail rebuilt
+on 2026-10-15 as `*_20261015.rbf`, NMK-42 and NMK-43; the CRT Adjust chain
 and its 96 / 112 MHz video clocks added about 1,500 ALMs and 40–60 M10K
 per core over the day before; the savestate engine, the two CPU park
 monitors and the FM register shadow another ~800–1,200 ALMs and 2–5 M10K;

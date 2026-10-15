@@ -2507,3 +2507,30 @@ that went back to the saved point with play going on: Thunder Dragon 2
 
 Timing met at each bitstream's seed: Macross2 +0.135 / +0.199 ns, Raphero
 +0.423 / +0.147 (setup / hold). Gunnail and Afega are not rebuilt.
+
+### NMK-43 — A sound command during a savestate could stop the Z80 and every later save (closed, measured)
+
+Found from Sand Scorpion's SS-21, on the same wiring. On gunnailb and tomagic
+(`g_m2snd`, the Gunnail RBF) the sound driver takes every 68000 command
+through NMI: the line was `~z80_latch_pending & ~z80_nmi_park`, and the park
+monitor is served from the first NMI-entry fetch at 0x0066 while `ss_freeze`
+is up. A command's NMI arriving in that window entered the monitor instead of
+the driver's handler, the latch was never read, and `z80_latch_pending` held
+the line low: no NMI edge again, so no further command and no later park. On
+Sand Scorpion it stopped every save after the fourth to sixth.
+
+- While `ss_freeze` is up the latch is kept off the line, and the park NMI is
+  raised only after the line has been high for 2048 clocks; a command NMI
+  already pending enters the monitor by then and the park NMI is not raised.
+- When `ss_freeze` drops, a command still pending gives a fresh falling edge
+  to the driver's handler.
+- The other sets on the RBF keep the park NMI alone, as before.
+
+On the board the release did not show it on GunNail (bootleg): 20 of 20 saves
+in play were written (its commands evidently do not land in the park's
+window). With this change, GunNail (bootleg) 15 of 15 and Tom Tom Magic 10 of
+10 saves in play, each followed by a load back to the saved point with play
+going on, and the parent GunNail 3 of 3.
+
+Gunnail rebuilt at seed 3 (setup +0.471 ns, hold +0.250 ns). Afega shares
+`gunnail_core` but ships neither set and is not rebuilt.

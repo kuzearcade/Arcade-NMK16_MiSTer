@@ -3093,7 +3093,20 @@ module gunnail_core #(
 	wire z80_int_n = g_comad ? ~z80_latch_pending : g_afega ? ~(z80_latch_pending | (~g_fh_snd & ~ym51_irq_n)) : g_seibu ? seibu_int_n : g_tomagic ? opl_irq_n : ym_chip_irq_n;
 	wire z80_nmi_park, z80_sel_mon;
 	wire [7:0] z80_mon_data;
-	wire z80_nmi_n = (g_m2snd ? ~z80_latch_pending : 1'b1) & ~z80_nmi_park;
+	// NMK-43 (SandScrp's SS-21): on gunnailb/tomagic every command is an NMI,
+	// and the park takes the first NMI entry while ss_freeze is up, so a
+	// command's NMI landing there entered the monitor instead of the driver,
+	// the latch was never read and the line stayed low: no edge again, no
+	// command, no later park. While a savestate runs the latch is kept off the
+	// line and the park NMI waits until the line has been high for 2048 clocks
+	// (a pending command NMI enters the monitor by then and the park NMI is
+	// never raised); a command still pending at the end gives a fresh edge.
+	reg  [11:0] z80_park_arm = 12'd0;
+	always @(posedge clk_sys)
+		if (!ss_freeze) z80_park_arm <= 12'd0;
+		else if (~&z80_park_arm) z80_park_arm <= z80_park_arm + 12'd1;
+	wire z80_nmi_n = ~g_m2snd ? ~z80_nmi_park :
+	                 ss_freeze ? ~(z80_nmi_park & (&z80_park_arm)) : ~z80_latch_pending;
 	ss_z80_park z80_park (
 		.clk(clk_sys), .cen(z80_cen), .reset_n(z80_reset_n),
 		.park_req(ss_freeze), .parked(z80_parked), .resume(ss_resume),
