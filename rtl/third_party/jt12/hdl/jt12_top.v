@@ -79,6 +79,10 @@ parameter use_adpcm=0;
 parameter FULLFM=0;
 parameter JT49_DIV=2,
           YM2203_LUMPED=0;
+// NMK16 MiSTer local change: the SSG volume curve was hard-wired to jt49's
+// compressed COMP=1 table (~29 dB range); 5 is MAME ymfm's table (see
+// jt49_exp.v). Default kept at upstream's 3'b01.
+parameter [2:0] SSG_COMP=3'b01;
 parameter mask_div=1;
 
 wire flag_A, flag_B, busy;
@@ -455,7 +459,7 @@ endgenerate
 `ifndef NOSSG
 generate
     if( use_ssg==1 ) begin : gen_ssg
-        jt49 #(.COMP(3'b01), .CLKDIV(JT49_DIV), .YM2203_LUMPED(YM2203_LUMPED))
+        jt49 #(.COMP(SSG_COMP), .CLKDIV(JT49_DIV), .YM2203_LUMPED(YM2203_LUMPED))
             u_psg( // note that input ports are not multiplexed
             .rst_n      ( ~rst      ),
             .clk        ( clk       ),    // signal on positive edge

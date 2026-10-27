@@ -15,6 +15,12 @@ CORE_DIR := ../../../rtl/tdragon2
 RTL_DIR := ../../../rtl
 MODEL_DIR := ../../models
 ROMS_DIR := ../../../mame_roms
+GAME ?= tdragon2
+ifeq ($(GAME),macross2)
+OBJSFX := _m2
+GAME_VFLAGS := -GGAME_M2=1 -GVTIMING='"roms/macross2_vtiming.hex"' -GOKI1_HEX='"../macross2/roms/macross2_oki1.hex"' -GOKI2_HEX='"../macross2/roms/macross2_oki2.hex"'
+endif
+
 OBJ_DIR := obj_dir$(OBJSFX)
 DSW1 ?= 255
 DSW2 ?= 255
@@ -32,6 +38,18 @@ SOURCES := tdragon2_hw_top.sv $(CORE_DIR)/tdragon2_core.sv $(MACROSS2_DIR)/video
 all: run
 
 roms: ioctl-rom vtiming-rom
+
+macross2-roms:
+	python3 ../../../tools/mk_ioctl_stream.py --zip $(ROMS_DIR)/macross2.zip \
+		--region 0x000000:mcrs2j.3 \
+		--region 0x080000:mcrs2j.2 \
+		--region 0x0A0000:mcrs2j.1 \
+		--region 0x0C0000:bp932an.a04 \
+		--region 0x2C0000:bp932an.a07,bp932an.a08 \
+		--region 0x6C0000:bp932an.a06 \
+		--region 0x8C0000:bp932an.a05 \
+		--out roms/macross2_ioctl.bin
+	python3 ../../../tools/mkgfxrom.py --zip $(ROMS_DIR)/macross2.zip --mode concat --files mcrs2bpr.10 --out roms/macross2_vtiming.hex
 
 ioctl-rom:
 	python3 ../../../tools/mk_ioctl_stream.py --zip $(Z1) \
@@ -51,7 +69,7 @@ vtiming-rom:
 	python3 ../../../tools/mkgfxrom.py --zip $(Z1) --mode concat --files 10.bpr --out roms/tdragon2_vtiming.hex
 
 $(OBJ_DIR)/V$(TOP): $(SOURCES) tb_tdragon2_hw.cpp $(FX68K_DIR)/fx68k.sv roms/tdragon2_ioctl.bin roms/tdragon2_vtiming.hex
-	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --top-module $(TOP) $(EXTRA_VFLAGS) \
+	verilator --cc --exe --build -Wall -Wno-fatal -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-UNUSED -Wno-PINCONNECTEMPTY --Mdir $(OBJ_DIR) --top-module $(TOP) $(EXTRA_VFLAGS) $(GAME_VFLAGS) \
 		+define+SIMULATION +define+OKI_CACHE_DIAG \
 		-GDSW1=$(DSW1) -GDSW2=$(DSW2) \
 		-y $(FX68K_DIR) -y $(JT12_DIR)/hdl -y $(JT12_DIR)/jt49/hdl -y $(JT6295_DIR)/hdl \

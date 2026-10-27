@@ -152,9 +152,12 @@ jt49_exp u_exp(
     .dout   ( lin  )
 );
 
-wire [4:0] volA = { regarray[ 8][3:0], regarray[ 8][3] };
-wire [4:0] volB = { regarray[ 9][3:0], regarray[ 9][3] };
-wire [4:0] volC = { regarray[10][3:0], regarray[10][3] };
+// COMP=5 (NMK16 MiSTer local addition): amplitude v uses envelope step
+// 2v+1, as ymfm does ("amplitude 15 maps to envelope 31"); the {v,v[3]}
+// form below puts v=1..7 one step (~1.5-4 dB) low.
+wire [4:0] volA = COMP==3'd5 ? { regarray[ 8][3:0], |regarray[ 8][3:0] } : { regarray[ 8][3:0], regarray[ 8][3] };
+wire [4:0] volB = COMP==3'd5 ? { regarray[ 9][3:0], |regarray[ 9][3:0] } : { regarray[ 9][3:0], regarray[ 9][3] };
+wire [4:0] volC = COMP==3'd5 ? { regarray[10][3:0], |regarray[10][3:0] } : { regarray[10][3:0], regarray[10][3] };
 wire use_envA = regarray[ 8][4];
 wire use_envB = regarray[ 9][4];
 wire use_envC = regarray[10][4];

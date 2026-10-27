@@ -1123,15 +1123,20 @@ module raphero_core #(
 
 	wire [7:0] ym_chip_dout;
 	wire       ym_chip_irq_n;
-	wire signed [15:0] ym_snd;
-	jt03 ym_chip (
+	wire signed [15:0] ym_fm;
+	wire        [9:0]  ym_psg;
+	// SSG_COMP 5 = MAME ymfm's SSG volume table (jt49_exp.v); FM and SSG
+	// are mixed below at MAME's routes (tdragon2_core.sv has the story).
+	jt03 #(.SSG_COMP(3'd5)) ym_chip (
 		.rst(reset), .clk(clk_sys), .cen(ym_cen),
 		.din(ym_din_latch), .addr(ym_addr_sel), .cs_n(1'b0), .wr_n(ym_wr_n),
 		.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),
 		.IOA_in(8'hFF), .IOB_in(8'hFF), .IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
-		.psg_A(), .psg_B(), .psg_C(), .fm_snd(dbg_fm_snd), .psg_snd(dbg_psg_snd), .snd(ym_snd), .snd_sample(),
+		.psg_A(), .psg_B(), .psg_C(), .fm_snd(ym_fm), .psg_snd(ym_psg), .snd(), .snd_sample(),
 		.debug_view()
 	);
+	assign dbg_fm_snd  = ym_fm;
+	assign dbg_psg_snd = ym_psg;
 
 	// ------------------------------------------------------------------
 	// NMK112 — both OKI ROMs 0x400000 (masks 63). reg_sel = C810-C817's
@@ -1333,13 +1338,16 @@ module raphero_core #(
 	// ------------------------------------------------------------------
 	// Audio mix — mono, same balance as tdragon2_core.sv (raphero()'s
 	// routes are identical: FM 1.20, PSG 0.50 x3, each OKI 0.10): jt03's
-	// mixed snd + each OKI x 3/8, saturated.
+	// FM + SSG x 27 + each OKI x 3/2, saturated.
 	// ------------------------------------------------------------------
 	wire signed [17:0] oki0_ext = {{4{oki0_snd[13]}}, oki0_snd};
 	wire signed [17:0] oki1_ext = {{4{oki1_snd[13]}}, oki1_snd};
 	wire signed [17:0] oki0_g   = oki0_ext + (oki0_ext >>> 1); // x 3/2 (was 3/8 -- measured 8-13dB quiet vs MAME's real OKI:FM balance)
 	wire signed [17:0] oki1_g   = oki1_ext + (oki1_ext >>> 1);
-	wire signed [17:0] audio_sum = {{2{ym_snd[15]}}, ym_snd} + oki0_g + oki1_g;
+	wire signed [17:0] ym_fm_ext  = {{2{ym_fm[15]}}, ym_fm};
+	wire signed [17:0] ym_psg_ext = {8'd0, ym_psg};
+	wire signed [17:0] ym_psg_g   = (ym_psg_ext <<< 5) - (ym_psg_ext <<< 2) - ym_psg_ext; // x27: 16382 x 0.5/1.2 per channel
+	wire signed [17:0] audio_sum = ym_fm_ext + ym_psg_g + oki0_g + oki1_g;
 	wire signed [15:0] audio_mix =
 		(audio_sum > 18'sd32767)  ? 16'sd32767  :
 		(audio_sum < -18'sd32768) ? -16'sd32768 :

@@ -26,6 +26,9 @@
 // 1 -> 29.1
 // 2 -> 21.8
 // 3 -> 13.4
+// 5 -> MAME ymfm's s_amplitudes (ymfm_ssg.cpp), rescaled 16382 -> 255
+//      (NMK16 MiSTer local addition; jt49.v puts fixed volumes on the odd
+//      indices for it, as ymfm does)
 /* verilator coverage_off */
 module jt49_exp(
     input            clk,
@@ -34,7 +37,7 @@ module jt49_exp(
     output reg [7:0] dout 
 );
 
-reg [7:0] lut[0:159];
+reg [7:0] lut[0:191];
 
 always @(posedge clk)
     dout <= lut[ {comp,din} ];
@@ -200,6 +203,38 @@ initial begin
     lut[157] = 8'd229;
     lut[158] = 8'd241;
     lut[159] = 8'd255;
+    lut[160] = 8'd0;
+    lut[161] = 8'd0;
+    lut[162] = 8'd1;
+    lut[163] = 8'd2;
+    lut[164] = 8'd3;
+    lut[165] = 8'd3;
+    lut[166] = 8'd4;
+    lut[167] = 8'd5;
+    lut[168] = 8'd6;
+    lut[169] = 8'd7;
+    lut[170] = 8'd8;
+    lut[171] = 8'd9;
+    lut[172] = 8'd11;
+    lut[173] = 8'd13;
+    lut[174] = 8'd15;
+    lut[175] = 8'd17;
+    lut[176] = 8'd21;
+    lut[177] = 8'd25;
+    lut[178] = 8'd29;
+    lut[179] = 8'd33;
+    lut[180] = 8'd40;
+    lut[181] = 8'd48;
+    lut[182] = 8'd56;
+    lut[183] = 8'd64;
+    lut[184] = 8'd78;
+    lut[185] = 8'd93;
+    lut[186] = 8'd109;
+    lut[187] = 8'd127;
+    lut[188] = 8'd155;
+    lut[189] = 8'd186;
+    lut[190] = 8'd220;
+    lut[191] = 8'd255;
 
 end
 endmodule

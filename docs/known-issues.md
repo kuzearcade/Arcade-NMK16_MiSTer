@@ -2534,3 +2534,49 @@ going on, and the parent GunNail 3 of 3.
 
 Gunnail rebuilt at seed 3 (setup +0.471 ns, hold +0.250 ns). Afega shares
 `gunnail_core` but ships neither set and is not rebuilt.
+
+### NMK-44 — The YM2203's SSG was ~9 dB too loud, and Macross II's music lost ticks (closed, measured)
+
+Reported by a PCB owner (Macross II, Macross, Task Force Harrier): the higher
+notes too pronounced on every game, and heavy music slowdown on Macross II's
+Medium stage 3.
+
+**SSG level.** jt12 wires jt49 with its compressed `COMP=1` volume table
+(~29 dB range); the real chip and MAME's ymfm have ~44 dB. Macross II only
+uses SSG volumes 1-7, where that put the square waves 7-18 dB loud, and the
+cores added the SSG to FM 1:1 instead of at MAME's 0.50 (per channel) vs 1.20
+(FM) routes. jt49's own `COMP=0` table is no answer either: it puts fixed
+volumes one envelope step low (`{v,v[3]}` instead of ymfm's `2v+1`) and comes
+out 3.5 dB quiet. Fix: a `SSG_COMP` parameter through jt03/jt12_top, a sixth
+jt49 table (`COMP=5`) that is ymfm's `s_amplitudes` rescaled to 8 bits with
+fixed volumes on its odd steps (vendored change, see `deps.lock`), and the
+mix `fm + psg x 27` (Power Instinct `x 64`, MAME routes both at 2.0) on all
+three YM2203 cores.
+
+Measured by replaying MAME's YM2203 write log for 90 s of Macross II into a
+jt03-only Verilator harness against MAME renders with all but one source
+muted (`device_channel_volume`, ymsnd outputs 0-2 = SSG, 3 = FM): FM +0.03 dB,
+SSG +0.14 dB (was +9.1). On the board, 150 s of attract vs MAME: Macross II
+band correlation 0.965 -> 0.989, its 344 Hz-11 kHz bands from up to 3.6 dB
+over MAME to a flat ~1 dB under, like the lows; Task Force Harrier 0.921 ->
+0.936. Still open: above ~14.5 kHz the board is 6-18 dB over MAME on all
+three games, Rapid Hero too (its attract is OKI only), so not the SSG --
+probably the OKI output's zero-order hold against MAME's resampler; not
+changed.
+
+**Music slowdown.** Macross II's Z80 runs one music tick per YM2203 Timer A
+overflow and clears the flag at the end of the handler, so a handler longer
+than the period loses a tick. MAME at 4 MHz already spends ~83% of the
+Medium stage track in it and loses 6-10% of ticks (boss track ~18%); a
+model from MAME's per-tick times puts +10% Z80 cost at 19% lost and +25% at
+48%. The Macross2 RBF fetched the Z80 program through the one-line
+`rom_cache1_byte`; it now uses `oki_rom_cache` (16 lines, next-line
+prefetch) like Raphero and Gunnail. In the HW_ROMS=1 sim: 0-3 WAIT cycles per
+frame of ~71,000 Z80 cycles, no tick lost. Stage 3 itself has not been
+reached on the board; attract music stays aligned with MAME over 150 s. If
+the PCB's Z80 turns out faster than MAME's unverified "Z8400B 4 MHz ?", the
+clock is the next thing to change.
+
+Macross2 seed 11 (setup +0.746 ns, hold +0.247 ns), Gunnail seed 3 (+0.244 /
++0.237 ns), Raphero seed 11 (+0.479 / +0.252 ns; 23 missed by 0.010 ns).
+Afega has no YM2203 and is not rebuilt.

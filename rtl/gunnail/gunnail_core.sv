@@ -2448,27 +2448,31 @@ module gunnail_core #(
 	// write stretch is in flight — see tdragon2_core.sv.
 	wire ym_addr_eff = (ym_wr_hold != 6'd0) ? ym_addr_latch : ym_addr_src;
 
-	wire signed [15:0] ym_snd;
+	wire signed [15:0] ym_fm;
+	wire        [9:0]  ym_psg;
 	// YM2203: every family except Afega (see INCLUDE_NMK). irq_n idles
 	// HIGH (active low) so the shared z80_int_n mux stays inactive.
+	// SSG_COMP 5 = MAME ymfm's SSG volume table (jt49_exp.v); FM and SSG
+	// are mixed below at MAME's routes (tdragon2_core.sv has the story).
 	generate
 	if (INCLUDE_NMK) begin : g_ym2203
-		jt03 ym_chip (
+		jt03 #(.SSG_COMP(3'd5)) ym_chip (
 			.rst(reset), .clk(clk_sys), .cen(ym_cen),
 			.din(ym_din_latch), .addr(ym_addr_eff), .cs_n(1'b0), .wr_n(ym_wr_n),
 			.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),
 			.IOA_in(8'hFF), .IOB_in(8'hFF), .IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
-			.psg_A(), .psg_B(), .psg_C(), .fm_snd(dbg_fm_snd), .psg_snd(dbg_psg_snd), .snd(ym_snd), .snd_sample(),
+			.psg_A(), .psg_B(), .psg_C(), .fm_snd(ym_fm), .psg_snd(ym_psg), .snd(), .snd_sample(),
 			.debug_view()
 		);
 	end else begin : g_ym2203_off
 		assign ym_chip_dout  = 8'hFF;
 		assign ym_chip_irq_n = 1'b1;
-		assign dbg_fm_snd    = 16'sd0;
-		assign dbg_psg_snd   = 10'd0;
-		assign ym_snd        = 16'sd0;
+		assign ym_fm         = 16'sd0;
+		assign ym_psg        = 10'd0;
 	end
 	endgenerate
+	assign dbg_fm_snd  = ym_fm;
+	assign dbg_psg_snd = ym_psg;
 
 	// ------------------------------------------------------------------
 	// OKIM6295 x2 — jt6295, NMK004-driven banking: 0x00000-0x1FFFF fixed,
@@ -2683,7 +2687,10 @@ module gunnail_core #(
 	// becomes a logical one (tomagic's OPL/2 pinned the mix at +19000).
 	wire signed [17:0] opl_half  = opl_ext >>> 1;
 	wire signed [17:0] oki0_g2   = oki0_ext <<< 1;
-	wire signed [17:0] ym03_ext  = {{2{ym_snd[15]}}, ym_snd};
+	// YM2203 FM + SSG: MAME routes FM 1.20 and each SSG channel 0.50 at a
+	// 16382 full scale = 255 x 26.8 FM units -> x27.
+	wire signed [17:0] ym_psg_ext = {8'd0, ym_psg};
+	wire signed [17:0] ym03_ext  = {{2{ym_fm[15]}}, ym_fm} + (ym_psg_ext <<< 5) - (ym_psg_ext <<< 2) - ym_psg_ext;
 	wire signed [17:0] audio_sum = g_afega ? (ym51_g + oki0_ga + oki1_ga) :
 	                               g_seibu ? (opl_ext + oki0_gs) :
 	                               g_tomagic ? (opl_half + oki0_g2) :

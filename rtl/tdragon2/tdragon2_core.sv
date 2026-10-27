@@ -1979,10 +1979,15 @@ module tdragon2_core #(
 			.sdram_addr(sd3_addr), .sdram_wrl(), .sdram_wrh(), .sdram_din(),
 			.sdram_dout(sd3_dout), .sdram_dout_pair(sd3_dout_pair), .sdram_req(sd3_req), .sdram_ack(sd3_ack)
 		);
-		rom_cache1_byte audiocpu_cache_inst (
+		// oki_rom_cache (16 four-byte lines, next-line prefetch), not the
+		// 1-line rom_cache1_byte: Macross II's music driver already
+		// spends ~83% of each YM2203 Timer A period in its tick handler
+		// at 4 MHz (measured in MAME), so a few WAIT cycles per miss are
+		// enough to lose ticks and slow the music. Same as raphero/gunnail.
+		oki_rom_cache audiocpu_cache_inst (
 			.base_word(BASE_WORD_AUDIOCPU),
 			.clk(clk_sys), .reset(reset),
-			.byte_addr(audiocpu_byte_addr), .data(audiocpu_dout), .ready(audiocpu_ready),
+			.byte_addr(audiocpu_byte_addr[21:0]), .data(audiocpu_dout), .ready(audiocpu_ready), .stall(),
 			.sd_addr(p1_addr[1]), .sd_req(p1_req[1]), .sd_busy(p1_busy[1]), .sd_valid(p1_valid[1]), .sd_dout(p1_dout[1]), .sd_dout_pair(p1_dout_pair[1])
 		);
 	end
@@ -2050,15 +2055,26 @@ module tdragon2_core #(
 
 	wire [7:0] ym_chip_dout;
 	wire       ym_chip_irq_n;
-	wire signed [15:0] ym_snd;
-	jt03 ym_chip (
+	wire signed [15:0] ym_fm;
+	wire        [9:0]  ym_psg;
+	// SSG_COMP 5: MAME ymfm's SSG volume table, fixed volumes on its odd
+	// steps (a local addition to jt49_exp.v/jt49.v). jt03's default (1) is
+	// a compressed ~29 dB curve that put Macross II's SSG lines, which only
+	// use volumes 1-7, ~9 dB too loud (the PCB owner's "high notes too
+	// pronounced"); jt49's own uncompressed table (0) comes out 3.5 dB low
+	// there. Measured by replaying MAME's YM2203 write log into jt03 against
+	// MAME's SSG-only render. FM and SSG are mixed below, not with jt03's
+	// own 1:1 `snd`.
+	jt03 #(.SSG_COMP(3'd5)) ym_chip (
 		.rst(reset), .clk(clk_sys), .cen(ym_cen),
 		.din(ym_din_latch), .addr(ym_addr_sel), .cs_n(1'b0), .wr_n(ym_wr_n),
 		.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),
 		.IOA_in(8'hFF), .IOB_in(8'hFF), .IOA_out(), .IOB_out(), .IOA_oe(), .IOB_oe(),
-		.psg_A(), .psg_B(), .psg_C(), .fm_snd(dbg_fm_snd), .psg_snd(dbg_psg_snd), .snd(ym_snd), .snd_sample(),
+		.psg_A(), .psg_B(), .psg_C(), .fm_snd(ym_fm), .psg_snd(ym_psg), .snd(), .snd_sample(),
 		.debug_view()
 	);
+	assign dbg_fm_snd  = ym_fm;
+	assign dbg_psg_snd = ym_psg;
 
 	// ------------------------------------------------------------------
 	// NMK112 — see rtl/nmk112/nmk112.sv's own header. ROM1_BYTES fixed at
@@ -2288,8 +2304,8 @@ module tdragon2_core #(
 
 	// ------------------------------------------------------------------
 	// Audio mix — mono (no separate panning info anywhere in this
-	// driver): jt03's own already-mixed FM+PSG `snd` (16-bit) plus both
-	// OKI chips' own 14-bit `sound`, summed in a wider accumulator then
+	// driver): jt03's FM and SSG outputs (scaled to MAME's FM:SSG routes
+	// below) plus both OKI chips' own 14-bit `sound`, summed in a wider accumulator then
 	// saturated to 16 bits rather than allowed to silently wrap.
 	//
 	// Balance follows MAME's routing for these boards: FM at 1.20, each
@@ -2305,7 +2321,16 @@ module tdragon2_core #(
 	wire signed [17:0] oki1_ext = {{4{oki1_snd[13]}}, oki1_snd};
 	wire signed [17:0] oki0_g   = game_tdragon3h ? 18'sd0 : oki0_ext + (oki0_ext >>> 1); // x 3/2 (was 3/8 -- measured 8-13dB quiet vs MAME's real OKI:FM balance); tdragon3h: chip not fitted
 	wire signed [17:0] oki1_g   = oki1_ext + (oki1_ext >>> 1);
-	wire signed [17:0] ym_g     = game_pi_bootleg ? 18'sd0 : {{2{ym_snd[15]}}, ym_snd}; // powerins bootlegs: no YM2203
+	// YM2203: FM (16-bit, same scale as MAME's stream) plus the SSG sum
+	// (3 x 0..255). MAME routes FM 1.20 and each SSG channel 0.50 with a
+	// 16382 full scale, so one channel at full volume = 16382 x 0.5/1.2 =
+	// 6826 FM units = 255 x 26.8 -> x27. powerins routes both at 2.0:
+	// 16382/255 = 64.2 -> x64.
+	wire signed [17:0] ym_fm_ext = {{2{ym_fm[15]}}, ym_fm};
+	wire signed [17:0] ym_psg_ext = {8'd0, ym_psg};
+	wire signed [17:0] ym_psg_g  = game_powerins ? (ym_psg_ext <<< 6)
+	                                             : (ym_psg_ext <<< 5) - (ym_psg_ext <<< 2) - ym_psg_ext; // x27
+	wire signed [17:0] ym_g     = game_pi_bootleg ? 18'sd0 : ym_fm_ext + ym_psg_g; // powerins bootlegs: no YM2203
 	wire signed [17:0] audio_sum = ym_g + oki0_g + oki1_g;
 	wire signed [15:0] audio_mix =
 		(audio_sum > 18'sd32767)  ? 16'sd32767  :

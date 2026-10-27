@@ -94,7 +94,8 @@ int main(int argc, char **argv) {
 
 	FILE *m68k_trace = fopen("tdragon2_hw_68k.trace", "w");
 
-	FILE *f = fopen("roms/tdragon2_ioctl.bin", "rb");
+	const char *ioctl_path = std::getenv("TB_IOCTL") ? std::getenv("TB_IOCTL") : "roms/tdragon2_ioctl.bin";
+	FILE *f = fopen(ioctl_path, "rb");
 	if (!f) { printf("FAIL: could not open roms/tdragon2_ioctl.bin\n"); return 1; }
 	fseek(f, 0, SEEK_END);
 	long len = ftell(f);
@@ -266,6 +267,12 @@ int main(int argc, char **argv) {
 				static uint32_t p_sp=0,p_ss=0,p_su=0,p_sl=0;
 				printf("SPRFRAME %u pass=%u stall=%u units=%u late=%u\n", frame_count, top.dbg_spr_pass_clks-p_sp, top.dbg_spr_stall_clks-p_ss, top.dbg_spr_units-p_su, top.dbg_spr_late_swaps-p_sl);
 				p_sp=top.dbg_spr_pass_clks; p_ss=top.dbg_spr_stall_clks; p_su=top.dbg_spr_units; p_sl=top.dbg_spr_late_swaps;
+				static uint32_t p_zc=0,p_zw=0,p_to=0,p_td=0,p_ic=0,p_io=0;
+				printf("ZFRAME %u cens=%u waits=%u ta_ovf=%u ta_done=%u irq_over=%u irq_busy=%.1f%% irq_max=%u\n", frame_count,
+					top.dbg_z80_cens-p_zc, top.dbg_z80_waits-p_zw, top.dbg_ta_ovf-p_to, top.dbg_ta_done-p_td, top.dbg_irq_over-p_io,
+					100.0*(top.dbg_irq_clks-p_ic)/711744.0, top.dbg_irq_max);
+				p_zc=top.dbg_z80_cens; p_zw=top.dbg_z80_waits; p_to=top.dbg_ta_ovf; p_td=top.dbg_ta_done; p_ic=top.dbg_irq_clks; p_io=top.dbg_irq_over;
+				top.dbg_irq_max = 0;
 			}
 			if (ss_phase == 2 || ss_phase == 4) {
 				std::vector<uint32_t> fr((const uint32_t *)framebuf, (const uint32_t *)framebuf + SCREEN_W * SCREEN_H);

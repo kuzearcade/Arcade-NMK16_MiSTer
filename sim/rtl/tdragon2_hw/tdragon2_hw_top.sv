@@ -28,7 +28,11 @@
 // truly outputs.
 module tdragon2_hw_top #(
 	parameter [7:0] DSW1 = 8'hFF,   // .mra <switches> byte 0 (HW_ROMS=1 path reads dsw*_i directly)
-	parameter [7:0] DSW2 = 8'hFF
+	parameter [7:0] DSW2 = 8'hFF,
+	parameter       GAME_M2 = 1'b0,  // 1: macross2 (make GAME=macross2)
+	parameter       VTIMING = "roms/tdragon2_vtiming.hex",
+	parameter       OKI1_HEX = "../tdragon2/roms/tdragon2_oki1.hex",
+	parameter       OKI2_HEX = "../tdragon2/roms/tdragon2_oki2.hex"
 ) (
 	input  clk_sys,
 	input  reset,
@@ -149,6 +153,7 @@ module tdragon2_hw_top #(
 	output reg [31:0] dbg_spr_stall_clks,
 	output reg [31:0] dbg_spr_units,
 	output reg [31:0] dbg_spr_late_swaps,
+	output reg [31:0] dbg_z80_cens, dbg_z80_waits, dbg_ta_ovf, dbg_ta_done, dbg_irq_clks, dbg_irq_max, dbg_irq_over,
 	output reg [31:0] dbg_spr_pass_max
 );
 
@@ -233,9 +238,9 @@ module tdragon2_hw_top #(
 		.clk_ddr(clk_sys), .ddr_busy(1'b0), .rot_we(1'b0),
 		.ddr_we(ddr_we), .ddr_rd(ddr_rd), .ddr_addr(ddr_addr), .ddr_din(ddr_din), .ddr_dout(ddr_dout), .ddr_dout_ready(ddr_ready)
 	);
-	tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE("roms/tdragon2_vtiming.hex"),
-	                .OKI1_ROM_FILE("../tdragon2/roms/tdragon2_oki1.hex"), .OKI2_ROM_FILE("../tdragon2/roms/tdragon2_oki2.hex")) core_inst (
-		.clk_sys(clk_sys), .reset(reset), .game_macross2(1'b0), .game_powerins(1'b0),
+	tdragon2_core #(.HW_ROMS(1), .VTIMING_FILE(VTIMING),
+	                .OKI1_ROM_FILE(OKI1_HEX), .OKI2_ROM_FILE(OKI2_HEX)) core_inst (
+		.clk_sys(clk_sys), .reset(reset), .game_macross2(GAME_M2), .game_powerins(1'b0),
 		.ioctl_download(ioctl_download), .ioctl_wr(ioctl_wr), .ioctl_addr(ioctl_addr), .ioctl_dout(ioctl_dout), .ioctl_wait(ioctl_wait),
 		.ioctl_index(16'd0), // this testbench streams only the <rom index="0"> data — see tdragon2_core.sv's ioctl_index port comment
 		.sd0_addr(p0_addr), .sd0_wrl(p0_wrl), .sd0_wrh(p0_wrh), .sd0_din(p0_din), .sd0_dout(p0_dout), .sd0_dout_pair(p0_dout_pair), .sd0_req(p0_req), .sd0_ack(p0_ack),
@@ -276,6 +281,36 @@ module tdragon2_hw_top #(
 		.dbg_word_state_o(dbg_word_state_o), .dbg_word_touched_o(dbg_word_touched_o),
 		.rom_fetch_word_touched_o(), .rom_fetch_word_sim_touched_o(), .rom_fetch_word_fail_o()
 	);
+
+	// Z80 sound-tick audit (same terms as the MAME Lua probe): Z80 cen
+	// pulses, the ones swallowed by a ROM-cache WAIT, YM2203 Timer A
+	// overflows, ticks the IRQ handler finished (reg $27 data write) and
+	// the clocks spent between the $0038 fetch and that write.
+	initial begin dbg_z80_cens = 0; dbg_z80_waits = 0; dbg_ta_ovf = 0; dbg_ta_done = 0; dbg_irq_clks = 0; dbg_irq_max = 0; dbg_irq_over = 0; end
+	reg [31:0] irq_len = 0;
+	reg        in_irq = 1'b0, ym_sel27 = 1'b0, m1_d = 1'b1, wr_d = 1'b1;
+	wire       ta_ovf_w = core_inst.ym_chip.u_jt12.u_timers.timer_A.cen & core_inst.ym_chip.u_jt12.u_timers.timer_A.zero &
+	                      core_inst.ym_chip.u_jt12.u_timers.timer_A.load & core_inst.ym_chip.u_jt12.u_timers.timer_A.overflow;
+	wire [31:0] ta_period_clks = (32'd1024 - {22'd0, core_inst.ym_chip.u_jt12.u_timers.timer_A.start_value}) * 32'd640; // 24 master clks of 1.5 MHz = 640 clk_sys at 40 MHz (/2 prescale)
+	always @(posedge clk_sys) begin
+		m1_d <= core_inst.z80_m1_n | core_inst.z80_mreq_n;
+		wr_d <= ~core_inst.z80_io_we;
+		if (core_inst.z80_cen) begin
+			dbg_z80_cens <= dbg_z80_cens + 1;
+			if (!core_inst.z80_wait_n) dbg_z80_waits <= dbg_z80_waits + 1;
+		end
+		if (ta_ovf_w) dbg_ta_ovf <= dbg_ta_ovf + 1;
+		if (m1_d && !(core_inst.z80_m1_n | core_inst.z80_mreq_n) && core_inst.z80_a == 16'h0038) begin in_irq <= 1'b1; irq_len <= 0; end
+		else if (in_irq) irq_len <= irq_len + 1;
+		if (wr_d && core_inst.z80_io_we && core_inst.z80_a[7:0] == 8'h00) ym_sel27 <= (core_inst.z80_do == 8'h27);
+		if (wr_d && core_inst.z80_io_we && core_inst.z80_a[7:0] == 8'h01 && ym_sel27 && in_irq) begin
+			in_irq <= 1'b0;
+			dbg_ta_done <= dbg_ta_done + 1;
+			dbg_irq_clks <= dbg_irq_clks + irq_len;
+			if (irq_len > dbg_irq_max) dbg_irq_max <= irq_len;
+			if (irq_len > ta_period_clks) dbg_irq_over <= dbg_irq_over + 1;
+		end
+	end
 
 	reg prev_asn_a = 1'b1, prev_pending = 1'b0;
 	reg [31:0] lat = 0;
