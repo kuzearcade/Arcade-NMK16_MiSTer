@@ -1125,9 +1125,9 @@ module raphero_core #(
 	wire       ym_chip_irq_n;
 	wire signed [15:0] ym_fm;
 	wire        [9:0]  ym_psg;
-	// SSG_COMP 5 = MAME ymfm's SSG volume table (jt49_exp.v); FM and SSG
+	// jt03 uses jt49's YM2203 volume table (COMP 5); FM and SSG
 	// are mixed below at MAME's routes (tdragon2_core.sv has the story).
-	jt03 #(.SSG_COMP(3'd5)) ym_chip (
+	jt03 ym_chip (
 		.rst(reset), .clk(clk_sys), .cen(ym_cen),
 		.din(ym_din_latch), .addr(ym_addr_sel), .cs_n(1'b0), .wr_n(ym_wr_n),
 		.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),

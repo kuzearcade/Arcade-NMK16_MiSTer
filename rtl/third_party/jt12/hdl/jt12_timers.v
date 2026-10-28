@@ -22,7 +22,6 @@
   Timer B = 2304*(256-NB)/Phi M
   */
 
-
 module jt12_timers(
   input     clk,
   input     rst,
@@ -39,12 +38,13 @@ module jt12_timers(
   output    flag_A,
   output    flag_B,
   output    overflow_A,
+  output    trigger_A,
   output    irq_n
 );
 
 parameter num_ch = 6;
 
-assign irq_n = ~( (flag_A&enable_irq_A) | (flag_B&enable_irq_B) );
+assign irq_n = ~( flag_A | flag_B );
 
 /*
 reg zero2;
@@ -66,9 +66,11 @@ jt12_timer #(.CW(10)) timer_A(
     .zero       ( zero        ),
     .start_value( value_A     ),
     .load       ( load_A      ),
+    .enable_status( enable_irq_A ),
     .clr_flag   ( clr_flag_A  ),
     .flag       ( flag_A      ),
-    .overflow   ( overflow_A  )
+    .overflow   ( overflow_A  ),
+    .trigger    ( trigger_A   )
 );
 
 jt12_timer #(.CW(8),.FREE_EN(1)) timer_B(
@@ -78,9 +80,11 @@ jt12_timer #(.CW(8),.FREE_EN(1)) timer_B(
     .zero       ( zero        ),
     .start_value( value_B     ),
     .load       ( load_B      ),
+    .enable_status( enable_irq_B ),
     .clr_flag   ( clr_flag_B  ),
     .flag       ( flag_B      ),
-    .overflow   (             )
+    .overflow   (             ),
+    .trigger    (             )
 );
 
 endmodule
@@ -96,9 +100,11 @@ module jt12_timer #(parameter
     input   zero,
     input   [CW-1:0] start_value,
     input   load,
+    input   enable_status,
     input   clr_flag,
     output reg flag,
-    output reg overflow
+    output reg overflow,
+    output    trigger
 );
 /* verilator lint_off WIDTH */
 reg          load_l;
@@ -106,13 +112,15 @@ reg [CW-1:0] cnt, next;
 reg [FW-1:0] free_cnt, free_next;
 reg          free_ov;
 
+assign trigger = (!load_l && load) || (cen && zero && load && overflow);
+
 always@(posedge clk, posedge rst)
     if( rst )
         flag <= 1'b0;
     else /*if(cen)*/ begin
         if( clr_flag )
             flag <= 1'b0;
-        else if( cen && zero && load && overflow ) flag<=1'b1;
+        else if( cen && zero && load && overflow && enable_status ) flag<=1'b1;
     end
 
 always @(*) begin

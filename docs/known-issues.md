@@ -2564,6 +2564,12 @@ three games, Rapid Hero too (its attract is OKI only), so not the SSG --
 probably the OKI output's zero-order hold against MAME's resampler; not
 changed.
 
+**Follow-up, 2026-10-27.** Upstream jt12 (efa4068, jt49 6f1247f) now picks
+a `COMP=5` YM2203 table itself, with the same odd-step fixed volumes, so the
+vendored change is gone and jt12 is unmodified again. Same replay: FM
+bit-identical to the previous build, SSG +0.38 dB against MAME; the `x 27`
+mix is kept.
+
 **Music slowdown.** Macross II's Z80 runs one music tick per YM2203 Timer A
 overflow and clears the flag at the end of the handler, so a handler longer
 than the period loses a tick. MAME at 4 MHz already spends ~83% of the

@@ -2452,11 +2452,11 @@ module gunnail_core #(
 	wire        [9:0]  ym_psg;
 	// YM2203: every family except Afega (see INCLUDE_NMK). irq_n idles
 	// HIGH (active low) so the shared z80_int_n mux stays inactive.
-	// SSG_COMP 5 = MAME ymfm's SSG volume table (jt49_exp.v); FM and SSG
+	// jt03 uses jt49's YM2203 volume table (COMP 5); FM and SSG
 	// are mixed below at MAME's routes (tdragon2_core.sv has the story).
 	generate
 	if (INCLUDE_NMK) begin : g_ym2203
-		jt03 #(.SSG_COMP(3'd5)) ym_chip (
+		jt03 ym_chip (
 			.rst(reset), .clk(clk_sys), .cen(ym_cen),
 			.din(ym_din_latch), .addr(ym_addr_eff), .cs_n(1'b0), .wr_n(ym_wr_n),
 			.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),

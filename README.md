@@ -48,8 +48,8 @@ one family on an SD card shared with other arcade cores.
 All four fit the DE10-Nano's Cyclone V `5CSEBA6U23I7` (41,910 ALMs,
 553 M10K) with timing met, as built on 2026-10-07
 (`Arcade-NMK16_*_20261007.rbf`; Macross2, Raphero and Gunnail rebuilt
-on 2026-10-26 as `*_20261026.rbf`, NMK-44, Raphero at seed 11 where 23
-missed by 0.01 ns; the CRT Adjust chain
+on 2026-10-27 as `*_20261027.rbf` for the upstream jt12 bump, Raphero
+at seed 11 since 2026-10-26, where 23 missed by 0.01 ns; the CRT Adjust chain
 and its 96 / 112 MHz video clocks added about 1,500 ALMs and 40–60 M10K
 per core over the day before; the savestate engine, the two CPU park
 monitors and the FM register shadow another ~800–1,200 ALMs and 2–5 M10K;
@@ -60,9 +60,9 @@ seed 11, where seeds 1, 3, 5 and 7 all missed by 0.05–0.5 ns on the
 
 | Core | ALMs | M10K | Worst slack |
 |---|---|---|---|
-| `NMK16_Macross2` | 21,442 (51%) | 534 / 553 | +0.247 ns |
-| `NMK16_Gunnail` | 31,560 (75%) | 525 / 553 | +0.237 ns |
-| `NMK16_Raphero` | 25,476 (61%) | 520 / 553 | +0.252 ns |
+| `NMK16_Macross2` | 21,637 (52%) | 534 / 553 | +0.134 ns |
+| `NMK16_Gunnail` | 31,676 (76%) | 525 / 553 | +0.174 ns |
+| `NMK16_Raphero` | 25,605 (61%) | 520 / 553 | +0.242 ns |
 | `NMK16_Afega` | 23,564 (56%) | 468 / 553 | +0.190 ns |
 
 | Core (`releases/*.rbf`) | Hardware | Games (MAME set names) |

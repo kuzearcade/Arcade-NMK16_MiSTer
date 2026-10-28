@@ -54,11 +54,10 @@ module jt03(
 );
 
 parameter YM2203_LUMPED=0; // set to 1 if all PSG outputs are shorted together without any resistor
-parameter [2:0] SSG_COMP=3'b01; // NMK16 MiSTer local change: jt49 volume curve, see jt12_top.v
 
 jt12_top #(
     .use_lfo(0),.use_ssg(1), .num_ch(3), .use_pcm(0), .use_adpcm(0), .mask_div(0),
-    .YM2203_LUMPED(YM2203_LUMPED), .SSG_COMP(SSG_COMP) )
+    .YM2203_LUMPED(YM2203_LUMPED) )
 u_jt12(
     .rst            ( rst          ),        // rst should be at least 6 clk&cen cycles long
     .clk            ( clk          ),        // CPU clock

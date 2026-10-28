@@ -2057,15 +2057,14 @@ module tdragon2_core #(
 	wire       ym_chip_irq_n;
 	wire signed [15:0] ym_fm;
 	wire        [9:0]  ym_psg;
-	// SSG_COMP 5: MAME ymfm's SSG volume table, fixed volumes on its odd
-	// steps (a local addition to jt49_exp.v/jt49.v). jt03's default (1) is
-	// a compressed ~29 dB curve that put Macross II's SSG lines, which only
-	// use volumes 1-7, ~9 dB too loud (the PCB owner's "high notes too
-	// pronounced"); jt49's own uncompressed table (0) comes out 3.5 dB low
-	// there. Measured by replaying MAME's YM2203 write log into jt03 against
-	// MAME's SSG-only render. FM and SSG are mixed below, not with jt03's
-	// own 1:1 `snd`.
-	jt03 #(.SSG_COMP(3'd5)) ym_chip (
+	// jt03 picks jt49's YM2203 volume table (COMP 5) itself since upstream
+	// efa4068. Its old compressed ~29 dB curve put Macross II's SSG lines,
+	// which only use volumes 1-7, ~9 dB too loud (the PCB owner's "high
+	// notes too pronounced"); with COMP 5 the SSG lands within 0.4 dB of
+	// MAME (MAME's YM2203 write log replayed into jt03 against MAME's
+	// SSG-only render). FM and SSG are mixed below, not with jt03's own
+	// 1:1 `snd`.
+	jt03 ym_chip (
 		.rst(reset), .clk(clk_sys), .cen(ym_cen),
 		.din(ym_din_latch), .addr(ym_addr_sel), .cs_n(1'b0), .wr_n(ym_wr_n),
 		.dout(ym_chip_dout), .irq_n(ym_chip_irq_n),

@@ -26,9 +26,6 @@
 // 1 -> 29.1
 // 2 -> 21.8
 // 3 -> 13.4
-// 5 -> MAME ymfm's s_amplitudes (ymfm_ssg.cpp), rescaled 16382 -> 255
-//      (NMK16 MiSTer local addition; jt49.v puts fixed volumes on the odd
-//      indices for it, as ymfm does)
 /* verilator coverage_off */
 module jt49_exp(
     input            clk,
@@ -203,6 +200,8 @@ initial begin
     lut[157] = 8'd229;
     lut[158] = 8'd241;
     lut[159] = 8'd255;
+
+    // YM2203 channel voltage levels from the LLE model, scaled to 8 bits.
     lut[160] = 8'd0;
     lut[161] = 8'd0;
     lut[162] = 8'd1;
@@ -216,24 +215,24 @@ initial begin
     lut[170] = 8'd8;
     lut[171] = 8'd9;
     lut[172] = 8'd11;
-    lut[173] = 8'd13;
-    lut[174] = 8'd15;
-    lut[175] = 8'd17;
-    lut[176] = 8'd21;
-    lut[177] = 8'd25;
-    lut[178] = 8'd29;
-    lut[179] = 8'd33;
-    lut[180] = 8'd40;
-    lut[181] = 8'd48;
-    lut[182] = 8'd56;
-    lut[183] = 8'd64;
-    lut[184] = 8'd78;
-    lut[185] = 8'd93;
-    lut[186] = 8'd109;
-    lut[187] = 8'd127;
-    lut[188] = 8'd155;
-    lut[189] = 8'd186;
-    lut[190] = 8'd220;
+    lut[173] = 8'd14;
+    lut[174] = 8'd16;
+    lut[175] = 8'd18;
+    lut[176] = 8'd23;
+    lut[177] = 8'd27;
+    lut[178] = 8'd31;
+    lut[179] = 8'd35;
+    lut[180] = 8'd43;
+    lut[181] = 8'd51;
+    lut[182] = 8'd60;
+    lut[183] = 8'd68;
+    lut[184] = 8'd84;
+    lut[185] = 8'd101;
+    lut[186] = 8'd117;
+    lut[187] = 8'd132;
+    lut[188] = 8'd161;
+    lut[189] = 8'd192;
+    lut[190] = 8'd224;
     lut[191] = 8'd255;
 
 end
