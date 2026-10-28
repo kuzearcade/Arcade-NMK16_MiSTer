@@ -2586,3 +2586,41 @@ clock is the next thing to change.
 Macross2 seed 11 (setup +0.746 ns, hold +0.247 ns), Gunnail seed 3 (+0.244 /
 +0.237 ns), Raphero seed 11 (+0.479 / +0.252 ns; 23 missed by 0.010 ns).
 Afega has no YM2203 and is not rebuilt.
+
+### NMK-45 — jt51 on upstream 2ca6601: the YM2151's measured envelope, timers and stereo windows (closed, measured)
+
+Upstream jt51 985a573 -> 2ca6601 (unmodified; the Afega boards are its only
+user here). From the YM2151 itself, per upstream's silicon captures: D1L=15
+is the bottom of the envelope (93 dB, as ymfm) instead of 48 dB; decay
+rates 2-3 now progress; attack rates 62/63 hold their level; a timer's flag
+is set only while its IRQ is enabled (the IRQ line itself is unchanged);
+CSM key-on at a Timer-A start; noise silent at full attenuation; the
+channel sum wraps at 18 bits; and left and right are summed over different
+16-slot windows, as the chip serializes them to the YM3012.
+
+**Measured, jt51 alone.** MAME's YM2151 writes (a Lua tap on the Z80's
+F808-F809, 125 s of attract) replayed into jt51 at both pins, against ymfm
+(MAME's YM2151, built from MAME's tree) given the same writes. Level and
+per-channel spectrum are as close to ymfm as before or closer:
+
+| set | level, old -> new | 20 ms envelope corr. | SNR vs ymfm, old -> new |
+|---|---|---|---|
+| redhawk | -0.05 -> -0.04 dB | 1.000 | 18.5 -> 18.9 dB |
+| stagger1 | -0.06 -> -0.03 dB | 1.000 | 18.1 -> 18.5 dB |
+| grdnstrm | -0.06 -> -0.03 dB | 1.000 | 16.0 -> 15.7 dB |
+
+The one change MAME does not share is the stereo windows: summed to mono,
+the half-sample offset between left and right is a comb, -1.4 dB at 8 kHz
+and about -7 dB at 16 kHz against ymfm on redhawk's music. The Afega boards
+sum the two channels (`ym51_sum`), so they take it, as a real board would if
+upstream's measurement holds. Kept as upstream has it (decision 2026-10-28).
+
+**On the board** (175 s of attract against MAME's full mix, v2026-10-07 ->
+this build): Stagger I band corr. 0.978 -> 0.973, Guardian Storm 0.962 ->
+0.966, RMS unchanged (70.1 / 70.0 against MAME's 76.5 / 76.1). Above 8 kHz
+the core was already louder than MAME (by 2.4-10.7 dB); the bump brings
+it 0.3-2.5 dB nearer.
+
+**Open, not from this change:** the Afega mix is 4-6 dB under MAME from
+100 Hz to 2.5 kHz on both builds (RMS 70 against 76.5), and above it in the
+top octave. Same class as NMK-44's SSG; a per-source measurement is next.
